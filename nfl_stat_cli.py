@@ -349,6 +349,12 @@ class NFLDataBridge:
 
     def _try_sportsdataverse_py(self, seasons: List[int]) -> Optional[List[Dict[str, Any]]]:
         try:
+            import nfl_data_py as nfl_data  # type: ignore[import]
+            df = nfl_data.import_pbp_data(seasons)
+            return self._normalize_dataframe(df)
+        except Exception:
+            pass
+        try:
             import sportsdataverse.nfl as sdv_nfl  # type: ignore[import]
             df = sdv_nfl.load_nfl_pbp(seasons=seasons, return_as_pandas=True)
             return self._normalize_dataframe(df)

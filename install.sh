@@ -63,9 +63,11 @@ fi
 echo "[2/5] pip is ready."
 
 # 3. Install required Python packages & nfl-stat-cli
-echo "[3/5] Installing NFL analytics Python packages (pandas, polars, pyarrow, nflreadpy, sportsdataverse)..."
-"$PYTHON_BIN" -m pip install pandas polars pyarrow nflreadpy || true
+echo "[3/5] Installing NFL analytics Python packages (pandas, polars, pyarrow, nfl_data_py, sportsdataverse)..."
+"$PYTHON_BIN" -m pip install pandas polars pyarrow || true
+"$PYTHON_BIN" -m pip install nfl_data_py || true
 "$PYTHON_BIN" -m pip install --pre sportsdataverse || true
+"$PYTHON_BIN" -m pip install nflreadpy >/dev/null 2>&1 || true
 "$PYTHON_BIN" -m pip install -e . --no-build-isolation || "$PYTHON_BIN" -m pip install -e .
 echo "[3/5] Python packages & nfl-stat-cli installed."
 
