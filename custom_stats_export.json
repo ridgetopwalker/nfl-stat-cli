@@ -1,0 +1,171 @@
+{
+  "package": "nfl-stat-cli",
+  "schema_version": "1.0",
+  "exported_at": "2026-11-07T20:57:32Z",
+  "stat_count": 9,
+  "stats": {
+    "yards_per_play": {
+      "name": "yards_per_play",
+      "title": "Yards Per Play (YPP)",
+      "category": "traditional",
+      "group_by": "play_concept",
+      "formula": "total_yards / plays",
+      "description": "Average offensive yards gained per snap across matching plays.",
+      "calculation_explained": "Sum of yards_gained divided by total qualifying offensive plays (pass_attempt + rush_attempt).",
+      "unit": "yds/play",
+      "filter_expr": "",
+      "dependencies": [
+        "total_yards",
+        "plays"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "epa_per_play": {
+      "name": "epa_per_play",
+      "title": "Expected Points Added / Play (EPA/play)",
+      "category": "traditional",
+      "group_by": "qb",
+      "formula": "total_epa / plays",
+      "description": "Expected Points Added per offensive play from the nflfastR Expected Points model.",
+      "calculation_explained": "Sum of play-level EPA (Expected Points after play minus Expected Points before play) divided by total plays.",
+      "unit": "EPA/play",
+      "filter_expr": "",
+      "dependencies": [
+        "total_epa",
+        "plays"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "screen_yards_after_catch": {
+      "name": "screen_yards_after_catch",
+      "title": "Screen Pass Yards After Catch (Screen YAC/play)",
+      "category": "traditional",
+      "group_by": "team",
+      "formula": "total_yac / plays",
+      "description": "Average yards gained after the catch on screen pass plays (air_yards <= 0 or charted screen).",
+      "calculation_explained": "Filters play-by-play to screen passes (is_screen == 1) and divides sum(yards_after_catch) by total screen plays.",
+      "unit": "YAC/screen",
+      "filter_expr": "is_screen == 1",
+      "dependencies": [
+        "total_yac",
+        "plays"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "yac_over_expected": {
+      "name": "yac_over_expected",
+      "title": "Yards After Catch Over Expected (YACOE)",
+      "category": "traditional",
+      "group_by": "team",
+      "formula": "(total_yac - total_xyac) / completions",
+      "description": "Average extra yards gained after catch above nflfastR's xYAC model expectation.",
+      "calculation_explained": "Subtracts nflfastR xyac_mean_yardage from actual yards_after_catch and divides by completed passes.",
+      "unit": "yds",
+      "filter_expr": "",
+      "dependencies": [
+        "total_yac",
+        "total_xyac",
+        "completions"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "qb_impact_score": {
+      "name": "qb_impact_score",
+      "title": "QB Game Impact Score (0-100)",
+      "category": "custom",
+      "group_by": "qb",
+      "formula": "clamp(50 + (epa_per_play * 18.0) + (wpa_per_game * 85.0) + (avg_cpoe * 0.85) + (success_rate * 20.0 - 10.0) - (turnover_rate * 120.0), 0, 100)",
+      "description": "0-to-100 composite score measuring how much a quarterback directly impacted the game outcome.",
+      "calculation_explained": "Starts at a league-average baseline of 50.0 and adds weighted contributions from EPA/play (+18x), Win Probability Added per game (+85x), Completion % Over Expected (+0.85x), series success rate above 50% (+20x), minus turnover rate penalty (-120x), clamped to [0, 100].",
+      "unit": "pts",
+      "filter_expr": "",
+      "dependencies": [
+        "epa_per_play",
+        "wpa_per_game",
+        "avg_cpoe",
+        "success_rate",
+        "turnover_rate"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "qb_meaningful_win": {
+      "name": "qb_meaningful_win",
+      "title": "MLB-Style QB Meaningful Win (MW)",
+      "category": "custom",
+      "group_by": "qb",
+      "formula": "ifelse((win_rate >= 0.5) * (qb_impact_score >= 55.0), games_won, 0)",
+      "description": "MLB pitcher-style QB Win credited ONLY when the team wins AND the QB was a meaningful contributor (Impact Score >= 55).",
+      "calculation_explained": "Evaluates each QB game/season using the custom `qb_impact_score` stat: awards a Meaningful Win (MW) when the team wins and `qb_impact_score >= 55.0` (or game WPA >= +0.08 with positive EPA). Wins where the QB plays below the 55.0 impact threshold are scored as a No-Decision (ND).",
+      "unit": "MW",
+      "filter_expr": "",
+      "dependencies": [
+        "win_rate",
+        "qb_impact_score",
+        "games_won"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "qb_meaningful_loss": {
+      "name": "qb_meaningful_loss",
+      "title": "MLB-Style Inverse QB Meaningful Loss (ML)",
+      "category": "custom",
+      "group_by": "qb",
+      "formula": "ifelse((win_rate < 0.5) * (qb_impact_score <= 42.0), games_lost, 0)",
+      "description": "Inverse loss stat charged to a QB when the team loses AND the QB's Impact Score <= 42.0 materially drove the defeat.",
+      "calculation_explained": "Builds on `qb_impact_score`: charges a Meaningful Loss (ML) only when the team loses and `qb_impact_score <= 42.0` (negative EPA/WPA + turnovers/sacks). Losses where a QB played high-impact football (`qb_impact_score > 42.0`) are recorded as a No-Decision (ND) rather than a QB Loss.",
+      "unit": "ML",
+      "filter_expr": "",
+      "dependencies": [
+        "win_rate",
+        "qb_impact_score",
+        "games_lost"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "screen_effectiveness_index": {
+      "name": "screen_effectiveness_index",
+      "title": "Screen Pass Effectiveness Index (SPEI)",
+      "category": "custom",
+      "group_by": "team",
+      "formula": "(yards_per_play * 3.5) + (screen_yards_after_catch * 2.5) + (yac_over_expected * 4.0) + (epa_per_play * 25.0)",
+      "description": "Composite screen-game rating combining screen yards gained, screen YAC, YAC over expected, and screen EPA.",
+      "calculation_explained": "Composes three traditional/custom building blocks on screen plays (`is_screen == 1`): 3.5 * `yards_per_play` + 2.5 * `screen_yards_after_catch` + 4.0 * `yac_over_expected` + 25.0 * `epa_per_play`.",
+      "unit": "idx",
+      "filter_expr": "is_screen == 1",
+      "dependencies": [
+        "yards_per_play",
+        "screen_yards_after_catch",
+        "yac_over_expected",
+        "epa_per_play"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    },
+    "qb_clutch_win_index": {
+      "name": "qb_clutch_win_index",
+      "title": "QB Clutch Win Value Index",
+      "category": "custom",
+      "group_by": "qb",
+      "formula": "(qb_impact_score * 0.65) + (qb_meaningful_win * 12.0) - (qb_meaningful_loss * 15.0) + (yards_per_play * 1.5)",
+      "description": "Second-order custom stat built on top of custom `qb_impact_score`, `qb_meaningful_win`, `qb_meaningful_loss`, and traditional `yards_per_play`.",
+      "calculation_explained": "Multiplies custom `qb_impact_score` by 0.65, adds +12 per Meaningful Win (`qb_meaningful_win`), subtracts 15 per Meaningful Loss (`qb_meaningful_loss`), and adds 1.5x `yards_per_play`.",
+      "unit": "idx",
+      "filter_expr": "",
+      "dependencies": [
+        "yards_per_play",
+        "qb_meaningful_loss",
+        "qb_impact_score",
+        "qb_meaningful_win"
+      ],
+      "created_at": "2026-11-07T20:57:32Z"
+    }
+  },
+  "stat_page_pinned": [
+    "qb_impact_score",
+    "qb_meaningful_win",
+    "qb_meaningful_loss",
+    "screen_yards_after_catch",
+    "screen_effectiveness_index",
+    "yards_per_play",
+    "qb_clutch_win_index"
+  ]
+}
