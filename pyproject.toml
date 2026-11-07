@@ -6,11 +6,44 @@ build-backend = "setuptools.build_meta"
 name = "nfl-stat-cli"
 version = "2.0.0"
 description = "Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, play visualizer (behind-offense, behind-defense, sideline), & composable custom stat CLI powered by nflverse (R), sportsdataverse-py (Python), and optional local SLM (Ollama)."
-readme = "README.md"
-license = {text = "MIT"}
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {file = "LICENSE"}
 requires-python = ">=3.9"
 authors = [
   {name = "Sean McClain", email = "dev@ridgetopwalker.com"}
+]
+maintainers = [
+  {name = "Sean McClain", email = "dev@ridgetopwalker.com"}
+]
+keywords = [
+  "nfl",
+  "football",
+  "analytics",
+  "statistics",
+  "cli",
+  "tui",
+  "ascii-art",
+  "nflverse",
+  "sportsdataverse",
+  "play-by-play",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Games/Entertainment",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Terminals",
 ]
 dependencies = []
 
@@ -22,9 +55,21 @@ live = [
   "nfl_data_py>=0.3.0",
   "sportsdataverse>=0.0.72",
 ]
+dev = [
+  "build>=1.0.0",
+  "twine>=5.0.0",
+  "pytest>=7.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ridgetopwalker/nfl-stat-cli"
+Repository = "https://github.com/ridgetopwalker/nfl-stat-cli"
+Issues = "https://github.com/ridgetopwalker/nfl-stat-cli/issues"
+Changelog = "https://github.com/ridgetopwalker/nfl-stat-cli/releases"
 
 [project.scripts]
 nfl-stat-cli = "nfl_stat_cli:main"
 
 [tool.setuptools]
 py-modules = ["nfl_stat_cli"]
+include-package-data = true
