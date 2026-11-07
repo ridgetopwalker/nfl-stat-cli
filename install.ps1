@@ -106,9 +106,11 @@ Write-Host "[2/5] pip is ready." -ForegroundColor Green
 # 3. Install required Python packages & nfl-stat-cli
 # ---------------------------------------------------------------------------
 if (-not $SkipLivePackages) {
-    Write-Host "[3/5] Installing NFL analytics Python packages (pandas, polars, pyarrow, nflreadpy, sportsdataverse)..." -ForegroundColor Cyan
-    & $PythonExe -m pip install pandas polars pyarrow nflreadpy
+    Write-Host "[3/5] Installing NFL analytics Python packages (pandas, polars, pyarrow, nfl_data_py, sportsdataverse)..." -ForegroundColor Cyan
+    & $PythonExe -m pip install pandas polars pyarrow
+    & $PythonExe -m pip install nfl_data_py
     & $PythonExe -m pip install --pre sportsdataverse
+    & $PythonExe -m pip install nflreadpy >$null 2>&1
 } else {
     Write-Host "[3/5] Skipping optional live packages (offline mode ready)." -ForegroundColor Yellow
 }

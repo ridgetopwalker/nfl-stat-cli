@@ -19,7 +19,7 @@ live = [
   "pandas>=2.0.0",
   "polars>=0.20.0",
   "pyarrow>=14.0.0",
-  "nflreadpy>=0.1.0",
+  "nfl_data_py>=0.3.0",
   "sportsdataverse>=0.0.72",
 ]
 
