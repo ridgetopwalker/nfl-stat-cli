@@ -68,3 +68,34 @@ python nfl_stat_cli.py create-stat \
 python nfl_stat_cli.py ask "What is the average yards after catch on screen passes in 2025?"
 python nfl_stat_cli.py ask "Show Lamar Jackson longest play from behind the defense"
 ```
+
+
+## Building & Publishing to PyPI
+
+This project is configured with PEP 621 / `setuptools` metadata in `pyproject.toml`, `MANIFEST.in`, and `LICENSE` so it can be built and published directly to PyPI (or TestPyPI):
+
+```bash
+# Install build and twine
+python -m pip install --upgrade build twine
+
+# Build source distribution (.tar.gz) and wheel (.whl) into dist/
+python -m build
+
+# Validate package metadata and README rendering
+python -m twine check dist/*
+
+# Upload to PyPI (or TestPyPI with --repository testpypi)
+python -m twine upload dist/*
+```
+
+Once published, any user can install it directly with:
+
+```bash
+pip install nfl-stat-cli
+# Or with live data dependencies included:
+pip install "nfl-stat-cli[live]"
+```
+
+## License
+
+Released under the [MIT License](LICENSE). Play-by-play data provided via [nflverse/nflverse-data](https://github.com/nflverse/nflverse-data) (CC-BY 4.0) and [sportsdataverse-py](https://github.com/sportsdataverse/sportsdataverse-py).

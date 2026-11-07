@@ -26,6 +26,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+__version__ = "2.0.0"
+__author__ = "Sean McClain"
+__license__ = "MIT"
+
 # ---------------------------------------------------------------------------
 # Cross-Platform (*nix & Windows) ANSI Color Support
 # ---------------------------------------------------------------------------
@@ -2812,6 +2816,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         parents=[common],
         description="Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, multi-angle play diagrammer, & composable custom stat CLI.",
     )
+    parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.set_defaults(
         engine="auto",
         season=2025,

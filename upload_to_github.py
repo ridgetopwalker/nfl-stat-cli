@@ -17,6 +17,10 @@ REPO_OWNER = "ridgetopwalker"
 REPO_NAME = "nfl-stat-cli"
 REPO_DESC = "Cross-platform (*nix & Windows) colorized ASCII art NFL analytics & composable custom stat CLI powered by nflverse (R) and sportsdataverse-py (Python)."
 FILES = [
+    "LICENSE",
+    "MANIFEST.in",
+    ".gitignore",
+    ".gitattributes",
     "README.md",
     "pyproject.toml",
     "nfl_stat_cli.py",
