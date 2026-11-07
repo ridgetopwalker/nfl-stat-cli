@@ -22,6 +22,9 @@ FILES = [
     "nfl_stat_cli.py",
     "nflverse_bridge.R",
     "custom_stats_export.json",
+    "install.bat",
+    "install.ps1",
+    "install.sh",
 ]
 
 
