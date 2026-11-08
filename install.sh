@@ -30,14 +30,14 @@ WHITE="\033[97m"
 GRAY="\033[90m"
 
 print_banner() {
-    printf "${BOLD}${GOLD}╔══════════════════════════════════════════════════════════════════════════════════════╗${RESET}\n"
+    printf "${BOLD}${GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗${RESET}\n"
     printf "${BOLD}${GOLD}║${RESET} ${BOLD}${CYAN}███╗   ██╗███████╗██╗         ███████╗████████╗ █████╗ ████████╗   ██████╗██╗     ██╗${RESET} ${BOLD}${GOLD}║${RESET}\n"
     printf "${BOLD}${GOLD}║${RESET} ${BOLD}${CYAN}████╗  ██║██╔════╝██║         ██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝  ██╔════╝██║     ██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
     printf "${BOLD}${GOLD}║${RESET} ${BOLD}${WHITE}██╔██╗ ██║█████╗  ██║   █████╗███████╗   ██║   ███████║   ██║     ██║     ██║     ██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
     printf "${BOLD}${GOLD}║${RESET} ${BOLD}${GREEN}██║╚██╗██║██╔══╝  ██║   ╚════╝╚════██║   ██║   ██╔══██║   ██║     ██║     ██║     ██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
     printf "${BOLD}${GOLD}║${RESET} ${BOLD}${GREEN}██║ ╚████║██║     ███████╗    ███████║   ██║   ██║  ██║   ██║     ╚██████╗███████╗██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}║${RESET} ${DIM}${WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer   ${RESET} ${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}╚══════════════════════════════════════════════════════════════════════════════════════╝${RESET}\n"
+    printf "${BOLD}${GOLD}║${RESET} ${DIM}${WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer    ${RESET} ${BOLD}${GOLD}║${RESET}\n"
+    printf "${BOLD}${GOLD}╚═══════════════════════════════════════════════════════════════════════════════════════╝${RESET}\n"
 }
 
 # ==============================================================================
@@ -127,9 +127,9 @@ fi
 LOG_FILE="/tmp/nfl_stat_cli_install.log"
 : > "$LOG_FILE"
 
-TERM_COLS="$(tput cols 2>/dev/null || echo 88)"
-TARGET_WIDTH=88
-if [ "$TERM_COLS" -lt 89 ] 2>/dev/null; then
+TERM_COLS="$(tput cols 2>/dev/null || echo 89)"
+TARGET_WIDTH=89
+if [ "$TERM_COLS" -lt 90 ] 2>/dev/null; then
     TARGET_WIDTH=$(( TERM_COLS - 1 ))
 fi
 if [ "$TARGET_WIDTH" -lt 30 ]; then
@@ -235,5 +235,5 @@ fi
 
 chmod +x "$SCRIPT_DIR/nfl_stat_cli.py"
 run_step 98 100 "$PYTHON_BIN nfl_stat_cli.py --version" "$PYTHON_BIN" "$SCRIPT_DIR/nfl_stat_cli.py" --version
-update_ui 100 "Done! Run: $PYTHON_BIN nfl_stat_cli.py  (or ./install.sh -v for verbose)"
+update_ui 100 "Done! Run: ./.venv/bin/python nfl_stat_cli.py  (-v for verbose)"
 printf "\n"
