@@ -177,10 +177,13 @@ def test_interactive_tui_and_play_explorer():
         "/player Mahomes",
         "/play",
         "1",      # Offense
+        "1",      # Pass
+        "1",      # Quick Game & Slant
+        "3",      # View All Plays for this Concept
         "1",      # Play #1
         "1",      # Play Stats
         "3",      # Player Drilldown
-        "6",      # Exit Explorer
+        "10",     # Exit Explorer
         "quit",
     ]) + "\n"
     res = subprocess.run(
@@ -193,8 +196,79 @@ def test_interactive_tui_and_play_explorer():
     assert "TEAM DRILL-DOWN : KANSAS CITY CHIEFS" in res.stdout
     assert "PLAYER DRILL-DOWN : P.MAHOMES" in res.stdout
     assert "Select Play Phase" in res.stdout
+    assert "PLAYBOOK CHALKBOARD" in res.stdout
     assert "IN-DEPTH PLAY ANALYTICS" in res.stdout
     assert "auto-selected" in res.stdout
+
+
+def test_play_explorer_drilldown_by_team_and_game_crosslink():
+    input_text = "\n".join([
+        "/play",
+        "1",      # Offense
+        "2",      # Run
+        "1",      # Inside Zone & Dive
+        "1",      # Drill Down by Team
+        "1",      # Select Team #1 (BAL or DET)
+        "1",      # Select Play #1
+        "4",      # Go to Game View (cross-link to /games)
+        "x",      # Exit Game View
+        "10",     # Exit Explorer
+        "quit",
+    ]) + "\n"
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "PLAYBOOK CHALKBOARD" in res.stdout
+    assert "Inside Zone & Dive" in res.stdout
+    assert "GAME CENTER:" in res.stdout
+    assert "GAME VIEW: PLAY #" in res.stdout
+
+
+def test_games_command_by_team_and_overtime_navigation():
+    input_text = "\n".join([
+        "/games",
+        "1",      # Browse by Team
+        "DET",    # Select Detroit Lions
+        "1",      # Select Week 1: LA @ DET (Overtime)
+        "5",      # Quarter 5: Overtime (OT)
+        "1",      # Select Play #1 (#120 D.Montgomery TD run)
+        "P",      # Step to Previous Play (#113 in Q4)
+        "N",      # Step to Next Play (#120 in OT)
+        "C",      # View Concept Chalkboard schematic
+        "X",      # Exit Game View
+        "quit",
+    ]) + "\n"
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "GAME CENTER: LA @ DET" in res.stdout
+    assert "Overtime" in res.stdout
+    assert "D.Montgomery" in res.stdout
+    assert "Stepping to Previous Play #113" in res.stdout
+    assert "Stepping to Next Play #120" in res.stdout
+    assert "PLAYBOOK CHALKBOARD" in res.stdout
+
+
+def test_games_command_by_week_and_cli_subcommand():
+    # Test CLI games subcommand with --game-id and --play-id
+    res_cli = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "games", "--season", "2025", "--game-id", "2025_01_LA_DET", "--play-id", "120"],
+        input="X\n",
+        capture_output=True,
+        text=True,
+    )
+    assert res_cli.returncode == 0, res_cli.stderr
+    assert "GAME CENTER: LA @ DET" in res_cli.stdout
+    assert "GAME VIEW: PLAY #120" in res_cli.stdout
+    assert "D.Montgomery" in res_cli.stdout
 
 
 def test_why_command_lists_player_not_qb():
