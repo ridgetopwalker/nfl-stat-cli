@@ -999,6 +999,37 @@ def test_coaches_cli_and_subcommand():
     assert "Ben Johnson" in out_oc
 
 
+def test_general_yac_stat_and_down_filter():
+    engine = cli.StatEngine()
+    bridge = cli.NFLDataBridge()
+    plays = [bridge._normalize_row(r, idx) for idx, r in enumerate(cli.SAMPLE_PBP_PLAYS, 1)]
+
+    # 1. yards_after_catch is in traditional stats
+    assert "yards_after_catch" in engine.stats
+    sdef = engine.stats["yards_after_catch"]
+    assert sdef.filter_expr == "complete_pass == 1"
+
+    # 2. Query "which player has the most yac on 1st down?" evaluates general YAC, not screen passes only
+    p = cli.NaturalLanguageStatAssistant.interpret_query(
+        "which player has the most yac on 1st down?", engine, slm_model="off"
+    )
+    assert p["intent"] == "stat_query"
+    assert p["stat_name"] == "yards_after_catch"
+    assert p["group_by"] == "player"
+    assert p["filter_expr"] == "down == 1"
+    assert p["limit"] == 5
+
+    out = cli.strip_ansi(cli.handle_nl_query_result(p, engine, plays))
+    assert "Yards After Catch (YAC)" in out
+    assert "Screen Pass" not in out
+    assert "A.St. Brown" in out
+
+    # 3. Explicit "screen yac" continues mapping to screen_yards_after_catch
+    p_screen = cli.NaturalLanguageStatAssistant.interpret_query("screen yac", engine, slm_model="off")
+    assert p_screen["stat_name"] == "screen_yards_after_catch"
+
+
+
 
 
 
