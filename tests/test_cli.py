@@ -179,8 +179,11 @@ def test_interactive_tui_and_play_explorer():
         "1",      # Offense
         "1",      # Pass
         "1",      # Quick Game & Slant
-        "3",      # View All Plays for this Concept
-        "1",      # Play #1
+        "1",      # Browse by Team
+        "1",      # Select Team #1 (KC)
+        "1",      # Select Matchup #1 (BAL @ KC)
+        "a",      # All Quarters in game
+        "1",      # Select Play #1
         "1",      # Play Stats
         "3",      # Player Drilldown
         "10",     # Exit Explorer
@@ -197,6 +200,10 @@ def test_interactive_tui_and_play_explorer():
     assert "PLAYER DRILL-DOWN : P.MAHOMES" in res.stdout
     assert "Select Play Phase" in res.stdout
     assert "PLAYBOOK CHALKBOARD" in res.stdout
+    assert "GAME SITUATION & SNAP CONTEXT" in res.stdout
+    assert "GAME CLOCK:" in res.stdout
+    assert "FIELD LOCATION:" in res.stdout
+    assert "DOWN & DISTANCE:" in res.stdout
     assert "IN-DEPTH PLAY ANALYTICS" in res.stdout
     assert "auto-selected" in res.stdout
 
@@ -207,8 +214,10 @@ def test_play_explorer_drilldown_by_team_and_game_crosslink():
         "1",      # Offense
         "2",      # Run
         "1",      # Inside Zone & Dive
-        "1",      # Drill Down by Team
+        "1",      # Browse by Team
         "1",      # Select Team #1 (BAL or DET)
+        "1",      # Select Matchup #1
+        "a",      # All Quarters in game
         "1",      # Select Play #1
         "4",      # Go to Game View (cross-link to /games)
         "x",      # Exit Game View
@@ -224,6 +233,7 @@ def test_play_explorer_drilldown_by_team_and_game_crosslink():
     assert res.returncode == 0, res.stderr
     assert "PLAYBOOK CHALKBOARD" in res.stdout
     assert "Inside Zone & Dive" in res.stdout
+    assert "GAME SITUATION & SNAP CONTEXT" in res.stdout
     assert "GAME CENTER:" in res.stdout
     assert "GAME VIEW: PLAY #" in res.stdout
 

@@ -2121,6 +2121,70 @@ class AsciiArtRenderer:
                 row_chars[start + i] = f"{color}{ch}{C.RESET}"
 
     @classmethod
+    def render_situation_hud(cls, play: Dict[str, Any]) -> str:
+        """
+        Render a prominent, high-visibility Game Situation & Field Context HUD box
+        highlighting:
+        - Exact game clock and quarter/OT time remaining
+        - Field location, yardline, and distance to opponent end zone
+        - Down and distance (including Goal-to-Go context)
+        - Game score and possession
+        """
+        desc = str(play.get("desc", ""))
+        qtr = int(play.get("qtr", 1))
+        q_str = "Overtime (OT)" if qtr >= 5 else f"Quarter {qtr} (Q{qtr})"
+
+        clock_time = ""
+        if "(" in desc and ")" in desc:
+            inside = desc.split("(", 1)[1].split(")", 1)[0].strip()
+            for token in inside.split():
+                if ":" in token and any(c.isdigit() for c in token):
+                    clock_time = token
+                    break
+
+        if clock_time:
+            time_display = f"{clock_time} remaining in {q_str}"
+        else:
+            time_display = f"{q_str}"
+
+        down = int(play.get("down", 1))
+        ydstogo = int(play.get("ydstogo", 10))
+        y100 = int(round(float(play.get("yardline_100", 50))))
+        suffix = "st" if down == 1 else ("nd" if down == 2 else ("rd" if down == 3 else "th"))
+        is_goal = (y100 <= ydstogo) or (y100 <= 10 and down == 1 and ydstogo >= y100)
+
+        if is_goal:
+            dnd_display = f"{down}{suffix} & Goal ({ydstogo} yd{'s' if ydstogo != 1 else ''} to go)"
+        else:
+            dnd_display = f"{down}{suffix} & {ydstogo} ({ydstogo} yards to first down)"
+
+        posteam = str(play.get("posteam", "OFF"))
+        defteam = str(play.get("defteam", "DEF"))
+        if y100 == 50:
+            loc_display = "50 Yardline (Midfield • Exactly 50 yds to Opponent End Zone)"
+        elif y100 < 50:
+            dist_desc = "Goal-to-Go territory" if y100 <= 10 else f"{y100} yds to Opponent End Zone"
+            loc_display = f"{defteam} {y100} (Opponent {y100} • {dist_desc})"
+        else:
+            own_yd = 100 - y100
+            loc_display = f"{posteam} {own_yd} (Own {own_yd} • {y100} yds to Opponent End Zone)"
+
+        h_score = play.get("home_score", 0)
+        a_score = play.get("away_score", 0)
+        score_display = f"{defteam} {a_score} - {posteam} {h_score}"
+
+        w = 87
+        lines = [
+            f"{C.BOLD}{C.GOLD}╔═ 🏈 GAME SITUATION & SNAP CONTEXT " + "═" * (w - 38) + f"╗{C.RESET}",
+            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.CYAN}⏱️  GAME CLOCK:{C.RESET}       {C.BOLD}{pad_ansi(time_display, w - 24, 'left')}{C.RESET} {C.BOLD}║{C.RESET}",
+            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.YELLOW}📍 FIELD LOCATION:{C.RESET}    {C.BOLD}{pad_ansi(loc_display, w - 24, 'left')}{C.RESET} {C.BOLD}║{C.RESET}",
+            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.GREEN}🎯 DOWN & DISTANCE:{C.RESET}   {C.BOLD}{pad_ansi(dnd_display, w - 24, 'left')}{C.RESET} {C.BOLD}║{C.RESET}",
+            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.WHITE}🛡️  POSSESSION:{C.RESET}        {pad_ansi(f'{posteam} Offense vs {defteam} Defense  │  Score: {score_display}', w - 24, 'left')} {C.BOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}╚" + "═" * (w - 2) + f"╝{C.RESET}",
+        ]
+        return "\n".join(lines)
+
+    @classmethod
     def render_field_and_play(
         cls,
         play: Dict[str, Any],
@@ -2134,20 +2198,23 @@ class AsciiArtRenderer:
         - 'sideline' (or 'side'): 100-yard left-to-right broadcast view
         - 'all': renders behind-offense and behind-defense
         """
+        hud = cls.render_situation_hud(play)
         cam = camera.strip().lower().replace("_", "-")
         if cam in ("offense", "behind-offense", "qb", "all22-offense"):
-            return cls.render_behind_offense(play, title=title)
-        if cam in ("defense", "behind-defense", "def", "all22-defense"):
-            return cls.render_behind_defense(play, title=title)
-        if cam in ("all", "both", "all-angles"):
-            return (
+            body = cls.render_behind_offense(play, title=title)
+        elif cam in ("defense", "behind-defense", "def", "all22-defense"):
+            body = cls.render_behind_defense(play, title=title)
+        elif cam in ("all", "both", "all-angles"):
+            body = (
                 cls.render_behind_offense(play, title=f"{title} [BEHIND OFFENSE]")
                 + "\n"
                 + cls.render_behind_defense(play, title=f"{title} [BEHIND DEFENSE]")
                 + "\n"
                 + cls.render_sideline(play, title=f"{title} [SIDELINE VIEW]")
             )
-        return cls.render_sideline(play, title=title)
+        else:
+            body = cls.render_sideline(play, title=title)
+        return hud + "\n" + body
 
     @staticmethod
     def _format_spot(yardline_100: int) -> str:
@@ -5029,11 +5096,19 @@ def interactive_game_browser(
             chosen_game = None
             continue
 
+        found_qtr = False
         selected_qtr_val = None
         for q_key, q_lbl, q_val in q_options:
-            if q_in == q_key or q_in in q_lbl.lower():
+            if q_in == q_key.lower():
                 selected_qtr_val = q_val
+                found_qtr = True
                 break
+        if not found_qtr:
+            for q_key, q_lbl, q_val in q_options:
+                if len(q_in) > 1 and q_in in q_lbl.lower():
+                    selected_qtr_val = q_val
+                    found_qtr = True
+                    break
 
         if selected_qtr_val is not None:
             quarter_plays = [p for p in game_plays if int(p.get("qtr", 1)) == selected_qtr_val]
@@ -5247,13 +5322,16 @@ def interactive_play_explorer(
 
         avail_weeks = sorted({int(p.get("week", 1)) for p in matching_plays})
 
-        print(f"\n  {C.BOLD}{C.CYAN}Drill Down to Games using {chosen_concept_title} ({len(matching_plays)} plays available):{C.RESET}")
-        print(f"    [1] {C.BOLD}Drill Down by Team{C.RESET} (Only teams executing this concept: {', '.join(avail_teams)})")
-        print(f"    [2] {C.BOLD}Drill Down by Week{C.RESET} (Only weeks executed: {', '.join(map(str, avail_weeks))})")
-        print(f"    [3] {C.BOLD}View All Plays for this Concept{C.RESET}")
+        # Step 5: Drill down by Team, Week, or All Matchups to reach a Game & Quarter
+        all_games = extract_games_summary(plays, active_season)
+
+        print(f"\n  {C.BOLD}{C.CYAN}Drill Down to Matchups executing {chosen_concept_title} ({len(matching_plays)} plays available):{C.RESET}")
+        print(f"    [1] {C.BOLD}Browse by Team{C.RESET}  (Teams executing: {', '.join(avail_teams)})")
+        print(f"    [2] {C.BOLD}Browse by Week{C.RESET}  (Weeks executed: {', '.join(map(str, avail_weeks))})")
+        print(f"    [3] {C.BOLD}All Matchups{C.RESET}    (View matchups that ran this concept)")
 
         try:
-            dd_in = prompt_input("  Choose drilldown [1-3] (or 'b' to change scheme, default: 3): ").strip().lower() or "3"
+            dd_in = prompt_input("  Choose browsing category [1-3] (or 'b' to change scheme, default: 1): ").strip().lower() or "1"
         except (EOFError, KeyboardInterrupt):
             break
         if dd_in in ("b", "back"):
@@ -5261,63 +5339,165 @@ def interactive_play_explorer(
         if dd_in in ("q", "quit", "exit"):
             break
 
+        chosen_game: Optional[Dict[str, Any]] = None
+
         if dd_in in ("1", "team", "by team"):
-            print(f"\n  {C.BOLD}{C.GOLD}Teams that ran {chosen_concept_title}:{C.RESET}")
+            print(f"\n  {C.BOLD}{C.GOLD}Teams that executed {chosen_concept_title}:{C.RESET}")
             for t_idx, tm in enumerate(avail_teams, 1):
                 t_count = sum(1 for p in matching_plays if p.get("posteam") == tm or p.get("defteam") == tm)
-                print(f"    [{t_idx}] {C.BOLD}{tm:<4}{C.RESET} ({t_count} play{'s' if t_count != 1 else ''})")
+                print(f"    [{t_idx:2d}] {C.BOLD}{tm:<4}{C.RESET} ({t_count} play{'s' if t_count != 1 else ''})")
             try:
-                tm_sel = prompt_input(f"  Select team [1-{len(avail_teams)}] (default: 1): ").strip() or "1"
+                tm_sel = prompt_input(f"  Select team [1-{len(avail_teams)}] (or 'b' for back, default: 1): ").strip() or "1"
             except (EOFError, KeyboardInterrupt):
                 break
+            if tm_sel.lower() in ("b", "back"):
+                continue
             if tm_sel.isdigit() and 1 <= int(tm_sel) <= len(avail_teams):
                 sel_tm = avail_teams[int(tm_sel) - 1]
             else:
                 res_tm = resolve_team_abbr(tm_sel) or tm_sel.upper()
                 sel_tm = res_tm if res_tm in avail_teams else avail_teams[0]
-            display_plays = [p for p in matching_plays if p.get("posteam") == sel_tm or p.get("defteam") == sel_tm]
+
+            team_concept_plays = [p for p in matching_plays if p.get("posteam") == sel_tm or p.get("defteam") == sel_tm]
+            team_game_ids = sorted({p["game_id"] for p in team_concept_plays})
+            team_games = [g for g in all_games if g["game_id"] in team_game_ids]
+
+            print(f"\n  {C.BOLD}{C.GOLD}Matchups for {sel_tm} using {chosen_concept_title} ({len(team_games)} games):{C.RESET}")
+            for g_idx, tg in enumerate(team_games, 1):
+                g_c_cnt = sum(1 for p in team_concept_plays if p.get("game_id") == tg["game_id"])
+                ot_str = f" {C.YELLOW}(OT){C.RESET}" if tg["has_ot"] else ""
+                print(f"    [{g_idx:2d}] Week {tg['week']:2d}: {C.BOLD}{tg['away_team']:<3} @ {tg['home_team']:<3}{C.RESET} ({tg['away_team']} {tg['away_score']} - {tg['home_team']} {tg['home_score']}{ot_str}) [{g_c_cnt} {chosen_concept_title} play{'s' if g_c_cnt != 1 else ''}]")
+
+            try:
+                g_sel = prompt_input(f"  Select matchup [1-{len(team_games)}] (or 'b' for teams, default: 1): ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if g_sel.lower() in ("b", "back"):
+                continue
+            tg_idx = int(g_sel) - 1 if g_sel.isdigit() and 1 <= int(g_sel) <= len(team_games) else 0
+            chosen_game = team_games[tg_idx]
 
         elif dd_in in ("2", "week", "by week"):
             print(f"\n  {C.BOLD}{C.GOLD}Weeks where {chosen_concept_title} was executed:{C.RESET}")
             for w_idx, wk in enumerate(avail_weeks, 1):
                 w_count = sum(1 for p in matching_plays if int(p.get("week", 1)) == wk)
-                print(f"    [{w_idx}] Week {wk:2d} ({w_count} play{'s' if w_count != 1 else ''})")
+                print(f"    [{w_idx:2d}] Week {wk:2d} ({w_count} play{'s' if w_count != 1 else ''})")
             try:
-                wk_sel = prompt_input(f"  Select week [1-{len(avail_weeks)}] (default: 1): ").strip() or "1"
+                wk_sel = prompt_input(f"  Select week [1-{len(avail_weeks)}] (or 'b' for back, default: 1): ").strip() or "1"
             except (EOFError, KeyboardInterrupt):
                 break
+            if wk_sel.lower() in ("b", "back"):
+                continue
             if wk_sel.isdigit() and int(wk_sel) in avail_weeks:
                 sel_wk = int(wk_sel)
             elif wk_sel.isdigit() and 1 <= int(wk_sel) <= len(avail_weeks):
                 sel_wk = avail_weeks[int(wk_sel) - 1]
             else:
                 sel_wk = avail_weeks[0]
-            display_plays = [p for p in matching_plays if int(p.get("week", 1)) == sel_wk]
 
-        else:
-            display_plays = matching_plays
+            week_concept_plays = [p for p in matching_plays if int(p.get("week", 1)) == sel_wk]
+            week_game_ids = sorted({p["game_id"] for p in week_concept_plays})
+            week_games = [g for g in all_games if g["game_id"] in week_game_ids]
 
-        # Step 6: Show matching plays
-        print(f"\n  {C.BOLD}{C.CYAN}Executed Plays ({chosen_concept_title} • {len(display_plays)} plays):{C.RESET}")
-        print("  " + "─" * 94)
-        for idx, p in enumerate(display_plays, 1):
-            post = p.get("posteam", "OFF")
-            defe = p.get("defteam", "DEF")
-            qtr = p.get("qtr", 1)
-            q_str = "OT" if qtr >= 5 else f"Q{qtr}"
-            down = p.get("down", 1)
-            ydstogo = p.get("ydstogo", 10)
-            yds = float(p.get("yards_gained", 0.0))
-            epa = float(p.get("epa", 0.0))
-            qb = p.get("qb_name") or p.get("player_name") or ""
-            target = p.get("receiver_player_name") or p.get("rusher_player_name") or p.get("kicker_player_name") or p.get("punter_player_name") or ""
-            action_desc = f"{qb} -> {target}" if (qb and target and qb != target) else (qb or target or chosen_concept_key)
-            td_tag = " (TD)" if p.get("touchdown") else ""
-            print(f"    [{idx:2d}] {post} vs {defe:<3} | {q_str} {down}&{ydstogo:<2} | {action_desc:<30} | {yds:+5.1f} yds{td_tag} | {epa:+5.2f} EPA")
-        print("  " + "─" * 94)
+            print(f"\n  {C.BOLD}{C.GOLD}Week {sel_wk} Matchups using {chosen_concept_title} ({len(week_games)} games):{C.RESET}")
+            for wg_idx, wg in enumerate(week_games, 1):
+                g_c_cnt = sum(1 for p in week_concept_plays if p.get("game_id") == wg["game_id"])
+                ot_str = f" {C.YELLOW}(OT){C.RESET}" if wg["has_ot"] else ""
+                print(f"    [{wg_idx:2d}] {C.BOLD}{wg['away_team']:<3} @ {wg['home_team']:<3}{C.RESET} ({wg['away_team']} {wg['away_score']} - {wg['home_team']} {wg['home_score']}{ot_str}) [{g_c_cnt} {chosen_concept_title} play{'s' if g_c_cnt != 1 else ''}]")
+
+            try:
+                g_sel = prompt_input(f"  Select matchup [1-{len(week_games)}] (or 'b' for weeks, default: 1): ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if g_sel.lower() in ("b", "back"):
+                continue
+            wg_idx = int(g_sel) - 1 if g_sel.isdigit() and 1 <= int(g_sel) <= len(week_games) else 0
+            chosen_game = week_games[wg_idx]
+
+        else:  # All Matchups
+            concept_game_ids = sorted({p["game_id"] for p in matching_plays})
+            concept_games = [g for g in all_games if g["game_id"] in concept_game_ids]
+
+            print(f"\n  {C.BOLD}{C.GOLD}All Matchups using {chosen_concept_title} ({len(concept_games)} games):{C.RESET}")
+            for cg_idx, cg in enumerate(concept_games, 1):
+                g_c_cnt = sum(1 for p in matching_plays if p.get("game_id") == cg["game_id"])
+                ot_str = f" {C.YELLOW}(OT){C.RESET}" if cg["has_ot"] else ""
+                print(f"    [{cg_idx:2d}] Week {cg['week']:2d}: {C.BOLD}{cg['away_team']:<3} @ {cg['home_team']:<3}{C.RESET} ({cg['away_team']} {cg['away_score']} - {cg['home_team']} {cg['home_score']}{ot_str}) [{g_c_cnt} {chosen_concept_title} play{'s' if g_c_cnt != 1 else ''}]")
+
+            try:
+                g_sel = prompt_input(f"  Select matchup [1-{len(concept_games)}] (or 'b' for menu, default: 1): ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if g_sel.lower() in ("b", "back"):
+                continue
+            cg_idx = int(g_sel) - 1 if g_sel.isdigit() and 1 <= int(g_sel) <= len(concept_games) else 0
+            chosen_game = concept_games[cg_idx]
+
+        if not chosen_game:
+            continue
+
+        # Step 6: Quarter Selection for chosen_game (NO individual plays displayed until inside quarter!)
+        game_all_plays = chosen_game["plays"]
+        game_concept_plays = [p for p in matching_plays if p.get("game_id") == chosen_game["game_id"]]
+        if not game_concept_plays:
+            game_concept_plays = game_all_plays
+
+        has_ot = chosen_game["has_ot"]
+        q_options = [
+            ("1", "Quarter 1 (Q1)", 1),
+            ("2", "Quarter 2 (Q2)", 2),
+            ("3", "Quarter 3 (Q3)", 3),
+            ("4", "Quarter 4 (Q4)", 4),
+        ]
+        if has_ot:
+            q_options.append(("5", "Overtime (OT)", 5))
+        q_options.append(("a", f"All Quarters ({chosen_concept_title})", None))
+
+        print(f"\n  {C.BOLD}{C.GOLD}Select Quarter in {chosen_game['away_team']} @ {chosen_game['home_team']} (Week {chosen_game['week']}):{C.RESET}")
+        for q_key, q_lbl, q_val in q_options:
+            q_c_cnt = len([p for p in game_concept_plays if q_val is None or int(p.get("qtr", 1)) == q_val])
+            print(f"    [{q_key.upper()}] {C.BOLD}{q_lbl:<36}{C.RESET} ({q_c_cnt} play{'s' if q_c_cnt != 1 else ''})")
 
         try:
-            sel_in = prompt_input(f"  Select play number to diagram [1-{len(display_plays)}] (or 'b' to change drilldown, default: 1): ").strip()
+            q_in = prompt_input("  Choose quarter [1-4" + (",5" if has_ot else "") + ",A] (or 'b' for matchups, default: A): ").strip().lower() or "a"
+        except (EOFError, KeyboardInterrupt):
+            break
+        if q_in in ("b", "back"):
+            continue
+        if q_in in ("q", "quit", "exit"):
+            break
+
+        found_qtr = False
+        selected_qtr_val = None
+        for q_key, q_lbl, q_val in q_options:
+            if q_in == q_key.lower():
+                selected_qtr_val = q_val
+                found_qtr = True
+                break
+        if not found_qtr:
+            for q_key, q_lbl, q_val in q_options:
+                if len(q_in) > 1 and q_in in q_lbl.lower():
+                    selected_qtr_val = q_val
+                    found_qtr = True
+                    break
+
+        if selected_qtr_val is not None:
+            quarter_plays = [p for p in game_concept_plays if int(p.get("qtr", 1)) == selected_qtr_val]
+            q_hdr = f"Q{selected_qtr_val}" if selected_qtr_val <= 4 else "OT"
+        else:
+            quarter_plays = list(game_concept_plays)
+            q_hdr = "FULL GAME"
+
+        if not quarter_plays:
+            print(f"\n  {C.YELLOW}⚠ No {chosen_concept_title} plays recorded in this dataset for {q_hdr}.{C.RESET}")
+            continue
+
+        # Step 7: NOW AND ONLY NOW INSIDE QUARTER LISTING, DISPLAY THE PLAYS!
+        tbl_title = f"{chosen_game['away_team']} @ {chosen_game['home_team']} • {q_hdr} • {chosen_concept_title} ({len(quarter_plays)} Plays)"
+        print("\n" + render_game_plays_table(quarter_plays, title=tbl_title))
+
+        try:
+            sel_in = prompt_input(f"  Select play [1-{len(quarter_plays)}] to diagram (or 'b' to change quarter, default: 1): ").strip()
         except (EOFError, KeyboardInterrupt):
             break
         if sel_in.lower() in ("b", "back"):
@@ -5325,11 +5505,11 @@ def interactive_play_explorer(
         if sel_in.lower() in ("q", "quit", "exit"):
             break
 
-        play_idx = int(sel_in) - 1 if sel_in.isdigit() and 1 <= int(sel_in) <= len(display_plays) else 0
-        chosen_play = display_plays[play_idx]
+        play_idx = int(sel_in) - 1 if sel_in.isdigit() and 1 <= int(sel_in) <= len(quarter_plays) else 0
+        chosen_play = quarter_plays[play_idx]
         current_cam = "behind-defense" if phase == "defense" and default_camera == "behind-offense" else default_camera
 
-        # Step 7: Field Diagram
+        # Step 8: Play Diagram with Prominent Situation HUD
         play_title = f"PLAY #{chosen_play['play_id']} DIAGRAM — {chosen_play.get('qb_name') or chosen_play.get('player_name') or 'Play'} ({chosen_play.get('posteam')} vs {chosen_play.get('defteam')})"
         print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=play_title, camera=current_cam))
 
@@ -5640,6 +5820,30 @@ def _split_cmd_args(raw_in: str) -> List[str]:
         return raw_in.split()
 
 
+def show_startup_loading(is_interactive: bool = True) -> None:
+    """
+    Display a smooth loading progress bar during interactive startup,
+    then clear the screen and display just the logo and input prompt (like /clear).
+    """
+    if not is_interactive:
+        return
+    steps = [
+        ("Initializing stat calculation engine...", 25),
+        ("Loading NFL play-by-play datasets & models...", 60),
+        ("Calibrating chalkboard & multi-angle visualizers...", 85),
+        ("Ready! Launching NFL-STAT-CLI...", 100),
+    ]
+    bar_width = 30
+    for label, pct in steps:
+        filled = int(bar_width * pct / 100)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        sys.stdout.write(f"\r  {C.BOLD}{C.GOLD}Loading... [{bar}] {pct:3d}%{C.RESET} {C.DIM}{label:<52}{C.RESET}")
+        sys.stdout.flush()
+        time.sleep(0.06)
+    time.sleep(0.08)
+    os.system("cls" if os.name == "nt" else "clear")
+
+
 def interactive_tui(
     engine: StatEngine,
     bridge: NFLDataBridge,
@@ -5654,20 +5858,23 @@ def interactive_tui(
     Natural-Language-first interactive interface with /command support and
     readline-safe prompt wrapping so multi-line inputs can backspace across line wraps.
     """
+    is_interactive = hasattr(sys.stdout, "isatty") and sys.stdout.isatty() and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    show_startup_loading(is_interactive=is_interactive)
     print(AsciiArtRenderer.banner())
     active_season = default_season
     seasons_to_load = sorted({active_season - 1, active_season})
     plays = initial_plays if initial_plays is not None else bridge.load_pbp(seasons_to_load)
     detected_slm = NaturalLanguageStatAssistant.detect_ollama_model(slm_model)
     slm_status = f"Ollama SLM ({detected_slm})" if detected_slm else "Built-in Deterministic AST Parser (Offline)"
-    print(f"  {C.GREEN}✔ Loaded {len(plays)} play-by-play records via [{bridge.last_source_used}]{C.RESET}")
-    if bridge.last_error and "offline" in bridge.last_source_used:
-        print(f"  {C.YELLOW}⚠ Live backend note ({bridge.last_error[:95]}) — using built-in offline dataset.{C.RESET}")
-    print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}] • Season: [{active_season}] • Camera: [{default_camera}]{C.RESET}")
-    if not plays_for_season(plays, active_season):
-        avail = ", ".join(map(str, available_seasons(plays))) or "none"
-        print(f"  {C.YELLOW}⚠ No {active_season} play-by-play data is loaded (available: {avail}). Use `/season YEAR` to switch seasons.{C.RESET}")
-    print(f"  {C.DIM}Ask any NFL stat or play question in plain English, or type {C.RESET}{C.BOLD}{C.GOLD}/help{C.RESET}{C.DIM} for commands ({C.RESET}{C.BOLD}/quit{C.RESET}{C.DIM} or {C.RESET}{C.BOLD}close{C.RESET}{C.DIM} to exit).{C.RESET}")
+    if not is_interactive:
+        print(f"  {C.GREEN}✔ Loaded {len(plays)} play-by-play records via [{bridge.last_source_used}]{C.RESET}")
+        if bridge.last_error and "offline" in bridge.last_source_used:
+            print(f"  {C.YELLOW}⚠ Live backend note ({bridge.last_error[:95]}) — using built-in offline dataset.{C.RESET}")
+        print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}] • Season: [{active_season}] • Camera: [{default_camera}]{C.RESET}")
+        if not plays_for_season(plays, active_season):
+            avail = ", ".join(map(str, available_seasons(plays))) or "none"
+            print(f"  {C.YELLOW}⚠ No {active_season} play-by-play data is loaded (available: {avail}). Use `/season YEAR` to switch seasons.{C.RESET}")
+        print(f"  {C.DIM}Ask any NFL stat or play question in plain English, or type {C.RESET}{C.BOLD}{C.GOLD}/help{C.RESET}{C.DIM} for commands ({C.RESET}{C.BOLD}/quit{C.RESET}{C.DIM} or {C.RESET}{C.BOLD}close{C.RESET}{C.DIM} to exit).{C.RESET}")
 
     last_parsed_nl: Optional[Dict[str, Any]] = None
 
