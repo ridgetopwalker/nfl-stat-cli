@@ -1245,6 +1245,105 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="yds",
         dependencies=["total_yac", "total_xyac", "completions"],
     ),
+    "passing_yards": StatDefinition(
+        name="passing_yards",
+        title="Passing Yards (Pass Yds)",
+        category="traditional",
+        group_by="qb",
+        formula="passing_yards",
+        description="Total passing yards gained on completed and intercepted pass attempts.",
+        calculation_explained="Sum of yards gained on dropbacks (excluding sacks).",
+        unit="yds",
+        dependencies=["passing_yards"],
+    ),
+    "rushing_yards": StatDefinition(
+        name="rushing_yards",
+        title="Rushing Yards (Rush Yds)",
+        category="traditional",
+        group_by="rusher",
+        formula="rushing_yards",
+        description="Total rushing yards gained on designed runs and scrambles.",
+        calculation_explained="Sum of yards gained on official rush attempts.",
+        unit="yds",
+        dependencies=["rushing_yards"],
+    ),
+    "touchdowns": StatDefinition(
+        name="touchdowns",
+        title="Total Touchdowns (TD)",
+        category="traditional",
+        group_by="player",
+        formula="touchdowns",
+        description="Total offensive touchdowns scored (passing, rushing, and receiving).",
+        calculation_explained="Sum of all touchdowns scored across matching plays.",
+        unit="TD",
+        dependencies=["touchdowns"],
+    ),
+    "pass_touchdowns": StatDefinition(
+        name="pass_touchdowns",
+        title="Passing Touchdowns (Pass TD)",
+        category="traditional",
+        group_by="qb",
+        formula="pass_touchdowns",
+        description="Touchdown passes thrown by the quarterback.",
+        calculation_explained="Total touchdowns thrown on completed pass attempts.",
+        unit="TD",
+        dependencies=["pass_touchdowns"],
+    ),
+    "rush_touchdowns": StatDefinition(
+        name="rush_touchdowns",
+        title="Rushing Touchdowns (Rush TD)",
+        category="traditional",
+        group_by="rusher",
+        formula="rush_touchdowns",
+        description="Rushing touchdowns scored on running attempts.",
+        calculation_explained="Total touchdowns scored on designed runs or scrambles.",
+        unit="TD",
+        dependencies=["rush_touchdowns"],
+    ),
+    "interceptions": StatDefinition(
+        name="interceptions",
+        title="Interceptions Thrown (INT)",
+        category="traditional",
+        group_by="qb",
+        formula="interceptions",
+        description="Total interceptions thrown by the passer.",
+        calculation_explained="Sum of intercepted pass attempts.",
+        unit="INT",
+        dependencies=["interceptions"],
+    ),
+    "sacks": StatDefinition(
+        name="sacks",
+        title="Quarterback Sacks (Sacks)",
+        category="traditional",
+        group_by="qb",
+        formula="sacks",
+        description="Total sacks taken behind line of scrimmage.",
+        calculation_explained="Sum of quarterback sacks on dropbacks.",
+        unit="sacks",
+        dependencies=["sacks"],
+    ),
+    "completions": StatDefinition(
+        name="completions",
+        title="Pass Completions (Comp)",
+        category="traditional",
+        group_by="qb",
+        formula="completions",
+        description="Total successful pass completions.",
+        calculation_explained="Sum of completed pass attempts.",
+        unit="comp",
+        dependencies=["completions"],
+    ),
+    "first_downs": StatDefinition(
+        name="first_downs",
+        title="First Downs (1st Downs)",
+        category="traditional",
+        group_by="team",
+        formula="first_downs",
+        description="Total first downs gained on offense.",
+        calculation_explained="Total plays achieving a first down or touchdown.",
+        unit="1st",
+        dependencies=["first_downs"],
+    ),
 }
 
 # Example / Showcase Custom Stats (demonstrating how custom stats work without polluting a fresh install)
@@ -1784,12 +1883,22 @@ class StatEngine:
         filter_expr: str = "",
         conf: Optional[str] = None,
         team: Optional[str] = None,
+        division: Optional[str] = None,
+        week: Optional[int] = None,
+        qtr: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         result = plays
         if conf:
             result = [p for p in result if str(p.get("conf", "")).upper() == conf.upper()]
         if team:
             result = [p for p in result if str(p.get("posteam", "")).upper() == team.upper()]
+        if division:
+            div_clean = division.strip().lower()
+            result = [p for p in result if str(p.get("division", "")).strip().lower() == div_clean]
+        if week is not None:
+            result = [p for p in result if int(p.get("week", -999)) == int(week)]
+        if qtr is not None:
+            result = [p for p in result if int(p.get("qtr", -999)) == int(qtr)]
         if not filter_expr or not filter_expr.strip():
             return result
         # Validate syntax and identifiers once before filtering rows
@@ -2049,6 +2158,9 @@ class StatEngine:
         team: Optional[str] = None,
         group_override: Optional[str] = None,
         extra_filter: str = "",
+        division: Optional[str] = None,
+        week: Optional[int] = None,
+        qtr: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Evaluate a traditional or custom stat across entities and return a sorted leaderboard."""
         if stat_name not in self.stats:
@@ -2056,7 +2168,7 @@ class StatEngine:
             hint = f" Did you mean: {', '.join(matches)}?" if matches else " Run `list-stats` or `/stats` to see available stats."
             raise KeyError(f"Stat '{stat_name}' is not registered.{hint}")
         sdef = self.stats[stat_name]
-        filtered = self.apply_filter(plays, sdef.filter_expr, conf=conf, team=team)
+        filtered = self.apply_filter(plays, sdef.filter_expr, conf=conf, team=team, division=division, week=week, qtr=qtr)
         if extra_filter:
             filtered = self.apply_filter(filtered, extra_filter)
         group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
@@ -3232,6 +3344,49 @@ class NaturalLanguageStatAssistant:
         "thibodeaux",
     )
 
+    STAT_SYNONYM_MAP: Tuple[Tuple[str, str, str], ...] = (
+        # Passing Yards (singular & plural, colloquial phrases)
+        (r"\b(?:passing|pass)\s+(?:yard|yards|yds|yd)\b|\b(?:most\s+yards\s+passing|passed\s+for\s+the\s+most\s+yards|threw\s+for\s+the\s+most\s+yards)\b", "passing_yards", "qb"),
+        # Rushing Yards (singular & plural, colloquial phrases)
+        (r"\b(?:rushing|rush)\s+(?:yard|yards|yds|yd)\b|\b(?:most\s+yards\s+rushing|ran\s+for\s+the\s+most\s+yards|rushed\s+for\s+the\s+most\s+yards)\b", "rushing_yards", "rusher"),
+        # Passing Touchdowns
+        (r"\b(?:passing|pass)\s+(?:touchdown|touchdowns|td|tds)\b|\b(?:touchdown\s+passes|threw\s+(?:the\s+)?most\s+touchdowns)\b", "pass_touchdowns", "qb"),
+        # Rushing Touchdowns
+        (r"\b(?:rushing|rush)\s+(?:touchdown|touchdowns|td|tds)\b|\b(?:ran\s+for\s+(?:the\s+)?most\s+touchdowns)\b", "rush_touchdowns", "rusher"),
+        # Total Touchdowns
+        (r"\b(?:touchdown|touchdowns|tds|td)\b", "touchdowns", "player"),
+        # Interceptions
+        (r"\b(?:interception|interceptions|picks|int|ints)\b|\b(?:threw\s+(?:the\s+)?most\s+picks)\b", "interceptions", "qb"),
+        # Sacks
+        (r"\b(?:sack|sacks)\b", "sacks", "qb"),
+        # Completions
+        (r"\b(?:completion|completions|completed\s+passes)\b", "completions", "qb"),
+        # Completion Percentage
+        (r"\b(?:completion\s+(?:percentage|pct|rate)|comp\s*%(?:age)?)\b", "completion_pct", "qb"),
+        # Yards per Attempt
+        (r"\b(?:yards\s+per\s+attempt|yards\s+per\s+pass|ypa|y/a)\b", "yards_per_attempt", "qb"),
+        # Yards per Rush / Carry
+        (r"\b(?:yards\s+per\s+(?:rush|carry)|ypc)\b", "yards_per_rush", "rusher"),
+        # ANY/A
+        (r"\b(?:any/a|adjusted\s+net\s+yards)\b", "any_a", "qb"),
+        # Passer Rating
+        (r"\b(?:passer\s+rating|qb\s+rating|passing\s+rating)\b", "passer_rating", "qb"),
+        # First Downs
+        (r"\b(?:first\s+down|first\s+downs|1st\s+downs)\b", "first_downs", "team"),
+        # Explosive Play Rate
+        (r"\b(?:explosive\s+play\s+rate|explosive\s+plays)\b", "explosive_play_rate", "team"),
+        # Success Rate
+        (r"\b(?:success\s+rate|offensive\s+success)\b", "success_rate_pct", "team"),
+        # EPA per Play
+        (r"\b(?:epa\s+per\s+play|epa/play|epa)\b", "epa_per_play", "qb"),
+        # Screen YAC
+        (r"\b(?:screen\s+yac|screen\s+yards\s+after\s+catch)\b", "screen_yards_after_catch", "team"),
+        # YAC over Expected
+        (r"\b(?:yac\s+over\s+expected|yacoe)\b", "yac_over_expected", "team"),
+        # Yards per play
+        (r"\b(?:yards\s+per\s+play|ypp)\b", "yards_per_play", "play_concept"),
+    )
+
     @classmethod
     def detect_ollama_model(cls, requested_model: Optional[str] = None) -> Optional[str]:
         if requested_model and requested_model.strip().lower() in ("none", "off", "disable", "disabled"):
@@ -3262,7 +3417,7 @@ class NaturalLanguageStatAssistant:
     @classmethod
     def _validate_slm_response(cls, parsed: Dict[str, Any], engine: Optional[StatEngine]) -> Optional[Dict[str, Any]]:
         intent = str(parsed.get("intent") or "").strip().lower()
-        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report", "team_drilldown", "player_drilldown", "stat_page", "delete_stat"):
+        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report", "team_drilldown", "player_drilldown", "stat_page", "delete_stat", "dataset_info"):
             return None
         parsed["intent"] = intent
         if "show_field" in parsed:
@@ -3362,6 +3517,81 @@ class NaturalLanguageStatAssistant:
         season = int(season_match.group(1)) if season_match else default_season
         conf = "AFC" if re.search(r"\bafc\b", ql) else ("NFC" if re.search(r"\bnfc\b", ql) else None)
 
+        # 1. Division detection
+        division: Optional[str] = None
+        div_m = re.search(r"\b(afc|nfc)\s+(east|north|south|west)\b", ql)
+        if div_m:
+            conf = div_m.group(1).upper()
+            division = f"{conf} {div_m.group(2).title()}"
+        else:
+            div_stand = re.search(r"\b(east|north|south|west)\s+(?:div|division)\b", ql)
+            if div_stand and conf:
+                division = f"{conf} {div_stand.group(1).title()}"
+
+        # 2. Week detection
+        week: Optional[int] = None
+        week_m = re.search(r"\b(?:week|wk|w)\s*(\d{1,2})\b", ql)
+        if week_m:
+            week = int(week_m.group(1))
+
+        # 3. Quarter detection
+        qtr: Optional[int] = None
+        if re.search(r"\b(?:1st|first)\s+(?:quarter|qtr)\b|\bq1\b", ql):
+            qtr = 1
+        elif re.search(r"\b(?:2nd|second)\s+(?:quarter|qtr)\b|\bq2\b", ql):
+            qtr = 2
+        elif re.search(r"\b(?:3rd|third)\s+(?:quarter|qtr)\b|\bq3\b", ql):
+            qtr = 3
+        elif re.search(r"\b(?:4th|fourth)\s+(?:quarter|qtr)\b|\bq4\b", ql):
+            qtr = 4
+        elif re.search(r"\b(?:5th|fifth)\s+(?:quarter|qtr)\b|\b(?:overtime|ot)\b|\bq5\b", ql):
+            qtr = 5
+
+        # 4. Position detection
+        position: Optional[str] = None
+        if re.search(r"\b(?:quarterback|quarterbacks|passer|passers|passing|pass|qb|qbs)\b", ql):
+            position = "QB"
+        elif re.search(r"\b(?:running\s*back|running\s*backs|rusher|rushers|rushing|rush|rb|rbs|halfback|tailback)\b", ql):
+            position = "RB"
+        elif re.search(r"\b(?:wide\s*receiver|wide\s*receivers|wr|wrs|wideout|wideouts|receiving|receiver)\b", ql):
+            position = "WR"
+        elif re.search(r"\b(?:tight\s*end|tight\s*ends|te|tes)\b", ql):
+            position = "TE"
+        elif re.search(r"\b(?:kicker|kickers|placekicker|pk|kicking)\b", ql):
+            position = "K"
+        elif re.search(r"\b(?:punter|punters|punting)\b", ql):
+            position = "P"
+        elif re.search(r"\b(?:defense|defensive|pass\s*rusher|edge\s*rusher|cornerback|safety|linebacker|def)\b", ql):
+            position = "DEF"
+
+        # 5. Situation / Down & Distance
+        filter_parts: List[str] = []
+        if re.search(r"\b(?:3rd|third)\s+(?:and|&)\s+short\b", ql):
+            filter_parts.append("down == 3 and ydstogo <= 2")
+        elif re.search(r"\b(?:3rd|third)\s+(?:and|&)\s+long\b", ql):
+            filter_parts.append("down == 3 and ydstogo >= 7")
+        elif re.search(r"\b(?:4th|fourth)\s+(?:and|&)\s+(?:1|one|inches)\b", ql):
+            filter_parts.append("down == 4 and ydstogo <= 1")
+        elif re.search(r"\b(?:1st|first)\s+down\b", ql):
+            filter_parts.append("down == 1")
+        elif re.search(r"\b(?:2nd|second)\s+down\b", ql):
+            filter_parts.append("down == 2")
+        elif re.search(r"\b(?:3rd|third)\s+down\b", ql):
+            filter_parts.append("down == 3")
+        elif re.search(r"\b(?:4th|fourth)\s+down\b", ql):
+            filter_parts.append("down == 4")
+
+        if "red zone" in ql or "redzone" in ql or "inside the 20" in ql:
+            filter_parts.append("yardline_100 <= 20")
+        if "goal line" in ql or "goalline" in ql or "inside the 5" in ql:
+            filter_parts.append("yardline_100 <= 5")
+        if "two minute" in ql or "2 minute" in ql:
+            filter_parts.append("half_seconds_remaining <= 120")
+        if "play action" in ql or "play-action" in ql:
+            filter_parts.append("play_action == 1")
+        if "screen" in ql and not any(w in ql for w in ("screen yac", "screen yards after catch", "screen efficiency")):
+            filter_parts.append("is_screen == 1")
+
         # Detect camera perspective
         camera = "behind-offense"
         if any(p in ql for p in ("behind the defense", "behind defense", "defense view", "defensive view", "from defense")):
@@ -3406,19 +3636,61 @@ class NaturalLanguageStatAssistant:
                     "sack", "longest", "best", "meaningful", "win", "loss", "impact", "score",
                     "passer", "rating", "cpoe", "epa", "wpa", "yac", "afc", "nfc", "auto",
                     "season", "game", "quarter", "qtr", "down", "view", "sideline", "camera",
+                    "week", "division", "most", "highest", "last", "latest", "data", "who", "what",
                 } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
                 if cand_low not in ignore_words and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
+
+        # Check if user is asking for Dataset Info / Game Information
+        is_dataset_query = any(phrase in ql for phrase in (
+            "last game", "latest game", "most recent game", "what is the last game",
+            "what was the last game", "what games do you have", "what data do you have",
+            "games you have data from", "games you have data for", "games do you have data",
+            "what data is loaded", "available games", "games loaded", "which games do you have",
+            "games in the dataset", "show all games", "list all games", "what games are in",
+        )) or (
+            ("game" in ql or "games" in ql) and any(w in ql for w in ("data from", "data for", "you have", "loaded", "available", "last", "latest"))
+        ) or (
+            re.search(r"\b(?:what|which|list|show)\s+(?:are\s+the\s+)?games\b", ql) is not None
+        )
+
+        if is_dataset_query:
+            subq = "last_game" if any(w in ql for w in ("last", "latest", "most recent", "newest")) else "all_games"
+            return {
+                "intent": "dataset_info",
+                "subquery": subq,
+                "query": query,
+                "stat_name": None,
+                "group_by": None,
+                "season": season,
+                "week": week,
+                "qtr": qtr,
+                "division": division,
+                "conf": conf,
+                "team": team_filter,
+                "player": None,
+                "position": position,
+                "filter_expr": " and ".join(filter_parts),
+                "show_field": False,
+                "explanation": f"Report information on {'the latest loaded NFL game' if subq == 'last_game' else 'loaded games in the dataset'}.",
+            }
 
         # Check if user is asking for Stat Page
         if any(ql == p or ql.startswith(p + " ") for p in ("stat page", "show stat page", "view stat page", "my stat page", "saved stat page", "stat tracking", "saved stats", "stat-page")):
             return {
                 "intent": "stat_page",
                 "query": query,
+                "stat_name": None,
+                "group_by": None,
                 "season": season,
+                "week": week,
+                "qtr": qtr,
+                "division": division,
                 "conf": None,
                 "team": None,
                 "player": None,
+                "position": None,
+                "filter_expr": "",
                 "show_field": False,
                 "explanation": "Display Saved Stat Page with historical lookback and forward tracking.",
             }
@@ -3429,15 +3701,22 @@ class NaturalLanguageStatAssistant:
             return {
                 "intent": "delete_stat",
                 "stat_name": del_m.group(1),
+                "query": query,
+                "group_by": None,
                 "season": season,
+                "week": week,
+                "qtr": qtr,
+                "division": division,
                 "conf": None,
                 "team": None,
                 "player": None,
+                "position": None,
+                "filter_expr": "",
                 "show_field": False,
                 "explanation": f"Delete custom stat `{del_m.group(1)}`.",
             }
 
-        # 1. Check if user is asking to CREATE a custom stat
+        # Check if user is asking to CREATE a custom stat
         if any(ql.startswith(prefix) for prefix in ("create stat", "create a stat", "make a stat", "make stat", "define stat", "build stat")):
             name_m = re.search(r"(?:called|named)\s+([a-zA-Z0-9_]+)", ql)
             formula_m = re.search(r"formula\s+(.+?)(?:\s+where\s+|\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|player|game)\b|$)", q, flags=re.IGNORECASE)
@@ -3450,6 +3729,7 @@ class NaturalLanguageStatAssistant:
             return {
                 "intent": "create_stat",
                 "stat_name": s_name,
+                "query": query,
                 "title": s_name.replace("_", " ").title(),
                 "group_by": s_group,
                 "formula": s_formula,
@@ -3457,16 +3737,23 @@ class NaturalLanguageStatAssistant:
                 "scope": "game" if "game" in ql and "win" in ql else "season",
                 "agg": "sum" if "ifelse" in s_formula else "formula",
                 "season": season,
+                "week": week,
+                "qtr": qtr,
+                "division": division,
                 "conf": conf,
                 "team": team_filter,
                 "player": player_filter,
+                "position": position,
                 "show_field": False,
                 "explanation": f"Created custom stat `{s_name}` grouped by `{s_group}` using formula `{s_formula}`.",
             }
 
-        # 2. Check if user is asking to DRILL DOWN into a team or player
+        # Check if user is asking to DRILL DOWN into a team or player
         is_drill_kw = any(w in ql for w in ("drill down", "drilldown", "team profile", "team breakdown", "player profile", "player breakdown"))
-        has_specific_stat_kw = any(w in ql for w in ("epa", "rating", "yac", "cpoe", "wpa", "yards per play", "success rate", "explosive", "meaningful win", "qb win"))
+        has_specific_stat_kw = any(w in ql for w in (
+            "epa", "rating", "yac", "cpoe", "wpa", "yards per play", "success rate", "explosive", "meaningful win", "qb win",
+            "passing yard", "rushing yard", "touchdown", "sack", "interception", "pass yards", "rush yards", "td"
+        ))
         if not has_specific_stat_kw and (is_drill_kw or (
             team_filter and any(w in ql for w in ("team stats", "stats for the chiefs", "stats for the bills", "stats for the lions", "team overview"))
         ) or (
@@ -3475,26 +3762,43 @@ class NaturalLanguageStatAssistant:
             if team_filter and not player_filter:
                 return {
                     "intent": "team_drilldown",
+                    "query": query,
+                    "stat_name": None,
+                    "group_by": "team",
                     "season": season,
+                    "week": week,
+                    "qtr": qtr,
+                    "division": division,
                     "team": team_filter,
                     "player": player_filter,
+                    "position": position,
                     "conf": conf,
+                    "filter_expr": " and ".join(filter_parts),
                     "show_field": False,
                     "explanation": f"Drill-down into team analytics, offense/defense profile, and roster leaders for {team_filter} ({season}).",
                 }
             if player_filter:
                 return {
                     "intent": "player_drilldown",
+                    "query": query,
+                    "stat_name": None,
+                    "group_by": "player",
                     "season": season,
+                    "week": week,
+                    "qtr": qtr,
+                    "division": division,
                     "player": player_filter,
+                    "position": position,
                     "conf": conf,
+                    "team": team_filter,
+                    "filter_expr": " and ".join(filter_parts),
                     "show_field": False,
                     "explanation": f"Drill-down into player passing, rushing, receiving, and situational stats for {player_filter.title()} ({season}).",
                 }
 
-        # 3. Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
+        # Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
         ql_without_stat_phrases = re.sub(
-            r"\b(?:per\s+play|play[\s_-]*action|explosive\s+play\s+rate|play\s+concept\s+efficiency)\b",
+            r"\b(?:per\s+play|play[\s_-]*action|explosive\s+play\s+rate|play\s+concept\s+efficiency|passing\s+yard|rushing\s+yard|pass\s+yard|rush\s+yard)\b",
             "",
             ql,
         )
@@ -3503,6 +3807,7 @@ class NaturalLanguageStatAssistant:
             "rankings", "rank teams", "rank qbs", "rank players", "by team", "by qb", "by player", "by concept",
             "effectiveness", "meaningful win", "meaningful loss", "impact score",
             "passer rating", "completion", "success rate", "explosive play rate", "cpoe",
+            "who had the most", "who has the most", "who led", "who leads", "most", "highest", "leader", "leaders",
         ))
         is_specific_play_request = (
             any(p in ql for p in (
@@ -3517,16 +3822,23 @@ class NaturalLanguageStatAssistant:
             ))
         )
 
-        if is_specific_play_request and not ("average" in ql or "across the year" in ql):
+        if is_specific_play_request and not ("average" in ql or "across the year" in ql or is_aggregate_request):
             concept_filter = "screen" if "screen" in ql else ("play_action_deep" if ("deep" in ql or "play action" in ql) else None)
             extra_filter = "touchdown == 1" if "touchdown" in ql else ("interception == 1" if "interception" in ql else ("sack == 1" if "sack" in ql else ""))
             sort_by = "epa" if ("epa" in ql or "efficient" in ql) else ("wpa" if "wpa" in ql else ("yac" if "yac" in ql else "yards_gained"))
             return {
                 "intent": "specific_play",
+                "query": query,
+                "stat_name": None,
+                "group_by": None,
                 "season": season,
+                "week": week,
+                "qtr": qtr,
+                "division": division,
                 "conf": conf,
                 "team": team_filter,
                 "player": player_filter,
+                "position": position,
                 "concept": concept_filter,
                 "filter_expr": extra_filter,
                 "sort_by": sort_by,
@@ -3535,10 +3847,17 @@ class NaturalLanguageStatAssistant:
                 "explanation": f"Selected specific matching play for {season} (sorted by {sort_by}, camera={camera}).",
             }
 
-        # 3. General Stat / Average / Leaderboard Query across the season (show_field = False!)
+        # Match stat using canonical STAT_SYNONYM_MAP first
         matched_stat: Optional[str] = None
-        if engine:
-            # Whole-word matching on stat ID, its spaced form, and title; prefer the longest (most specific) phrase
+        matched_group: Optional[str] = None
+        for pat, s_name, def_grp in cls.STAT_SYNONYM_MAP:
+            if re.search(pat, ql):
+                matched_stat = s_name
+                matched_group = def_grp
+                break
+
+        # Whole-word matching on registered stats in engine
+        if not matched_stat and engine:
             best_len = 0
             for sname, sdef in engine.stats.items():
                 for phrase in {sname.lower(), sname.lower().replace("_", " "), sdef.title.strip().lower()}:
@@ -3546,42 +3865,63 @@ class NaturalLanguageStatAssistant:
                         continue
                     if re.search(rf"(?<![a-z0-9_]){re.escape(phrase)}(?![a-z0-9_])", ql):
                         matched_stat, best_len = sname, len(phrase)
+                        matched_group = sdef.group_by
 
         if not matched_stat:
             if any(w in ql for w in ("meaningful win", "qb win", "pitcher", "meaningful loss", "impact score")):
-                matched_stat = "qb_impact_score"
                 return {
                     "intent": "qb_wins_report",
                     "stat_name": "qb_impact_score",
+                    "query": query,
+                    "group_by": "qb",
                     "season": season,
+                    "week": week,
+                    "qtr": qtr,
+                    "division": division,
                     "conf": conf,
                     "team": team_filter,
                     "player": player_filter,
+                    "position": position or "QB",
+                    "filter_expr": " and ".join(filter_parts),
                     "show_field": False,
                     "explanation": f"Evaluated per-game MLB-style QB Meaningful Wins (MW), Losses (ML), No-Decisions (ND), and 0-100 Impact Scores for {season}.",
                 }
             elif "screen" in ql:
                 matched_stat = "screen_yards_after_catch" if ("yac" in ql or "after catch" in ql) else "screen_effectiveness_index"
+                matched_group = "team"
             elif "passer rating" in ql:
                 matched_stat = "passer_rating"
+                matched_group = "qb"
             elif "any/a" in ql or "adjusted net yards" in ql:
                 matched_stat = "any_a"
+                matched_group = "qb"
             elif "explosive" in ql:
                 matched_stat = "explosive_play_rate"
+                matched_group = "team"
             elif "success rate" in ql:
                 matched_stat = "success_rate_pct"
+                matched_group = "team"
             elif "yac" in ql or "after catch" in ql:
                 matched_stat = "yac_over_expected" if "expected" in ql else "screen_yards_after_catch"
+                matched_group = "team"
             elif "epa" in ql:
                 matched_stat = "epa_per_play"
+                matched_group = "qb"
             else:
                 return {
                     "intent": "ambiguous",
                     "query": query,
+                    "stat_name": None,
+                    "group_by": None,
                     "season": season,
+                    "week": week,
+                    "qtr": qtr,
+                    "division": division,
                     "conf": conf,
                     "team": team_filter,
                     "player": player_filter,
+                    "position": position,
+                    "filter_expr": " and ".join(filter_parts),
                     "show_field": False,
                     "explanation": f"Could not determine a specific stat or play from query: '{query}'.",
                 }
@@ -3598,37 +3938,48 @@ class NaturalLanguageStatAssistant:
             group_override = "rusher"
         elif any(w in ql for w in ("by team", "teams", "each team", "team's", "per team")):
             group_override = "team"
+        elif any(w in ql for w in ("by division", "divisions", "each division")):
+            group_override = "division"
+        elif any(w in ql for w in ("by conference", "conferences", "each conference")):
+            group_override = "conference"
         elif any(w in ql for w in ("by concept", "play concept", "offensive play", "by play")):
             group_override = "play_concept"
-        elif "by conference" in ql:
-            group_override = "conference"
+        elif position:
+            pos_map = {"QB": "qb", "RB": "rusher", "WR": "receiver", "TE": "receiver", "K": "player", "P": "player", "DEF": "player"}
+            group_override = pos_map.get(position, matched_group)
+        elif matched_group:
+            group_override = matched_group
         elif player_filter and not group_override:
             group_override = "player" if "player" in GROUP_BY_COLUMN_MAP else "qb"
 
-        filter_parts: List[str] = []
-        if "3rd down" in ql or "third down" in ql:
-            filter_parts.append("down == 3")
-        if "4th quarter" in ql or "fourth quarter" in ql:
-            filter_parts.append("qtr == 4")
-        if "red zone" in ql:
-            filter_parts.append("red_zone == 1")
-        if "play action" in ql:
-            filter_parts.append("play_action == 1")
-        if "screen" in ql and matched_stat not in ("screen_yards_after_catch", "screen_effectiveness_index"):
-            filter_parts.append("is_screen == 1")
+        if not position:
+            if matched_stat in ("rushing_yards", "rush_touchdowns", "yards_per_rush"):
+                position = "RB"
+            elif matched_stat in ("passing_yards", "passer_rating", "pass_touchdowns", "any_a", "completion_pct", "yards_per_attempt", "qb_impact_score"):
+                position = "QB"
+            elif matched_stat in ("screen_yards_after_catch", "yac_over_expected"):
+                position = "WR"
+
+        is_leader_query = any(w in ql for w in ("who had the most", "who has the most", "who led", "who leads", "leader", "leaders", "most", "highest", "best", "top"))
+        exp_prefix = f"Evaluated `{matched_stat}` leaders for {season}" if is_leader_query else f"Evaluated `{matched_stat}` across {season}"
 
         return {
             "intent": "stat_query",
+            "query": query,
             "stat_name": matched_stat,
             "group_by": group_override,
-            "filter_expr": " and ".join(filter_parts),
             "season": season,
+            "week": week,
+            "qtr": qtr,
+            "division": division,
             "conf": conf,
             "team": team_filter,
             "player": player_filter,
+            "position": position,
+            "filter_expr": " and ".join([f for f in filter_parts if f]),
             "show_field": False,
             "camera": camera,
-            "explanation": f"Evaluated `{matched_stat}` across {season} (season aggregate/leaderboard — no ASCII field needed).",
+            "explanation": f"{exp_prefix} (season aggregate/leaderboard — no ASCII field needed).",
         }
 
 
@@ -3669,6 +4020,9 @@ def render_general_stat_view(
     extra_filter: str = "",
     view_mode: str = "auto",
     camera: str = "behind-offense",
+    division: Optional[str] = None,
+    week: Optional[int] = None,
+    qtr: Optional[int] = None,
 ) -> str:
     if stat_name not in engine.stats:
         matches = difflib.get_close_matches(stat_name, list(engine.stats.keys()), n=3, cutoff=0.5)
@@ -3677,7 +4031,7 @@ def render_general_stat_view(
     sdef = engine.stats[stat_name]
     group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
     board = engine.evaluate_stat_leaderboard(
-        stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter
+        stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr
     )
 
     out: List[str] = []
@@ -3697,10 +4051,23 @@ def render_general_stat_view(
                 f"{r['epa_per_play']:+.2f}",
                 f"{r['success_rate_pct']:.1f}%",
             ])
-        filter_desc = f" • Filter: {extra_filter or sdef.filter_expr}" if (extra_filter or sdef.filter_expr) else ""
-        conf_desc = f" • {conf}" if conf else ""
+        sub_desc_parts = [str(season)]
+        if conf:
+            sub_desc_parts.append(conf)
+        if division:
+            sub_desc_parts.append(division)
+        if week is not None:
+            sub_desc_parts.append(f"Week {week}")
+        if qtr is not None:
+            sub_desc_parts.append(f"Q{qtr}" if qtr <= 4 else "OT")
+        if team:
+            sub_desc_parts.append(team)
+        if extra_filter or sdef.filter_expr:
+            sub_desc_parts.append(f"Filter: {extra_filter or sdef.filter_expr}")
+        title_context = " • ".join(sub_desc_parts)
+
         out.append(AsciiArtRenderer.render_table(
-            f"{sdef.title} ({season}{conf_desc}{filter_desc})",
+            f"{sdef.title} ({title_context})",
             headers,
             rows,
             alignments=["right", "left", "center", "center", "right", "right", "right", "right", "right"],
@@ -4111,6 +4478,107 @@ def render_stat_page(
     return table_str + "\n" + "\n".join(catalog_lines)
 
 
+def render_dataset_info_view(
+    all_plays: List[Dict[str, Any]],
+    parsed: Dict[str, Any],
+) -> str:
+    subquery = parsed.get("subquery", "last_game")
+    season_val = parsed.get("season")
+    season_explicit = bool(re.search(r"\b20\d{2}\b", str(parsed.get("query", ""))))
+    target_season = season_val if season_explicit else None
+    summaries = extract_games_summary(all_plays, season=target_season)
+    if not summaries and target_season is not None:
+        summaries = extract_games_summary(all_plays)
+
+    week_flt = parsed.get("week")
+    if week_flt is not None:
+        summaries = [g for g in summaries if g["week"] == week_flt]
+
+    team_flt = parsed.get("team")
+    if team_flt:
+        t_up = team_flt.upper()
+        summaries = [g for g in summaries if t_up in (g["away_team"], g["home_team"])]
+
+    div_flt = parsed.get("division")
+    if div_flt:
+        div_clean = div_flt.strip().lower()
+        summaries = [
+            g for g in summaries
+            if TEAM_DIVISIONS.get(g["away_team"], "").lower() == div_clean
+            or TEAM_DIVISIONS.get(g["home_team"], "").lower() == div_clean
+        ]
+
+    if not summaries:
+        avail = ", ".join(map(str, available_seasons(all_plays))) or "none"
+        return (
+            f"\n  {C.YELLOW}⚠ No games found matching query criteria in loaded dataset.{C.RESET}\n"
+            f"  {C.DIM}Loaded seasons: {avail}. Total play records: {len(all_plays)}.{C.RESET}"
+        )
+
+    summaries.sort(key=lambda g: (int(g["season"]), int(g["week"]), str(g["game_id"])))
+
+    if subquery == "last_game" or any(w in str(parsed.get("query", "")).lower() for w in ("last", "latest", "most recent", "newest")):
+        last_g = summaries[-1]
+        gid = last_g["game_id"]
+        away = last_g["away_team"]
+        home = last_g["home_team"]
+        a_sc = last_g["away_score"]
+        h_sc = last_g["home_score"]
+        wk = last_g["week"]
+        sea = last_g["season"]
+        ot_txt = "Yes (Overtime)" if last_g.get("has_ot") else "No (Regulation)"
+        if h_sc > a_sc:
+            winner_str = f"{home} (+{h_sc - a_sc})"
+        elif a_sc > h_sc:
+            winner_str = f"{away} (+{a_sc - h_sc})"
+        else:
+            winner_str = "Tied"
+        quarters_str = ", ".join(f"Q{q}" if q <= 4 else "OT" for q in last_g.get("quarters", [1, 2, 3, 4]))
+
+        total_games_all = len(extract_games_summary(all_plays))
+        avail_seasons = ", ".join(map(str, available_seasons(all_plays)))
+
+        lines = [
+            f"\n{C.BOLD}{C.CYAN}══════════════════════════════════════════════════════════════════════════════{C.RESET}",
+            f"{C.BOLD}🏈 LATEST LOADED GAME IN DATASET{C.RESET}",
+            f"{C.BOLD}{C.CYAN}══════════════════════════════════════════════════════════════════════════════{C.RESET}",
+            f"  • {C.BOLD}Game ID:{C.RESET}       {C.GREEN}{gid}{C.RESET} ({sea} Season • Week {wk})",
+            f"  • {C.BOLD}Matchup:{C.RESET}       {away} @ {home}",
+            f"  • {C.BOLD}Final Score:{C.RESET}   {away} {a_sc} – {home} {h_sc} ({C.BOLD}Winner:{C.RESET} {winner_str})",
+            f"  • {C.BOLD}Quarters:{C.RESET}      {quarters_str} ({ot_txt})",
+            f"  • {C.BOLD}Play Records:{C.RESET}  {last_g['total_plays']} snaps logged in dataset",
+            f"{C.CYAN}──────────────────────────────────────────────────────────────────────────────{C.RESET}",
+            f"  {C.BOLD}📊 Dataset Overview:{C.RESET}",
+            f"    • Total Games Loaded:   {total_games_all} game(s) across seasons: [{avail_seasons}]",
+            f"    • Total Plays Loaded:   {len(all_plays)} play-by-play events",
+            f"    • Interactive Browser:  Type {C.CYAN}/games{C.RESET} or {C.CYAN}/games {wk}{C.RESET} to explore quarter-by-quarter plays",
+            f"{C.BOLD}{C.CYAN}══════════════════════════════════════════════════════════════════════════════{C.RESET}",
+        ]
+        return "\n".join(lines)
+
+    headers = ["Week", "Game ID", "Away", "Home", "Score", "Quarters", "Snaps"]
+    rows = []
+    for g in summaries:
+        score_str = f"{g['away_team']} {g['away_score']} - {g['home_team']} {g['home_score']}"
+        q_str = "OT" if g.get("has_ot") else f"{len(g.get('quarters', [1,2,3,4]))} Qtrs"
+        rows.append([
+            f"Wk {g['week']}",
+            g['game_id'],
+            g['away_team'],
+            g['home_team'],
+            score_str,
+            q_str,
+            g['total_plays'],
+        ])
+    tbl = AsciiArtRenderer.render_table(
+        f"NFL Loaded Games ({len(summaries)} games in dataset)",
+        headers,
+        rows,
+        alignments=["center", "left", "center", "center", "center", "center", "right"],
+    )
+    return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
+
+
 def handle_nl_query_result(
     parsed: Dict[str, Any],
     engine: StatEngine,
@@ -4128,16 +4596,43 @@ def handle_nl_query_result(
             f"  \u2022 {C.BOLD}To diagram a play:{C.RESET} try 'show Mahomes touchdown play' or 'diagram Goff screen play'.\n"
             f"  \u2022 {C.BOLD}Available stats:{C.RESET} {stat_list} (type {C.CYAN}/stats{C.RESET} for full catalog, or {C.CYAN}/help{C.RESET} for guidance)."
         )
-    season = int(parsed.get("season") or CURRENT_SEASON)
-    s_plays = require_season_plays(all_plays, season)
-    conf = parsed.get("conf")
-    team = parsed.get("team")
-    player = parsed.get("player") or parsed.get("qb")
-    camera = camera_override or parsed.get("camera") or "behind-offense"
+
     slm_tag = f" [SLM: {parsed['slm_model_used']}]" if parsed.get("slm_model_used") else " [Local Rule/AST Parser]"
     header = f"\n{C.BOLD}{C.CYAN}🤖 Query Interpretation{slm_tag}:{C.RESET} {parsed.get('explanation', '')}"
 
-    intent = parsed.get("intent", "stat_query")
+    if intent == "dataset_info":
+        return header + "\n" + render_dataset_info_view(all_plays, parsed)
+
+    season = int(parsed.get("season") or CURRENT_SEASON)
+    season_explicit = bool(re.search(r"\b20\d{2}\b", str(parsed.get("query", ""))))
+    if not season_explicit and not plays_for_season(all_plays, season):
+        avail = available_seasons(all_plays)
+        if avail:
+            season = max(avail)
+
+    s_plays = require_season_plays(all_plays, season)
+    conf = parsed.get("conf")
+    team = parsed.get("team")
+    division = parsed.get("division")
+    week = parsed.get("week")
+    qtr = parsed.get("qtr")
+    player = parsed.get("player") or parsed.get("qb")
+    camera = camera_override or parsed.get("camera") or "behind-offense"
+
+    if division:
+        div_low = division.strip().lower()
+        div_filtered = [p for p in s_plays if str(p.get("division", "")).strip().lower() == div_low]
+        if div_filtered:
+            s_plays = div_filtered
+    if week is not None:
+        w_filtered = [p for p in s_plays if int(p.get("week", -999)) == int(week)]
+        if w_filtered:
+            s_plays = w_filtered
+    if qtr is not None:
+        q_filtered = [p for p in s_plays if int(p.get("qtr", -999)) == int(qtr)]
+        if q_filtered:
+            s_plays = q_filtered
+
     if intent in ("stat_page", "page"):
         return header + "\n" + render_stat_page(engine, all_plays)
 
@@ -4169,7 +4664,7 @@ def handle_nl_query_result(
             scope=parsed.get("scope", "season"),
             agg=parsed.get("agg", "formula"),
         )
-        return header + "\n" + render_general_stat_view(engine, s_plays, sdef.name, season, conf=conf, team=team, view_mode="table")
+        return header + "\n" + render_general_stat_view(engine, s_plays, sdef.name, season, conf=conf, team=team, view_mode="table", division=division, week=week, qtr=qtr)
 
     if intent == "specific_play" or parsed.get("show_field") is True:
         return header + "\n" + render_specific_play_view(
@@ -4218,6 +4713,9 @@ def handle_nl_query_result(
         extra_filter=parsed.get("filter_expr", ""),
         view_mode=view_override,
         camera=camera,
+        division=division,
+        week=week,
+        qtr=qtr,
     )
 
 
@@ -4963,7 +5461,7 @@ def extract_games_summary(plays: List[Dict[str, Any]], season: Optional[int] = N
             "total_plays": len(pls),
             "plays": pls_sorted,
         })
-    summaries.sort(key=lambda g: (g["week"], g["game_id"]))
+    summaries.sort(key=lambda g: (int(g["season"]), int(g["week"]), str(g["game_id"])))
     return summaries
 
 
