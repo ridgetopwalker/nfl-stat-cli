@@ -2704,9 +2704,9 @@ def interactive_tui(engine: StatEngine, bridge: NFLDataBridge, slm_model: Option
     print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}]{C.RESET}")
 
     menu = f"""
-{C.BOLD}{C.CYAN}┌──────────────────────────────────────────────────────────────────────────────┐
-│                         NFL-STAT-CLI INTERACTIVE MENU                        │
-├──────────────────────────────────────────────────────────────────────────────┤{C.RESET}
+{C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
+│                             NFL-STAT-CLI INTERACTIVE MENU                             │
+├───────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}
   {C.BOLD}[1]{C.RESET} 📊 {C.GOLD}Evaluate Any Stat Leaderboard / Yearly Average (Table Only — No Field){C.RESET}
   {C.BOLD}[2]{C.RESET} 🧪 {C.MAGENTA}Create or Customize a Stat (Season, Game-by-Game, or Play-by-Play Scope){C.RESET}
   {C.BOLD}[3]{C.RESET} 🏈 {C.GREEN}Diagram a Specific Play on ASCII Field (Behind Offense / Behind Defense / Sideline){C.RESET}
@@ -2715,7 +2715,7 @@ def interactive_tui(engine: StatEngine, bridge: NFLDataBridge, slm_model: Option
   {C.BOLD}[6]{C.RESET} 💾 {C.YELLOW}Export / Import Custom Stats JSON{C.RESET}
   {C.BOLD}[7]{C.RESET} 💬 {C.CYAN}Ask a Natural-Language Question (Smart Output: Table for Averages, Field for Plays){C.RESET}
   {C.BOLD}[q]{C.RESET} ❌ Quit
-{C.BOLD}{C.CYAN}└──────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
+{C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
 
     while True:
         print(menu)
