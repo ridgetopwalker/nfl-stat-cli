@@ -1635,6 +1635,18 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         filter_expr="is_screen == 1",
         dependencies=["total_yac", "plays"],
     ),
+    "yards_after_catch": StatDefinition(
+        name="yards_after_catch",
+        title="Yards After Catch (YAC)",
+        category="traditional",
+        group_by="receiver",
+        formula="total_yac",
+        description="Total yards gained by receivers after catching the ball across all completed pass plays.",
+        calculation_explained="Sum of yards_after_catch across all completed pass plays (complete_pass == 1).",
+        unit="yds",
+        filter_expr="complete_pass == 1",
+        dependencies=["total_yac"],
+    ),
     "yac_over_expected": StatDefinition(
         name="yac_over_expected",
         title="Yards After Catch Over Expected (YACOE)",
@@ -2493,6 +2505,8 @@ class StatEngine:
             "total_yac": total_yac,
             "yac_per_play": total_yac / n,
             "yac_per_completion": total_yac / comp_nz,
+            "yards_after_catch": total_yac,
+            "yac": total_yac,
             "total_xyac": total_xyac,
             "xyac_per_completion": total_xyac / comp_nz,
             "completions": float(completions),
@@ -3979,6 +3993,8 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:screen\s+yac|screen\s+yards\s+after\s+catch)\b", "screen_yards_after_catch", "team"),
         # YAC over Expected
         (r"\b(?:yac\s+over\s+expected|yacoe)\b", "yac_over_expected", "team"),
+        # Yards After Catch (General YAC across all completed passes)
+        (r"\b(?:yards\s+after\s+(?:the\s+)?catch|yac)\b", "yards_after_catch", "receiver"),
         # Yards per play
         (r"\b(?:yards\s+per\s+play|ypp)\b", "yards_per_play", "play_concept"),
         # General / Overall Yardage Leaders ("most yards", "who had the most yards", "which player has the most yards", "yards this year", etc.)
@@ -4596,8 +4612,15 @@ class NaturalLanguageStatAssistant:
                 matched_stat = "success_rate_pct"
                 matched_group = "team"
             elif "yac" in ql or "after catch" in ql:
-                matched_stat = "yac_over_expected" if "expected" in ql else "screen_yards_after_catch"
-                matched_group = "team"
+                if "screen" in ql:
+                    matched_stat = "screen_yards_after_catch"
+                    matched_group = "team"
+                elif "expected" in ql:
+                    matched_stat = "yac_over_expected"
+                    matched_group = "team"
+                else:
+                    matched_stat = "yards_after_catch"
+                    matched_group = "receiver"
             elif "epa" in ql:
                 matched_stat = "epa_per_play"
                 matched_group = "qb"
@@ -4674,7 +4697,7 @@ class NaturalLanguageStatAssistant:
                 position = "RB"
             elif matched_stat in ("passing_yards", "passer_rating", "pass_touchdowns", "any_a", "completion_pct", "yards_per_attempt", "qb_impact_score"):
                 position = "QB"
-            elif matched_stat in ("screen_yards_after_catch", "yac_over_expected"):
+            elif matched_stat in ("screen_yards_after_catch", "yac_over_expected", "yards_after_catch"):
                 position = "WR"
 
         is_leader_query = any(w in ql for w in (
