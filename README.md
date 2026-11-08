@@ -1,11 +1,14 @@
 # nfl-stat-cli 🏈
 
-A cross-platform (`*nix` and Windows) command-line interface and interactive terminal analytics suite with **colorized ASCII art** (multi-angle play diagrams in **Behind-the-Offense**, **Behind-the-Defense**, and **Sideline** views, plus clean Unicode tables) and a **general-purpose composable Custom Stat Engine** powered by **[nflverse](https://nflverse.nflverse.com/) (R)**, **[sportsdataverse-py](https://py.sportsdataverse.org/) (Python)**, and an optional **Local Small Language Model (SLM via Ollama)**.
+A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and interactive terminal analytics suite with **colorized ASCII art** (multi-angle play diagrams in **Behind-the-Offense**, **Behind-the-Defense**, and **Sideline** views, plus clean Unicode tables) and a **general-purpose composable Custom Stat Engine** powered by **[nflverse](https://nflverse.nflverse.com/) (R)**, **[nfl_data_py](https://github.com/nflverse/nfl_data_py) / [sportsdataverse-py](https://py.sportsdataverse.org/) (Python)**, and an optional **Local Small Language Model (SLM via Ollama)**.
 
 ## Core Highlights
 
-- **One-Step Automated Installer (`install.bat` / `install.ps1` / `install.sh`)**:
-  - Run once and let it work: automatically detects or installs **Python 3**, bootstraps **`pip`**, installs all required Python packages (`pandas`, `polars`, `pyarrow`, `nflreadpy`, `sportsdataverse`), installs R's `nflreadr` if `Rscript` is present, and creates the `nfl-stat-cli` launcher.
+- **One-Step Automated Installer (`install.sh` / `install.bat` / `install.ps1`)**:
+  - **Compact Progress UI (Default)**: Displays the colorized `NFL-STAT-CLI` ASCII art banner, a full-width progress bar matched to the banner width, and a single overwriting status line showing the current installer command.
+  - **Verbose Mode (`-v` / `--verbose`)**: Pass `-v` (`./install.sh -v` or `.\install.ps1 -v`) to view full step-by-step `pip` and environment logs.
+  - **Zero-Prerequisite Setup**: Automatically detects or installs **Python 3** (`>=3.8`), bootstraps **`pip`**, creates/updates `.venv`, installs required Python packages (`pandas`, `pyarrow`, `polars`, `nfl_data_py`), and installs R's `nflreadr` if `Rscript` is present.
+  - **`nfl-stat` Command & Post-Install `PATH` Prompt**: Generates the `nfl-stat` launcher in the project folder (`./nfl-stat` on `*nix`/WSL and `.\nfl-stat` on Windows) and, once installation verification succeeds, asks if you want to add `nfl-stat` to your global `PATH` so you can run `nfl-stat` from any directory.
 - **General-Purpose Multi-Scope Composable Custom Stat Engine**:
   - Build custom stats across three evaluation scopes:
     1. **`season` scope**: Evaluate formulas across a player's, team's, or play concept's aggregated season metrics.
@@ -15,7 +18,7 @@ A cross-platform (`*nix` and Windows) command-line interface and interactive ter
   - Chain custom stats inside new custom stats with automatic AST dependency resolution.
 - **Context-Aware Output (No Unnecessary ASCII Fields on Yearly Averages)**:
   - Queries for **season averages, leaderboards, or stat rankings across the year** output clean **tables and stat explanations only**—never cluttering the terminal with an ASCII football field.
-  - Queries for a **specific play** (`nfl-stat-cli play ...` or asking to see/diagram a specific play) render the **colorized ASCII football field and play trajectory**.
+  - Queries for a **specific play** (`nfl-stat play ...` or asking to see/diagram a specific play) render the **colorized ASCII football field and play trajectory**.
 - **Multi-Angle ASCII Play Visualizer (`behind-offense`, `behind-defense`, `sideline`)**:
   - **`--camera behind-offense`**: All-22 view behind the QB/Offense looking **upfield (`▲`)** toward the Defense (`DE`, `DT`, `LB`, `CB`, `FS`, `SS`) and Opponent End Zone.
   - **`--camera behind-defense`**: All-22 view behind the Defensive Secondary looking at the Offense driving **downward (`▼`)** toward the viewer, with laterally mirrored perspective (`DEF LEFT / OFF RIGHT` on the left, `DEF RIGHT / OFF LEFT` on the right).
@@ -25,35 +28,51 @@ A cross-platform (`*nix` and Windows) command-line interface and interactive ter
 
 ## One-Step Installation
 
-### Windows (Run Once)
-```bat
-install.bat
-```
-*(Or in PowerShell: `.\install.ps1` — add `-WithSLM` to also install/pull a lightweight local Ollama SLM `qwen2.5:1.5b`)*
-
-### Linux / macOS (`*nix`) (Run Once)
+### Linux / WSL / macOS (`*nix`)
 ```bash
-chmod +x install.sh && ./install.sh
+# Compact installer (ASCII art banner + full-width progress bar + 1-line command status)
+./install.sh
+
+# Or run with full verbose output:
+./install.sh -v
 ```
+
+### Windows
+```bat
+REM Compact installer (or double-click install.bat in Explorer)
+install.bat
+
+REM Or run with full verbose output:
+install.bat -v
+```
+*(In PowerShell: `.\install.ps1` or `.\install.ps1 -v` — add `-WithSLM` to also install/pull a lightweight local Ollama SLM `qwen2.5:1.5b`)*
+
+Once the installer finishes verifying `nfl-stat`, it will prompt:
+```text
+? Add nfl-stat to your PATH so you can run it from anywhere? [y/N]:
+```
+- Choose **`y`** to run `nfl-stat` from any directory.
+- Choose **`N`** to run `./nfl-stat` (`*nix`/WSL) or `.\nfl-stat` (Windows) directly inside the installed folder.
 
 ## Quickstart Examples
 
 ```bash
 # 1. Launch the interactive colorized TUI
-python nfl_stat_cli.py
+./nfl-stat
+# (Or simply `nfl-stat` if added to your PATH)
 
 # 2. Evaluate any stat leaderboard across the season (outputs Table only — no ASCII field)
-python nfl_stat_cli.py stat screen_yards_after_catch --season 2025
-python nfl_stat_cli.py stat yards_per_play --conf AFC --group-by play_concept
-python nfl_stat_cli.py qb-wins --season 2025
+./nfl-stat stat screen_yards_after_catch --season 2025
+./nfl-stat stat yards_per_play --conf AFC --group-by play_concept
+./nfl-stat qb-wins --season 2025
 
 # 3. Diagram a specific play in Behind-the-Offense, Behind-the-Defense, or Sideline view
-python nfl_stat_cli.py play --qb Mahomes --camera behind-offense
-python nfl_stat_cli.py play --qb Goff --concept screen --camera behind-defense
-python nfl_stat_cli.py play --conf AFC --sort-by yards_gained --camera sideline
+./nfl-stat play --qb Mahomes --camera behind-offense
+./nfl-stat play --qb Goff --concept screen --camera behind-defense
+./nfl-stat play --conf AFC --sort-by yards_gained --camera sideline
 
 # 4. Create a new game-scoped or filtered custom stat (like the example use cases)
-python nfl_stat_cli.py create-stat \
+./nfl-stat create-stat \
   --name "qb_quality_start" \
   --title "QB Quality Start (QS)" \
   --group-by qb \
@@ -65,10 +84,9 @@ python nfl_stat_cli.py create-stat \
   --unit "QS"
 
 # 5. Ask natural language questions (Table for yearly averages; ASCII Field for specific plays)
-python nfl_stat_cli.py ask "What is the average yards after catch on screen passes in 2025?"
-python nfl_stat_cli.py ask "Show Lamar Jackson longest play from behind the defense"
+./nfl-stat ask "What is the average yards after catch on screen passes in 2025?"
+./nfl-stat ask "Show Lamar Jackson longest play from behind the defense"
 ```
-
 
 ## Building & Publishing to PyPI
 
@@ -95,6 +113,7 @@ pip install nfl-stat-cli
 # Or with live data dependencies included:
 pip install "nfl-stat-cli[live]"
 ```
+*(Installing via `pip` registers both the `nfl-stat` and `nfl-stat-cli` commands).*
 
 ## License
 
