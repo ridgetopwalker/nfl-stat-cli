@@ -806,6 +806,33 @@ def test_penalties_data_and_nlp_queries():
     out2 = cli.strip_ansi(cli.handle_nl_query_result(q2, engine, plays))
     assert "Penalty Yards" in out2
 
+    # 8. Individual Player Penalty Attribution
+    q_player = cli.NaturalLanguageStatAssistant.interpret_query("which player committed the most penalties?", engine, slm_model="off")
+    assert q_player["intent"] == "stat_query"
+    assert q_player["stat_name"] == "penalties"
+    assert q_player["group_by"] == "player"
+    assert q_player["limit"] == 5
+    out_player = cli.strip_ansi(cli.handle_nl_query_result(q_player, engine, plays))
+    assert "T.McDuffie" in out_player or "J.Taylor" in out_player
+
+    # 9. Test play normalization extracts player name from desc or leaves empty for team penalty
+    p_player = bridge._normalize_row({
+        "desc": "PENALTY on SF-71-T.Williams, False Start, 5 yards.",
+        "penalty": 1,
+        "posteam": "SF",
+        "defteam": "NYJ",
+    })
+    assert p_player["penalty_player_name"] == "T.Williams"
+
+    p_team_only = bridge._normalize_row({
+        "desc": "PENALTY on BAL, Delay of Game, 5 yards.",
+        "penalty": 1,
+        "posteam": "BAL",
+        "defteam": "KC",
+    })
+    assert p_team_only["penalty_player_name"] == ""
+    assert p_team_only["penalty_team"] == "BAL"
+
 
 def test_timeouts_data_and_nlp_queries():
     engine = cli.StatEngine()

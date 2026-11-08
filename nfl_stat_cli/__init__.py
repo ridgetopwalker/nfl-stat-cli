@@ -1114,6 +1114,10 @@ class NFLDataBridge:
             else:
                 penalty_team = posteam if penalty else ""
         penalty_player_name = _safe_str(r.get("penalty_player_name"), "")
+        if not penalty_player_name and penalty:
+            m_pplayer = re.search(r"\bpenalty\s+on\s+[A-Za-z]+-(?:\d+-)?([A-Za-z\.\'\-]+(?:\s+[A-Za-z\.\'\-]+)?)\b", desc, re.IGNORECASE)
+            if m_pplayer:
+                penalty_player_name = m_pplayer.group(1).strip()
 
         # Coaching attributes
         season_val = _safe_int(r.get("season"), 2025)
@@ -4580,7 +4584,7 @@ class NaturalLanguageStatAssistant:
         group_override: Optional[str] = None
         if any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")):
             group_override = "qb"
-        elif any(w in ql for w in ("by player", "players", "each player", "per player")):
+        elif any(w in ql for w in ("by player", "players", "each player", "per player", "which player", "what player", "who committed")):
             group_override = "player"
         elif any(w in ql for w in ("by receiver", "receivers", "wide receiver", "each receiver")):
             group_override = "receiver"
@@ -4614,6 +4618,11 @@ class NaturalLanguageStatAssistant:
                 group_override = "coach"
             elif "team" in ql or not group_override:
                 group_override = "team"
+        elif matched_stat in ("penalties", "penalty_yards"):
+            if any(w in ql for w in ("player", "who committed", "which player", "what player")):
+                group_override = "player"
+            elif any(w in ql for w in ("coach", "coaches")):
+                group_override = "coach"
 
         if matched_stat == "passing_yards" and position == "RB":
             matched_stat = "rushing_yards"
