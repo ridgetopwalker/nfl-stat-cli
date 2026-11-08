@@ -235,6 +235,219 @@ def resolve_team_abbr(team_str: Optional[str]) -> Optional[str]:
         return matches[0]
     return None
 
+
+NFL_COACHING_STAFFS: Dict[str, Dict[str, Any]] = {
+    "ARI": {
+        "hc": "Jonathan Gannon", "oc": "Drew Petzing", "dc": "Nick Rallis",
+        "qb_coach": "Israel Woolfork", "ol_coach": "Klayton Adams", "wr_coach": "Drew Terrell",
+        "rb_coach": "Autry Denson", "dl_coach": "Derrick LeBlanc", "lb_coach": "Sam Siefkes",
+    },
+    "ATL": {
+        "hc": "Raheem Morris", "oc": "Zac Robinson", "dc": "Jimmy Lake",
+        "qb_coach": "T.J. Yates", "ol_coach": "Dwayne Ledford", "wr_coach": "Ike Hilliard",
+        "rb_coach": "Michael Pitre", "dl_coach": "Jay Rodgers", "lb_coach": "Barrett Ruud",
+    },
+    "BAL": {
+        "hc": "John Harbaugh", "oc": "Todd Monken", "dc": "Zach Orr",
+        "qb_coach": "Tee Martin", "ol_coach": "George Warhop", "wr_coach": "Greg Lewis",
+        "rb_coach": "Willie Taggart", "dl_coach": "Dennis Johnson", "lb_coach": "Mark DeLeone",
+    },
+    "BUF": {
+        "hc": "Sean McDermott", "oc": "Joe Brady", "dc": "Bobby Babich",
+        "qb_coach": "Ronald Curry", "ol_coach": "Aaron Kromer", "wr_coach": "Adam Henry",
+        "rb_coach": "Kelly Skipper", "dl_coach": "Marcus West", "lb_coach": "Al Holcomb",
+    },
+    "CAR": {
+        "hc": "Dave Canales", "oc": "Brad Idzik", "dc": "Ejiro Evero",
+        "qb_coach": "Will Harriger", "ol_coach": "Joe Gilbert", "wr_coach": "Rob Moore",
+        "rb_coach": "Bernie Parmalee", "dl_coach": "Todd Wash", "lb_coach": "Peter Hansen",
+    },
+    "CHI": {
+        "hc": "Matt Eberflus", "oc": "Shane Waldron", "dc": "Eric Washington",
+        "qb_coach": "Kerry Joseph", "ol_coach": "Chris Morgan", "wr_coach": "Chad Hall",
+        "rb_coach": "David Walker", "dl_coach": "Travis Smith", "lb_coach": "Dave Borgonzi",
+    },
+    "CIN": {
+        "hc": "Zac Taylor", "oc": "Dan Pitcher", "dc": "Lou Anarumo",
+        "qb_coach": "Brad Kragthorpe", "ol_coach": "Frank Pollack", "wr_coach": "Troy Walters",
+        "rb_coach": "Justin Hill", "dl_coach": "Marion Hobby", "lb_coach": "James Bettcher",
+    },
+    "CLE": {
+        "hc": "Kevin Stefanski", "oc": "Ken Dorsey", "dc": "Jim Schwartz",
+        "qb_coach": "Bill Musgrave", "ol_coach": "Andy Dickerson", "wr_coach": "Chad O'Shea",
+        "rb_coach": "Duce Staley", "dl_coach": "Jacques Cesaire", "lb_coach": "Jason Tarver",
+    },
+    "DAL": {
+        "hc": "Mike McCarthy", "oc": "Brian Schottenheimer", "dc": "Mike Zimmer",
+        "qb_coach": "Scott Tolzien", "ol_coach": "Mike Solari", "wr_coach": "Robert Prince",
+        "rb_coach": "Jeff Blasko", "dl_coach": "Aaron Whitecotton", "lb_coach": "Scott McCurley",
+    },
+    "DEN": {
+        "hc": "Sean Payton", "oc": "Joe Lombardi", "dc": "Vance Joseph",
+        "qb_coach": "Davis Webb", "ol_coach": "Zach Strief", "wr_coach": "Keary Colbert",
+        "rb_coach": "Lou Ayeni", "dl_coach": "Jamar Cain", "lb_coach": "Greg Manusky",
+    },
+    "DET": {
+        "hc": "Dan Campbell", "oc": "Ben Johnson", "dc": "Aaron Glenn",
+        "qb_coach": "Mark Brunell", "ol_coach": "Hank Fraley", "wr_coach": "Antwaan Randle El",
+        "rb_coach": "Scottie Montgomery", "dl_coach": "Terrell Williams", "lb_coach": "Kelvin Sheppard",
+    },
+    "GB": {
+        "hc": "Matt LaFleur", "oc": "Adam Stenavich", "dc": "Jeff Hafley",
+        "qb_coach": "Tom Clements", "ol_coach": "Luke Butkus", "wr_coach": "Jason Vrable",
+        "rb_coach": "Ben Sirmans", "dl_coach": "Jason Rebrovich", "lb_coach": "Anthony Campanile",
+    },
+    "HOU": {
+        "hc": "DeMeco Ryans", "oc": "Bobby Slowik", "dc": "Matt Burke",
+        "qb_coach": "Jerrod Johnson", "ol_coach": "Chris Strausser", "wr_coach": "Ben McDaniels",
+        "rb_coach": "Danny Barrett", "dl_coach": "Rod Wright", "lb_coach": "Bill Davis",
+    },
+    "IND": {
+        "hc": "Shane Steichen", "oc": "Jim Bob Cooter", "dc": "Gus Bradley",
+        "qb_coach": "Cam Turner", "ol_coach": "Tony Sparano Jr.", "wr_coach": "Reggie Wayne",
+        "rb_coach": "DeAndre Smith", "dl_coach": "Charlie Partridge", "lb_coach": "Richard Smith",
+    },
+    "JAX": {
+        "hc": "Doug Pederson", "oc": "Press Taylor", "dc": "Ryan Nielsen",
+        "qb_coach": "Mike McCoy", "ol_coach": "Phil Rauscher", "wr_coach": "Chad Hall",
+        "rb_coach": "Jerry Mack", "dl_coach": "Matt House", "lb_coach": "Tony Gilbert",
+    },
+    "KC": {
+        "hc": "Andy Reid", "oc": "Matt Nagy", "dc": "Steve Spagnuolo", "st": "Dave Toub",
+        "qb_coach": "David Girardi", "ol_coach": "Andy Heck", "wr_coach": "Connor Embree",
+        "rb_coach": "Todd Pinkston", "dl_coach": "Joe Cullen", "lb_coach": "Brendan Daly",
+    },
+    "LV": {
+        "hc": "Antonio Pierce", "oc": "Luke Getsy", "dc": "Patrick Graham",
+        "qb_coach": "Rich Scangarello", "ol_coach": "James Cregg", "wr_coach": "Edgar Bennett",
+        "rb_coach": "Carnell Lake", "dl_coach": "Rob Leonard", "lb_coach": "Mike Caldwell",
+    },
+    "LAC": {
+        "hc": "Jim Harbaugh", "oc": "Greg Roman", "dc": "Jesse Minter",
+        "qb_coach": "Shane Day", "ol_coach": "Mike Devlin", "wr_coach": "Sanjay Lal",
+        "rb_coach": "Kiel McDonald", "dl_coach": "Mike Elston", "lb_coach": "NaVorro Bowman",
+    },
+    "LA": {
+        "hc": "Sean McVay", "oc": "Mike LaFleur", "dc": "Chris Shula",
+        "qb_coach": "Dave Ragone", "ol_coach": "Ryan Wendell", "wr_coach": "Eric Yarber",
+        "rb_coach": "Ron Gould", "dl_coach": "Giff Smith", "lb_coach": "Chris Beake",
+    },
+    "LAR": {
+        "hc": "Sean McVay", "oc": "Mike LaFleur", "dc": "Chris Shula",
+        "qb_coach": "Dave Ragone", "ol_coach": "Ryan Wendell", "wr_coach": "Eric Yarber",
+        "rb_coach": "Ron Gould", "dl_coach": "Giff Smith", "lb_coach": "Chris Beake",
+    },
+    "MIA": {
+        "hc": "Mike McDaniel", "oc": "Frank Smith", "dc": "Anthony Weaver",
+        "qb_coach": "Darrell Bevell", "ol_coach": "Butch Barry", "wr_coach": "Wes Welker",
+        "rb_coach": "Eric Studesville", "dl_coach": "Derrick LeBlanc", "lb_coach": "Joe Barry",
+    },
+    "MIN": {
+        "hc": "Kevin O'Connell", "oc": "Wes Phillips", "dc": "Brian Flores",
+        "qb_coach": "Josh McCown", "ol_coach": "Chris Kuper", "wr_coach": "Keenan McCardell",
+        "rb_coach": "Curtis Modkins", "dl_coach": "Marcus Dixon", "lb_coach": "Mike Siravo",
+    },
+    "NE": {
+        "hc": "Jerod Mayo", "oc": "Alex Van Pelt", "dc": "DeMarcus Covington",
+        "qb_coach": "T.C. McCartney", "ol_coach": "Scott Peters", "wr_coach": "Tyler Hughes",
+        "rb_coach": "Taylor Embree", "dl_coach": "Jerry Montgomery", "lb_coach": "Dont'a Hightower",
+    },
+    "NO": {
+        "hc": "Dennis Allen", "oc": "Klint Kubiak", "dc": "Joe Woods",
+        "qb_coach": "Andrew Janocko", "ol_coach": "John Benton", "wr_coach": "Keith Williams",
+        "rb_coach": "Joel Thomas", "dl_coach": "Todd Grantham", "lb_coach": "Michael Hodges",
+    },
+    "NYG": {
+        "hc": "Brian Daboll", "oc": "Mike Kafka", "dc": "Shane Bowen",
+        "qb_coach": "Shea Tierney", "ol_coach": "Carmen Bricillo", "wr_coach": "Mike Groh",
+        "rb_coach": "Joel Thomas", "dl_coach": "Andre Patterson", "lb_coach": "John Egorugwu",
+    },
+    "NYJ": {
+        "hc": "Robert Saleh", "oc": "Nathaniel Hackett", "dc": "Jeff Ulbrich",
+        "qb_coach": "Charles London", "ol_coach": "Keith Carter", "wr_coach": "Shawn Jefferson",
+        "rb_coach": "Tony Dews", "dl_coach": "Aaron Whitecotton", "lb_coach": "Mike Rutenberg",
+    },
+    "PHI": {
+        "hc": "Nick Sirianni", "oc": "Kellen Moore", "dc": "Vic Fangio",
+        "qb_coach": "Doug Nussmeier", "ol_coach": "Jeff Stoutland", "wr_coach": "Aaron Moorehead",
+        "rb_coach": "Jemal Singleton", "dl_coach": "Clint Hurtt", "lb_coach": "Bobby King",
+    },
+    "PIT": {
+        "hc": "Mike Tomlin", "oc": "Arthur Smith", "dc": "Teryl Austin",
+        "qb_coach": "Mike Sullivan", "ol_coach": "Pat Meyer", "wr_coach": "Zach Azzanni",
+        "rb_coach": "Eddie Faulkner", "dl_coach": "Karl Dunbar", "lb_coach": "Aaron Curry",
+    },
+    "SF": {
+        "hc": "Kyle Shanahan", "oc": "Kyle Shanahan", "dc": "Nick Sorensen",
+        "qb_coach": "Brian Griese", "ol_coach": "Chris Foerster", "wr_coach": "Leonard Hankerson",
+        "rb_coach": "Bobby Turner", "dl_coach": "Kris Kocurek", "lb_coach": "Johnny Holland",
+    },
+    "SEA": {
+        "hc": "Mike Macdonald", "oc": "Ryan Grubb", "dc": "Aden Durde",
+        "qb_coach": "Charles London", "ol_coach": "Scott Huff", "wr_coach": "Frisman Jackson",
+        "rb_coach": "Kennedy Polamalu", "dl_coach": "Justin Hinds", "lb_coach": "Jay Harbaugh",
+    },
+    "TB": {
+        "hc": "Todd Bowles", "oc": "Liam Coen", "dc": "Kacy Rodgers",
+        "qb_coach": "Thad Lewis", "ol_coach": "Kevin Carberry", "wr_coach": "Bryan McClendon",
+        "rb_coach": "Skip Peete", "dl_coach": "Larry Foote", "lb_coach": "Mike Caldwell",
+    },
+    "TEN": {
+        "hc": "Brian Callahan", "oc": "Nick Holz", "dc": "Dennard Wilson",
+        "qb_coach": "Bo Hardegree", "ol_coach": "Bill Callahan", "wr_coach": "Tyke Tolbert",
+        "rb_coach": "Randy Jordan", "dl_coach": "Tracy Rocker", "lb_coach": "Frank Bush",
+    },
+    "WAS": {
+        "hc": "Dan Quinn", "oc": "Kliff Kingsbury", "dc": "Joe Whitt Jr.",
+        "qb_coach": "Tavita Pritchard", "ol_coach": "Bobby Johnson", "wr_coach": "Bobby Engram",
+        "rb_coach": "Anthony Lynn", "dl_coach": "Darryl Tapp", "lb_coach": "Ken Norton Jr.",
+    },
+}
+
+
+def get_team_coaching_staff(team_abbr: str, season: Optional[int] = None) -> Dict[str, Any]:
+    """Retrieve full coaching staff dictionary (HC, OC, DC, position coaches) for a given team."""
+    resolved = resolve_team_abbr(team_abbr) or team_abbr.upper()
+    return NFL_COACHING_STAFFS.get(resolved, NFL_COACHING_STAFFS.get("KC", {}))
+
+
+def get_team_head_coach(team_abbr: str, season: Optional[int] = None) -> str:
+    """Retrieve the Head Coach name for a given team."""
+    return str(get_team_coaching_staff(team_abbr, season).get("hc", "Unknown Coach"))
+
+
+def find_coach_team(coach_name: str) -> Optional[Tuple[str, str, str]]:
+    """
+    Search for a coach across all NFL teams.
+    Matches exact full name, or exact last name (if >= 4 chars and not a common stop word).
+    Returns (team_abbr, coach_canonical_name, role) if found, otherwise None.
+    """
+    c_low = coach_name.strip().lower()
+    if len(c_low) < 3:
+        return None
+    stop_words = {
+        "the", "for", "and", "who", "what", "which", "with", "from", "team", "play", "rank",
+        "best", "stat", "stats", "coach", "coaches", "coaching", "head", "lead", "leader",
+        "rate", "down", "game", "pass", "rush", "year", "week", "more", "most", "each",
+    }
+    if c_low in stop_words:
+        return None
+
+    for team, staff in NFL_COACHING_STAFFS.items():
+        if team == "LAR":
+            continue
+        for role, name in staff.items():
+            if not isinstance(name, str):
+                continue
+            n_low = name.lower()
+            if c_low == n_low:
+                return (team, name, role)
+            parts = n_low.split()
+            last_name = parts[-1] if parts else ""
+            if len(last_name) >= 4 and c_low == last_name:
+                return (team, name, role)
+    return None
+
 SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
     # KC (AFC) - Patrick Mahomes
     {"play_id": 101, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "KC", "defteam": "BAL", "conf": "AFC",
@@ -434,6 +647,25 @@ SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
      "down": 1, "ydstogo": 10, "yardline_100": 65, "series_success": 1, "touchdown": 0, "interception": 0, "sack": 0,
      "team_win": 0, "home_score": 27, "away_score": 20, "qtr": 2,
      "desc": "(08:15 Q2) D.Henry up the middle to KC 52 for 13 yards (inside zone)."},
+    # Penalty Plays (2025 Week 1 BAL @ KC)
+    {"play_id": 123, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "KC", "defteam": "BAL", "conf": "AFC",
+     "qb_name": "P.Mahomes", "receiver_player_name": "", "rusher_player_name": "", "player_name": "J.Taylor",
+     "play_type": "no_play", "play_concept": "penalty", "play_direction": "", "is_screen": 0, "play_action": 0, "shotgun": 1,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": -10.0,
+     "epa": -1.25, "wpa": -0.045, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 0, "rush_attempt": 0,
+     "down": 1, "ydstogo": 10, "yardline_100": 50, "series_success": 0, "touchdown": 0, "interception": 0, "sack": 0,
+     "penalty": 1, "penalty_type": "Offensive Holding", "penalty_yards": 10.0, "penalty_team": "KC", "penalty_player_name": "J.Taylor",
+     "team_win": 1, "home_score": 27, "away_score": 20, "qtr": 2,
+     "desc": "(10:12 Q2) PENALTY on KC-J.Taylor, Offensive Holding, 10 yards, enforced at KC 50 - No Play."},
+    {"play_id": 124, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "BAL", "defteam": "KC", "conf": "AFC",
+     "qb_name": "L.Jackson", "receiver_player_name": "Z.Flowers", "rusher_player_name": "", "player_name": "M.Humphrey",
+     "play_type": "pass", "play_concept": "pass_deep", "play_direction": "left", "is_screen": 0, "play_action": 0, "shotgun": 1,
+     "air_yards": 25.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": 25.0,
+     "epa": 2.10, "wpa": 0.082, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 1, "rush_attempt": 0,
+     "down": 3, "ydstogo": 7, "yardline_100": 60, "series_success": 1, "touchdown": 0, "interception": 0, "sack": 0,
+     "penalty": 1, "penalty_type": "Defensive Pass Interference", "penalty_yards": 25.0, "penalty_team": "KC", "penalty_player_name": "T.McDuffie",
+     "team_win": 0, "home_score": 27, "away_score": 20, "qtr": 3,
+     "desc": "(03:40 Q3) L.Jackson pass incomplete deep left to Z.Flowers. PENALTY on KC-T.McDuffie, Defensive Pass Interference, 25 yards, enforced at KC 35."},
 
     # 2024 Historical Lookback plays for Stat Page trend tracking
     {"play_id": 201, "season": 2024, "week": 1, "game_id": "2024_01_DET_KC", "posteam": "KC", "defteam": "DET", "conf": "AFC",
@@ -817,9 +1049,57 @@ class NFLDataBridge:
             raw_ss = _safe_opt_flag(r.get("series_success"))
         series_success = raw_ss if raw_ss is not None else (1 if epa_val > 0.0 else 0)
 
+        # Penalty attributes
+        raw_pen = _safe_opt_flag(r.get("penalty"))
+        penalty = raw_pen if raw_pen is not None else (
+            1 if any(k in desc.lower() for k in ("penalty", "penalized", "holding", "false start", "pass interference", "roughing the passer", "unnecessary roughness", "face mask")) else 0
+        )
+        penalty_type = _safe_str(r.get("penalty_type"), "")
+        if not penalty_type and penalty:
+            d_low = desc.lower()
+            if "holding" in d_low:
+                penalty_type = "Offensive Holding" if "offensive holding" in d_low else "Defensive Holding"
+            elif "false start" in d_low:
+                penalty_type = "False Start"
+            elif "pass interference" in d_low:
+                penalty_type = "Defensive Pass Interference" if "defensive pass interference" in d_low else "Offensive Pass Interference"
+            elif "roughing the passer" in d_low:
+                penalty_type = "Roughing the Passer"
+            elif "unnecessary roughness" in d_low:
+                penalty_type = "Unnecessary Roughness"
+            elif "neutral zone" in d_low:
+                penalty_type = "Neutral Zone Infraction"
+            elif "offside" in d_low:
+                penalty_type = "Offside"
+            elif "delay of game" in d_low:
+                penalty_type = "Delay of Game"
+            else:
+                penalty_type = "Penalty"
+
+        penalty_yards = _safe_float(r.get("penalty_yards"), 0.0)
+        if penalty and penalty_yards == 0.0:
+            m_yds = re.search(r"(\d+)\s+yards?", desc, re.IGNORECASE)
+            if m_yds and ("penalty" in desc.lower() or "holding" in desc.lower() or "interference" in desc.lower()):
+                penalty_yards = float(m_yds.group(1))
+
+        penalty_team = _safe_str(r.get("penalty_team"), "") or (posteam if penalty else "")
+        penalty_player_name = _safe_str(r.get("penalty_player_name"), "")
+
+        # Coaching attributes
+        season_val = _safe_int(r.get("season"), 2025)
+        home_team = _safe_str(r.get("home_team"), "") or posteam
+        away_team = _safe_str(r.get("away_team"), "") or defteam
+        home_coach = _safe_str(r.get("home_coach"), "") or get_team_head_coach(home_team, season=season_val)
+        away_coach = _safe_str(r.get("away_coach"), "") or get_team_head_coach(away_team, season=season_val)
+        coach = home_coach if posteam == home_team else away_coach
+        staff = get_team_coaching_staff(posteam, season=season_val)
+        oc = str(staff.get("oc", ""))
+        def_staff = get_team_coaching_staff(defteam, season=season_val)
+        dc = str(def_staff.get("dc", ""))
+
         return {
             "play_id": _safe_int(r.get("play_id"), idx),
-            "season": _safe_int(r.get("season"), 2025),
+            "season": season_val,
             "week": _safe_int(r.get("week"), 1),
             "game_id": _safe_str(r.get("game_id"), "2025_01_UNK"),
             "posteam": posteam,
@@ -832,6 +1112,17 @@ class NFLDataBridge:
             "kicker_player_name": kicker_name,
             "punter_player_name": punter_name,
             "player_name": skill_player,
+            "coach": coach,
+            "head_coach": coach,
+            "oc": oc,
+            "dc": dc,
+            "home_coach": home_coach,
+            "away_coach": away_coach,
+            "penalty": penalty,
+            "penalty_type": penalty_type,
+            "penalty_yards": penalty_yards,
+            "penalty_team": penalty_team,
+            "penalty_player_name": penalty_player_name,
             "play_type": play_type,
             "play_concept": play_concept,
             "play_direction": direction,
@@ -1379,6 +1670,28 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="1st",
         dependencies=["first_downs"],
     ),
+    "penalties": StatDefinition(
+        name="penalties",
+        title="Total Penalties (Pen)",
+        category="traditional",
+        group_by="team",
+        formula="penalties",
+        description="Total penalties committed and accepted.",
+        calculation_explained="Sum of plays where a penalty occurred against the team or player (penalty == 1).",
+        unit="pen",
+        dependencies=["penalties"],
+    ),
+    "penalty_yards": StatDefinition(
+        name="penalty_yards",
+        title="Penalty Yards (Pen Yds)",
+        category="traditional",
+        group_by="team",
+        formula="penalty_yards",
+        description="Total penalty yards assessed against the team or player.",
+        calculation_explained="Sum of penalty_yards across matching plays.",
+        unit="yds",
+        dependencies=["penalty_yards"],
+    ),
 }
 
 # Example / Showcase Custom Stats (demonstrating how custom stats work without polluting a fresh install)
@@ -1521,6 +1834,11 @@ GROUP_BY_COLUMN_MAP: Dict[str, str] = {
     "receiver": "receiver_player_name",
     "rusher": "rusher_player_name",
     "player": "player_name",
+    "coach": "coach",
+    "head_coach": "head_coach",
+    "oc": "oc",
+    "dc": "dc",
+    "penalty_type": "penalty_type",
     "play_concept": "play_concept",
     "play_type": "play_type",
     "conference": "conf",
@@ -1544,12 +1862,15 @@ BASE_METRIC_KEYS: Set[str] = {
     "interceptions", "fumbles_lost", "turnovers", "sacks", "sack_yards_estimated",
     "first_downs", "first_down_rate", "explosive_plays", "explosive_play_rate",
     "turnover_rate", "sack_rate", "td_rate", "int_rate", "success_rate",
-    "nfl_passer_rating",
+    "nfl_passer_rating", "penalties", "penalty_yards", "penalty_rate",
+    "penalties_per_game", "penalty_yards_per_game",
 }
 
 PLAY_ROW_KEYS: Set[str] = {
     "play_id", "season", "week", "game_id", "posteam", "defteam", "conf", "division",
     "qb_name", "receiver_player_name", "rusher_player_name", "player_name",
+    "coach", "head_coach", "oc", "dc", "home_coach", "away_coach",
+    "penalty", "penalty_type", "penalty_yards", "penalty_team", "penalty_player_name",
     "play_type", "play_concept", "play_direction", "is_screen", "play_action",
     "shotgun", "no_huddle", "red_zone", "air_yards", "yards_after_catch",
     "xyac_mean_yardage", "yards_gained", "epa", "wpa", "cpoe", "complete_pass",
@@ -1987,6 +2308,8 @@ class StatEngine:
         explosive_plays = sum(1 for p in plays if float(p.get("yards_gained", 0.0)) >= 20.0)
         screen_plays = sum(1 for p in plays if int(p.get("is_screen", 0)) == 1)
         play_action_plays = sum(1 for p in plays if int(p.get("play_action", 0)) == 1)
+        penalties = sum(int(p.get("penalty", 0)) for p in plays)
+        penalty_yards = sum(float(p.get("penalty_yards", 0.0)) for p in plays)
 
         # Key games by (game_id, posteam) so multi-team groups count team-game outcomes accurately
         games: Dict[Tuple[str, str], int] = {}
@@ -2063,6 +2386,11 @@ class StatEngine:
             "int_rate": float(interceptions) / att_nz,
             "success_rate": float(success_plays) / n,
             "nfl_passer_rating": nfl_passer_rating,
+            "penalties": float(penalties),
+            "penalty_yards": float(penalty_yards),
+            "penalty_rate": (float(penalties) / n) * 100.0,
+            "penalties_per_game": float(penalties) / float(games_played),
+            "penalty_yards_per_game": float(penalty_yards) / float(games_played),
         }
         return base
 
@@ -3408,6 +3736,10 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:passer\s+rating|qb\s+rating|passing\s+rating)\b", "passer_rating", "qb"),
         # First Downs
         (r"\b(?:first\s+down|first\s+downs|1st\s+downs)\b", "first_downs", "team"),
+        # Penalty Yards
+        (r"\b(?:penalty\s+yards|pen\s+yds|penalty\s+yardage|yards\s+penalized)\b|\b(?:most\s+penalty\s+yards|highest\s+penalty\s+yards)\b", "penalty_yards", "team"),
+        # Total Penalties
+        (r"\b(?:penalties|penalty|flags)\b|\b(?:most\s+penalties|fewest\s+penalties|least\s+penalties|penalized\s+the\s+most)\b", "penalties", "team"),
         # Explosive Play Rate
         (r"\b(?:explosive\s+play\s+rate|explosive\s+plays)\b", "explosive_play_rate", "team"),
         # Success Rate
@@ -3689,10 +4021,86 @@ class NaturalLanguageStatAssistant:
                     "leaders", "led", "leads", "year", "years", "yard", "yards", "yds", "more",
                     "player", "players", "qb", "qbs", "quarterback", "quarterbacks", "rusher",
                     "rushers", "receiver", "receivers", "kicker", "punter",
+                    "coach", "coaches", "coaching", "staff", "hc", "oc", "dc", "coordinator",
+                    "penalty", "penalties", "flags",
                 } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
                 cand_words = set(cand_low.split())
                 if not cand_words.intersection(ignore_words) and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
+
+        # Check if user is asking for Coaching Staff information
+        has_stat_term = any(w in ql for w in ("epa", "yards", "stat", "stats", "leaderboard", "rank", "ranking", "rate", "rating", "success", "cpoe", "wpa", "points", "touchdowns"))
+        is_coaching_query = (not has_stat_term) and (
+            any(phrase in ql for phrase in (
+                "head coach", "coach of", "coaches the", "coached by", "offensive coordinator",
+                "defensive coordinator", "coaching staff", "coaches for", "coaching for",
+                "who coaches", "who is the coach", "who is the hc", "who is the oc", "who is the dc",
+                "qb coach", "ol coach", "position coach", "coordinator for", "coordinator of",
+                "coach for", "coaches on", "coaching tree",
+            )) or bool(re.search(r"\b(?:hc|oc|dc)\s+(?:for|of|at)\b", ql)) or (
+                bool(re.search(r"\b(?:coach|coaches)\b", ql)) and bool(team_filter)
+            )
+        )
+
+        c_found_team: Optional[str] = team_filter
+        c_found_role: Optional[str] = None
+        if not c_found_team:
+            words = re.sub(r"[^\w\s]", " ", ql).split()
+            for i in range(len(words) - 1):
+                bigram = f"{words[i]} {words[i+1]}"
+                c_info = find_coach_team(bigram)
+                if c_info:
+                    c_found_team = c_info[0]
+                    c_found_role = c_info[2]
+                    break
+            if not c_found_team:
+                for word in words:
+                    c_info = find_coach_team(word)
+                    if c_info:
+                        c_found_team = c_info[0]
+                        c_found_role = c_info[2]
+                        break
+
+        if not c_found_team and player_filter:
+            c_info = find_coach_team(player_filter)
+            if c_info:
+                c_found_team = c_info[0]
+                c_found_role = c_info[2]
+                player_filter = None
+
+        if not has_stat_term and (is_coaching_query or c_found_role or (c_found_team and any(w in ql for w in ("coach", "coaches", "hc", "oc", "dc", "staff")))):
+            role_req: Optional[str] = c_found_role
+            if "offensive coordinator" in ql or re.search(r"\boc\b", ql):
+                role_req = "oc"
+            elif "defensive coordinator" in ql or re.search(r"\bdc\b", ql):
+                role_req = "dc"
+            elif "head coach" in ql or re.search(r"\bhc\b", ql) or "who is the coach" in ql:
+                role_req = "hc"
+            elif "qb coach" in ql or "quarterbacks coach" in ql:
+                role_req = "qb"
+            elif "ol coach" in ql or "offensive line coach" in ql:
+                role_req = "ol"
+
+            target_team = c_found_team or "KC"
+            role_label = role_req.upper() if role_req else "coaching staff"
+            return {
+                "intent": "coaching_staff",
+                "query": query,
+                "team": target_team,
+                "role": role_req,
+                "season": season,
+                "stat_name": None,
+                "group_by": None,
+                "week": None,
+                "qtr": None,
+                "division": None,
+                "conf": None,
+                "player": None,
+                "position": None,
+                "filter_expr": "",
+                "show_field": False,
+                "explanation": f"Reported {role_label} for {target_team} ({season}).",
+            }
 
         # Check if user is asking for Dataset Info / Game Information
         is_dataset_query = any(phrase in ql for phrase in (
@@ -3997,6 +4405,8 @@ class NaturalLanguageStatAssistant:
             group_override = "conference"
         elif any(w in ql for w in ("by concept", "play concept", "offensive play", "by play")):
             group_override = "play_concept"
+        elif any(w in ql for w in ("by coach", "coaches", "each coach", "head coach", "per coach", "best coach", "rank coach")):
+            group_override = "coach"
         elif position:
             pos_map = {"QB": "qb", "RB": "rusher", "WR": "receiver", "TE": "receiver", "K": "player", "P": "player", "DEF": "player"}
             group_override = pos_map.get(position, matched_group)
@@ -4720,6 +5130,10 @@ def handle_nl_query_result(
         except (KeyError, ValueError) as err:
             return header + f"\n  {C.RED}✖ {err}{C.RESET}"
 
+    if intent == "coaching_staff":
+        resolved_t = resolve_team_abbr(team) or team or "KC"
+        return header + "\n" + render_coaching_staff_view(resolved_t, role_filter=parsed.get("role"))
+
     if intent == "team_drilldown":
         resolved_t = resolve_team_abbr(team) or team or "KC"
         return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t)
@@ -5291,13 +5705,68 @@ def render_player_drilldown_view(
     return "\n".join(out)
 
 
+def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None) -> str:
+    """Render a structured, colorized ASCII table detailing team coaching staff (HC, OC, DC, position coaches)."""
+    resolved_t = resolve_team_abbr(team_abbr) or team_abbr.upper()
+    staff = get_team_coaching_staff(resolved_t)
+    full_name = TEAM_FULL_NAMES.get(resolved_t, f"{resolved_t} Football Team")
+    headers = ["Role / Position", "Coach Name", "Category"]
+    rows = []
+    role_map = [
+        ("Head Coach (HC)", staff.get("hc", "N/A"), "Head Coach"),
+        ("Offensive Coordinator (OC)", staff.get("oc", "N/A"), "Coordinator"),
+        ("Defensive Coordinator (DC)", staff.get("dc", "N/A"), "Coordinator"),
+        ("Special Teams Coordinator", staff.get("st", "Dave Toub" if resolved_t == "KC" else "Special Teams Staff"), "Coordinator"),
+        ("Quarterbacks Coach", staff.get("qb_coach", "N/A"), "Position Coach"),
+        ("Offensive Line Coach", staff.get("ol_coach", "N/A"), "Position Coach"),
+        ("Wide Receivers Coach", staff.get("wr_coach", "N/A"), "Position Coach"),
+        ("Running Backs Coach", staff.get("rb_coach", "N/A"), "Position Coach"),
+        ("Defensive Line Coach", staff.get("dl_coach", "N/A"), "Position Coach"),
+        ("Linebackers Coach", staff.get("lb_coach", "N/A"), "Position Coach"),
+    ]
+    for r_label, c_name, cat in role_map:
+        if role_filter:
+            rf = role_filter.lower()
+            if rf == "hc" and "head" not in r_label.lower():
+                continue
+            if rf == "oc" and "offensive coord" not in r_label.lower():
+                continue
+            if rf == "dc" and "defensive coord" not in r_label.lower():
+                continue
+            if rf in ("qb", "qb_coach") and "quarterback" not in r_label.lower():
+                continue
+            if rf in ("ol", "ol_coach") and "offensive line" not in r_label.lower():
+                continue
+            if rf in ("wr", "wr_coach") and "wide receiver" not in r_label.lower():
+                continue
+            if rf in ("rb", "rb_coach") and "running back" not in r_label.lower():
+                continue
+            if rf in ("dl", "dl_coach") and "defensive line" not in r_label.lower():
+                continue
+            if rf in ("lb", "lb_coach") and "linebacker" not in r_label.lower():
+                continue
+        rows.append([r_label, f"{C.BOLD}{c_name}{C.RESET}", cat])
+
+    table = AsciiArtRenderer.render_table(
+        f"COACHING STAFF : {full_name.upper()} ({resolved_t})",
+        headers,
+        rows,
+        alignments=["left", "left", "center"],
+    )
+    hc_name = staff.get("hc", "N/A")
+    oc_name = staff.get("oc", "N/A")
+    dc_name = staff.get("dc", "N/A")
+    summary = f"  {C.BOLD}Head Coach:{C.RESET} {C.CYAN}{hc_name}{C.RESET}  │  {C.BOLD}OC:{C.RESET} {oc_name}  │  {C.BOLD}DC:{C.RESET} {dc_name}\n"
+    return summary + table
+
+
 def render_team_drilldown_view(
     engine: StatEngine,
     plays: List[Dict[str, Any]],
     season: int,
     team: str,
 ) -> str:
-    """Drill down into comprehensive team offensive, defensive, and roster stats for a season."""
+    """Drill down into comprehensive team offensive, defensive, coaching, and roster stats for a season."""
     team_abbr = resolve_team_abbr(team) or team.upper()
     s_plays = plays_for_season(plays, season)
     off_plays = [p for p in s_plays if str(p.get("posteam", "")).upper() == team_abbr]
@@ -5327,6 +5796,11 @@ def render_team_drilldown_view(
     off_epa_play = (tot_off_epa / tot_off) if tot_off else 0.0
     off_succ = sum(1 for p in off_plays if int(p.get("series_success", 0)) == 1)
     off_succ_rate = (100.0 * off_succ / tot_off) if tot_off else 0.0
+
+    off_pens = sum(int(p.get("penalty", 0)) for p in off_plays)
+    off_pen_yds = sum(float(p.get("penalty_yards", 0.0)) for p in off_plays)
+    def_pens = sum(int(p.get("penalty", 0)) for p in def_plays)
+    def_pen_yds = sum(float(p.get("penalty_yards", 0.0)) for p in def_plays)
 
     pass_plays = [p for p in off_plays if int(p.get("pass_attempt", 0)) == 1 or p.get("play_type") == "pass"]
     rush_plays = [p for p in off_plays if int(p.get("rush_attempt", 0)) == 1 or p.get("play_type") == "run"]
@@ -5387,6 +5861,16 @@ def render_team_drilldown_view(
         if rc_n:
             receivers.setdefault(rc_n, []).append(p)
 
+    staff = get_team_coaching_staff(team_abbr, season)
+    pos_coaches = [
+        f"QB: {staff.get('qb_coach')}" if staff.get("qb_coach") else "",
+        f"OL: {staff.get('ol_coach')}" if staff.get("ol_coach") else "",
+        f"WR: {staff.get('wr_coach')}" if staff.get("wr_coach") else "",
+        f"RB: {staff.get('rb_coach')}" if staff.get("rb_coach") else "",
+        f"DL: {staff.get('dl_coach')}" if staff.get("dl_coach") else "",
+    ]
+    pos_str = " • ".join([p for p in pos_coaches if p])
+
     out = [
         f"\n{C.BOLD}{C.CYAN}┌────────────────────────────────────────────────────────────────────────────────────────┐",
         f"│                     TEAM DRILL-DOWN : {full_name.upper():<48} │",
@@ -5394,10 +5878,18 @@ def render_team_drilldown_view(
         f"  Season: {C.BOLD}{season}{C.RESET}  |  Abbreviation: {C.BOLD}{team_abbr}{C.RESET}  |  Conference: {conf}  |  Division: {division}",
         f"  Team Record: {C.BOLD}{record_str}{C.RESET} {win_pct_str}  |  Offensive Plays Tracked: {tot_off}  |  Defensive Plays: {tot_def}",
         "",
+        f"  {C.BOLD}{C.MAGENTA}┌─ COACHING STAFF & LEADERSHIP ────────────────────────────────────────────────────────┐{C.RESET}",
+        f"  │ Head Coach (HC):            {C.BOLD}{staff.get('hc', 'N/A'):<56}{C.RESET}│",
+        f"  │ Offensive Coordinator (OC): {staff.get('oc', 'N/A'):<56}│",
+        f"  │ Defensive Coordinator (DC): {staff.get('dc', 'N/A'):<56}│",
+        f"  │ Key Position Coaches:       {pos_str:<56}│",
+        f"  {C.BOLD}{C.MAGENTA}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+        "",
         f"  {C.BOLD}{C.GOLD}┌─ OFFENSIVE EFFICIENCY & PLAY CALLING ────────────────────────────────────────────────┐{C.RESET}",
         f"  │ Total Plays:         {tot_off:<14} Total Yards Gained:      {tot_off_yds:<10.1f} yds       │",
         f"  │ Yards Per Play (YPP): {off_ypp:<13.2f} EPA / Play:             {off_epa_play:<+10.2f} EPA/play   │",
         f"  │ Total Offensive EPA: {tot_off_epa:<+14.2f} Offensive Success Rate:  {off_succ_rate:<6.1f}%                 │",
+        f"  │ Penalties Committed: {off_pens:<14} Penalty Yards Conceded: {off_pen_yds:<10.1f} yds       │",
         f"  │ Play-Calling Split:  {call_pass_pct:4.1f}% Pass / {call_rush_pct:4.1f}% Rush ({pass_att} pass, {rush_att} rush)                │",
         f"  │ Passing Comp/Att:    {pass_comp}/{pass_att} ({pass_pct:.1f}%)    Passing Yards:           {pass_yds:<10.1f} yds       │",
         f"  │ Passing Touchdowns:  {pass_tds:<14} Passing Interceptions:   {pass_ints:<22} │",
@@ -5413,6 +5905,7 @@ def render_team_drilldown_view(
         f"  │ Yards / Play Allowed:{def_ypp:<14.2f} Defensive EPA / Play:   {def_epa_play:<+10.2f} EPA/play   │",
         f"  │ Sacks Generated:     {def_sacks:<14} Interceptions Caught:    {def_ints:<22} │",
         f"  │ Turnovers Forced:    {def_to:<14} Defensive Stop Rate:    {def_stops}/{tot_def} ({def_stop_rate:.1f}%)           │",
+        f"  │ Opponent Penalties:  {def_pens:<14} Opponent Penalty Yards: {def_pen_yds:<10.1f} yds       │",
         f"  {C.BOLD}{C.GREEN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
         "",
         f"  {C.BOLD}{C.CYAN}┌─ ROSTER & UNIT LEADERS ──────────────────────────────────────────────────────────────┐{C.RESET}",
@@ -6598,6 +7091,7 @@ def render_slash_help() -> str:
   {C.BOLD}{C.GOLD}Slash Commands:{C.RESET}
     {C.BOLD}{C.CYAN}/help{C.RESET}                           Show this command & natural-language reference
     {C.BOLD}{C.CYAN}/team{C.RESET} [abbr/name]              Drill down into team offense, defense, and roster stats
+    {C.BOLD}{C.CYAN}/coaches{C.RESET} [abbr/name]           View team coaching staff (HC, OC, DC, position coaches)
     {C.BOLD}{C.CYAN}/player{C.RESET} [name]                  Drill down into player passing, rushing, and receiving stats
     {C.BOLD}{C.CYAN}/stat{C.RESET} [stat_id]                 Evaluate any Traditional or Custom Stat leaderboard (Table only)
     {C.BOLD}{C.CYAN}/create{C.RESET}                         Launch the Composable Custom Stat Builder (Season / Game / Play scope)
@@ -6873,6 +7367,14 @@ def interactive_tui(
                         t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions) (default: {def_t}): ").strip() or def_t
                         res_t = resolve_team_abbr(t_in) or t_in.upper()
                         print(render_team_drilldown_view(engine, plays, season=active_season, team=res_t))
+                elif cmd_token in ("/coaches", "/coach", "/staff"):
+                    if cmd_args:
+                        t_in = cmd_args[0]
+                    else:
+                        def_t = default_team or "KC"
+                        t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions) (default: {def_t}): ").strip() or def_t
+                    res_t = resolve_team_abbr(t_in) or t_in.upper()
+                    print(render_coaching_staff_view(res_t))
                 elif cmd_token in ("/player", "/player-stats", "/player-drilldown"):
                     if cmd_args:
                         p_arg = " ".join(cmd_args)
@@ -7064,6 +7566,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     team_p = sub.add_parser("team", parents=[common], help="Drill down into team offense, defense, and roster stats")
     team_p.add_argument("team_name", nargs="?", default="KC", help="Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions)")
 
+    coaches_p = sub.add_parser("coaches", parents=[common], help="View team coaching staff (HC, OC, DC, position coaches)")
+    coaches_p.add_argument("team_name", nargs="?", default="KC", help="Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions)")
+    coaches_p.add_argument("--role", choices=["hc", "oc", "dc", "qb", "ol", "wr", "rb", "dl", "lb"], default=None, help="Filter to specific coaching role")
+
     player_p = sub.add_parser("player", parents=[common], help="Drill down into player passing, rushing, and receiving stats")
     player_p.add_argument("player_name", nargs="?", default="Mahomes", help="Player name (e.g. Mahomes, Allen, Goff, Worthy)")
 
@@ -7158,6 +7664,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(AsciiArtRenderer.banner())
             deleted = engine.delete_custom_stat(args.name)
             print(f"\n{C.GREEN}✔ Successfully deleted custom stat `{deleted.name}` ({deleted.title}).{C.RESET}")
+            return 0
+        if cmd == "coaches":
+            print(AsciiArtRenderer.banner())
+            resolved_t = resolve_team_abbr(args.team_name) or args.team_name or "KC"
+            print(render_coaching_staff_view(resolved_t, role_filter=args.role))
             return 0
 
         if cmd == "ask":

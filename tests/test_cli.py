@@ -747,6 +747,140 @@ def test_cli_stat_subcommand_limit_flag():
     assert len(rows) == 2
 
 
+def test_penalties_data_and_nlp_queries():
+    engine = cli.StatEngine()
+    bridge = cli.NFLDataBridge()
+    plays = [bridge._normalize_row(r, idx) for idx, r in enumerate(cli.SAMPLE_PBP_PLAYS, 1)]
+
+    # 1. Verify penalties stats exist in engine
+    assert "penalties" in engine.stats
+    assert "penalty_yards" in engine.stats
+
+    # 2. Check leaderboard calculation
+    board_pen = engine.evaluate_stat_leaderboard("penalties", plays, group_override="team")
+    assert len(board_pen) > 0
+    kc_entry = next((item for item in board_pen if item["entity"] == "KC"), None)
+    assert kc_entry is not None
+    assert kc_entry["value"] >= 1.0
+    assert kc_entry["metrics"]["penalties"] >= 1.0
+
+    # 3. NLP Query: "who had the most penalties this year?"
+    q1 = cli.NaturalLanguageStatAssistant.interpret_query("who had the most penalties this year?", engine, slm_model="off")
+    assert q1["intent"] == "stat_query"
+    assert q1["stat_name"] == "penalties"
+    assert q1["limit"] == 5
+    out1 = cli.strip_ansi(cli.handle_nl_query_result(q1, engine, plays))
+    assert "Total Penalties" in out1
+    assert "Top 5" in out1
+
+    # 4. NLP Query: "which team has the most penalty yards?"
+    q2 = cli.NaturalLanguageStatAssistant.interpret_query("which team has the most penalty yards?", engine, slm_model="off")
+    assert q2["intent"] == "stat_query"
+    assert q2["stat_name"] == "penalty_yards"
+    assert q2["group_by"] == "team"
+    assert q2["limit"] == 5
+    out2 = cli.strip_ansi(cli.handle_nl_query_result(q2, engine, plays))
+    assert "Penalty Yards" in out2
+
+
+def test_coaching_staff_data_and_nlp_queries():
+    engine = cli.StatEngine()
+
+    # 1. Verify 32 NFL teams have full coaching staffs
+    for t_abbr in cli.AFC_TEAMS | cli.NFC_TEAMS:
+        staff = cli.get_team_coaching_staff(t_abbr)
+        assert "hc" in staff, f"Missing HC for {t_abbr}"
+        assert "oc" in staff, f"Missing OC for {t_abbr}"
+        assert "dc" in staff, f"Missing DC for {t_abbr}"
+
+    # 2. Specific lookups
+    kc_staff = cli.get_team_coaching_staff("KC")
+    assert kc_staff["hc"] == "Andy Reid"
+    assert kc_staff["oc"] == "Matt Nagy"
+    assert kc_staff["dc"] == "Steve Spagnuolo"
+
+    det_staff = cli.get_team_coaching_staff("DET")
+    assert det_staff["hc"] == "Dan Campbell"
+    assert det_staff["oc"] == "Ben Johnson"
+
+    # 3. Coach name lookup
+    found_reid = cli.find_coach_team("Andy Reid")
+    assert found_reid is not None
+    assert found_reid[0] == "KC"
+    assert found_reid[2] == "hc"
+
+    found_ben = cli.find_coach_team("Ben Johnson")
+    assert found_ben is not None
+    assert found_ben[0] == "DET"
+    assert found_ben[2] == "oc"
+
+    # 4. NLP Query: "who is the coach of the chiefs?"
+    p_hc = cli.NaturalLanguageStatAssistant.interpret_query("who is the coach of the chiefs?", engine, slm_model="off")
+    assert p_hc["intent"] == "coaching_staff"
+    assert p_hc["team"] == "KC"
+    assert p_hc["role"] == "hc"
+
+    # 5. NLP Query: "who is the offensive coordinator for the lions?"
+    p_oc = cli.NaturalLanguageStatAssistant.interpret_query("who is the offensive coordinator for the lions?", engine, slm_model="off")
+    assert p_oc["intent"] == "coaching_staff"
+    assert p_oc["team"] == "DET"
+    assert p_oc["role"] == "oc"
+
+    # 6. NLP Query: "who is Andy Reid?"
+    p_name = cli.NaturalLanguageStatAssistant.interpret_query("who is Andy Reid?", engine, slm_model="off")
+    assert p_name["intent"] == "coaching_staff"
+    assert p_name["team"] == "KC"
+    assert p_name["role"] == "hc"
+
+    # 7. Rendering coaching staff view
+    view_kc = cli.strip_ansi(cli.render_coaching_staff_view("KC"))
+    assert "KANSAS CITY CHIEFS" in view_kc
+    assert "Andy Reid" in view_kc
+    assert "Steve Spagnuolo" in view_kc
+
+
+def test_coach_grouping_and_stat_query():
+    engine = cli.StatEngine()
+    bridge = cli.NFLDataBridge()
+    plays = [bridge._normalize_row(r, idx) for idx, r in enumerate(cli.SAMPLE_PBP_PLAYS, 1)]
+
+    # 1. NLP Query: "rank coaches by epa per play"
+    p = cli.NaturalLanguageStatAssistant.interpret_query("rank coaches by epa per play", engine, slm_model="off")
+    assert p["intent"] == "stat_query"
+    assert p["stat_name"] == "epa_per_play"
+    assert p["group_by"] == "coach"
+
+    # 2. Rendering evaluation
+    out = cli.strip_ansi(cli.handle_nl_query_result(p, engine, plays))
+    assert "Expected Points Added / Play" in out
+    assert "Andy Reid" in out
+    assert "Dan Campbell" in out
+
+
+def test_coaches_cli_and_subcommand():
+    # 1. Full coaching staff
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "coaches", "KC"],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    out = cli.strip_ansi(res.stdout)
+    assert "Andy Reid" in out
+    assert "Steve Spagnuolo" in out
+
+    # 2. Filter by role
+    res_oc = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "coaches", "DET", "--role", "oc"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_oc.returncode == 0, res_oc.stderr
+    out_oc = cli.strip_ansi(res_oc.stdout)
+    assert "Ben Johnson" in out_oc
+
+
+
 
 
 
