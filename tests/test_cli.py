@@ -1109,10 +1109,50 @@ def test_position_filtering_on_receiving_and_general_stats():
     assert p_vol["limit"] == 5
 
 
+def test_play_concept_average_yards_nl_query():
+    engine = cli.StatEngine()
+    plays = cli.SAMPLE_PBP_PLAYS
 
+    # 1. Parsing 'which play has produces the most yards on average?' and variants
+    parsed_main = cli.NaturalLanguageStatAssistant.interpret_query(
+        "which play has produces the most yards on average?",
+        engine,
+        slm_model="off",
+    )
+    assert parsed_main["intent"] == "stat_query"
+    assert parsed_main["stat_name"] == "yards_per_play"
+    assert parsed_main["group_by"] == "play_concept"
+    assert parsed_main["limit"] == 5
+    assert parsed_main["show_field"] is False
 
+    variants = [
+        "which play produces the most yards on average?",
+        "which play averages the most yards?",
+        "which offensive play averages the most yards?",
+        "what play concept produces the most yards?",
+        "play concept efficiency",
+    ]
+    for q in variants:
+        p = cli.NaturalLanguageStatAssistant.interpret_query(q, engine, slm_model="off")
+        assert p["intent"] == "stat_query", f"Failed intent for: {q}"
+        assert p["stat_name"] == "yards_per_play", f"Failed stat_name for: {q}"
+        assert p["group_by"] == "play_concept", f"Failed group_by for: {q}"
 
+    # 2. Verify single play diagram queries are NOT broken
+    p_single = cli.NaturalLanguageStatAssistant.interpret_query(
+        "show Mahomes touchdown play",
+        engine,
+        slm_model="off",
+    )
+    assert p_single["intent"] == "specific_play"
+    assert p_single["show_field"] is True
 
-
-
+    # 3. Execution and Leaderboard output formatting
+    res_str = cli.handle_nl_query_result(parsed_main, engine, plays)
+    assert "PLAY CONCEPT" in res_str
+    assert "play_action_deep" in res_str
+    assert "Season Average Across Qualified Play Concepts:" in res_str
+    # Verify non-offensive scrimmage events like punt or field goal are excluded
+    assert "field_goal" not in res_str
+    assert "punt" not in res_str
 
