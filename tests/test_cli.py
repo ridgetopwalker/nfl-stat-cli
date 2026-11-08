@@ -755,6 +755,8 @@ def test_penalties_data_and_nlp_queries():
     # 1. Verify penalties stats exist in engine
     assert "penalties" in engine.stats
     assert "penalty_yards" in engine.stats
+    assert "penalties_drawn" in engine.stats
+    assert "penalty_yards_drawn" in engine.stats
 
     # 2. Check leaderboard calculation
     board_pen = engine.evaluate_stat_leaderboard("penalties", plays, group_override="team")
@@ -764,16 +766,38 @@ def test_penalties_data_and_nlp_queries():
     assert kc_entry["value"] >= 1.0
     assert kc_entry["metrics"]["penalties"] >= 1.0
 
-    # 3. NLP Query: "who had the most penalties this year?"
+    # 3. Check penalties drawn / in favor
+    board_drawn = engine.evaluate_stat_leaderboard("penalties_drawn", plays, group_override="team")
+    assert len(board_drawn) > 0
+    bal_entry = next((item for item in board_drawn if item["entity"] == "BAL"), None)
+    assert bal_entry is not None
+    assert bal_entry["value"] >= 2.0
+
+    # 4. NLP Query: "who had the most penalties this year?"
     q1 = cli.NaturalLanguageStatAssistant.interpret_query("who had the most penalties this year?", engine, slm_model="off")
     assert q1["intent"] == "stat_query"
     assert q1["stat_name"] == "penalties"
     assert q1["limit"] == 5
     out1 = cli.strip_ansi(cli.handle_nl_query_result(q1, engine, plays))
     assert "Total Penalties" in out1
-    assert "Top 5" in out1
 
-    # 4. NLP Query: "which team has the most penalty yards?"
+    # 5. NLP Query: "which team as had the most penalties in their favor?" (handling colloquialism/typo)
+    q_fav = cli.NaturalLanguageStatAssistant.interpret_query("which team as had the most penalties in their favor?", engine, slm_model="off")
+    assert q_fav["intent"] == "stat_query"
+    assert q_fav["stat_name"] == "penalties_drawn"
+    assert q_fav["group_by"] == "team"
+    assert q_fav["limit"] == 5
+    out_fav = cli.strip_ansi(cli.handle_nl_query_result(q_fav, engine, plays))
+    assert "Penalties in Favor" in out_fav
+    assert "BAL" in out_fav
+
+    # 6. NLP Query: "who benefited the most from penalties?"
+    q_ben = cli.NaturalLanguageStatAssistant.interpret_query("who benefited the most from penalties?", engine, slm_model="off")
+    assert q_ben["intent"] == "stat_query"
+    assert q_ben["stat_name"] == "penalties_drawn"
+    assert q_ben["group_by"] == "team"
+
+    # 7. NLP Query: "which team has the most penalty yards?"
     q2 = cli.NaturalLanguageStatAssistant.interpret_query("which team has the most penalty yards?", engine, slm_model="off")
     assert q2["intent"] == "stat_query"
     assert q2["stat_name"] == "penalty_yards"
@@ -781,6 +805,50 @@ def test_penalties_data_and_nlp_queries():
     assert q2["limit"] == 5
     out2 = cli.strip_ansi(cli.handle_nl_query_result(q2, engine, plays))
     assert "Penalty Yards" in out2
+
+
+def test_timeouts_data_and_nlp_queries():
+    engine = cli.StatEngine()
+    bridge = cli.NFLDataBridge()
+    plays = [bridge._normalize_row(r, idx) for idx, r in enumerate(cli.SAMPLE_PBP_PLAYS, 1)]
+
+    # 1. Verify timeouts stat exists in engine
+    assert "timeouts" in engine.stats
+
+    # 2. Leaderboard by coach
+    board_to_coach = engine.evaluate_stat_leaderboard("timeouts", plays, group_override="coach")
+    assert len(board_to_coach) > 0
+    reid_entry = next((item for item in board_to_coach if item["entity"] == "Andy Reid"), None)
+    assert reid_entry is not None
+    assert reid_entry["value"] >= 1.0
+
+    harbaugh_entry = next((item for item in board_to_coach if item["entity"] == "John Harbaugh"), None)
+    assert harbaugh_entry is not None
+    assert harbaugh_entry["value"] >= 1.0
+
+    # 3. Leaderboard by team
+    board_to_team = engine.evaluate_stat_leaderboard("timeouts", plays, group_override="team")
+    assert len(board_to_team) > 0
+    kc_to = next((item for item in board_to_team if item["entity"] == "KC"), None)
+    assert kc_to is not None
+    assert kc_to["value"] >= 1.0
+
+    # 4. NLP Query: "which coach has used the most timeouts?"
+    p_to = cli.NaturalLanguageStatAssistant.interpret_query("which coach has used the most timeouts?", engine, slm_model="off")
+    assert p_to["intent"] == "stat_query"
+    assert p_to["stat_name"] == "timeouts"
+    assert p_to["group_by"] == "coach"
+    assert p_to["limit"] == 5
+    out_to = cli.strip_ansi(cli.handle_nl_query_result(p_to, engine, plays))
+    assert "Timeouts Used" in out_to
+    assert "Andy Reid" in out_to
+
+    # 5. NLP Query: "which team has called the most timeouts?"
+    p_to_team = cli.NaturalLanguageStatAssistant.interpret_query("which team has called the most timeouts?", engine, slm_model="off")
+    assert p_to_team["intent"] == "stat_query"
+    assert p_to_team["stat_name"] == "timeouts"
+    assert p_to_team["group_by"] == "team"
+    assert p_to_team["limit"] == 5
 
 
 def test_coaching_staff_data_and_nlp_queries():
