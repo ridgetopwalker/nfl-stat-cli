@@ -89,9 +89,28 @@ class C:
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+try:
+    import readline as _readline  # type: ignore[import]
+    _HAS_READLINE = True
+except ImportError:
+    _readline = None
+    _HAS_READLINE = False
+
 
 def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", str(text))
+
+
+def prompt_input(prompt_text: str) -> str:
+    """
+    Read a line of user input with readline multi-line wrap support.
+    Wraps non-printing ANSI escape sequences in \\x01...\\x02 so GNU readline
+    calculates exact visible prompt width and allows backspacing across line wraps.
+    """
+    if _HAS_READLINE:
+        rl_prompt = _ANSI_RE.sub(lambda m: f"\x01{m.group(0)}\x02", prompt_text)
+        return input(rl_prompt)
+    return input(prompt_text)
 
 
 def visible_len(text: str) -> int:
@@ -2173,13 +2192,13 @@ class NaturalLanguageStatAssistant:
 
         # Determine group_by override from query
         group_override: Optional[str] = None
-        if "by qb" in ql or "quarterback" in ql:
+        if any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")):
             group_override = "qb"
-        elif "by team" in ql or "teams" in ql:
+        elif any(w in ql for w in ("by team", "teams", "each team", "team's", "per team")):
             group_override = "team"
-        elif "by receiver" in ql or "wide receiver" in ql:
+        elif any(w in ql for w in ("by receiver", "receivers", "wide receiver", "each receiver")):
             group_override = "receiver"
-        elif "by concept" in ql or "play concept" in ql or "offensive play" in ql:
+        elif any(w in ql for w in ("by concept", "play concept", "offensive play", "by play")):
             group_override = "play_concept"
         elif "by conference" in ql:
             group_override = "conference"
@@ -2626,7 +2645,7 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
     print(f"\n{C.BOLD}{C.MAGENTA}=== 🧪 COMPOSABLE CUSTOM STAT BUILDER ==={C.RESET}")
     print(f"  {C.BOLD}[1]{C.RESET} Build a custom stat from scratch (Season, Game-by-Game, or Play-by-Play scope)")
     print(f"  {C.BOLD}[2]{C.RESET} Start from a customizable template (e.g. Game-Conditional QB Stat, Filtered Concept Stat, 3rd Down Clutch, Chained Stat)")
-    mode = input("  Select mode [1/2] (default: 1): ").strip() or "1"
+    mode = prompt_input("  Select mode [1/2] (default: 1): ").strip() or "1"
 
     preset: Dict[str, str] = {}
     if mode == "2":
@@ -2634,7 +2653,7 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
         for idx, tmpl in enumerate(CUSTOM_STAT_TEMPLATES, 1):
             print(f"    [{idx}] {C.BOLD}{tmpl['label']}{C.RESET}")
             print(f"        Formula: `{tmpl['formula']}` | Scope: {tmpl['scope']} ({tmpl['agg']}) | Filter: `{tmpl['filter_expr'] or 'None'}`")
-        t_idx = input(f"  Pick a template [1-{len(CUSTOM_STAT_TEMPLATES)}] (default: 1): ").strip() or "1"
+        t_idx = prompt_input(f"  Pick a template [1-{len(CUSTOM_STAT_TEMPLATES)}] (default: 1): ").strip() or "1"
         try:
             preset = dict(CUSTOM_STAT_TEMPLATES[max(0, min(len(CUSTOM_STAT_TEMPLATES) - 1, int(t_idx) - 1))])
         except ValueError:
@@ -2651,28 +2670,28 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
     print("  " + ", ".join(building_blocks))
 
     default_name = preset.get("name", "custom_efficiency_score")
-    name = input(f"  Stat ID (default: {default_name}): ").strip() or default_name
+    name = prompt_input(f"  Stat ID (default: {default_name}): ").strip() or default_name
     default_title = preset.get("title", name.replace("_", " ").title())
-    title = input(f"  Display Title (default: {default_title}): ").strip() or default_title
+    title = prompt_input(f"  Display Title (default: {default_title}): ").strip() or default_title
     default_group = preset.get("group_by", "qb")
-    group_by = input(f"  Group by [qb/team/receiver/rusher/play_concept/conference/game] (default: {default_group}): ").strip() or default_group
+    group_by = prompt_input(f"  Group by [qb/team/receiver/rusher/play_concept/conference/game] (default: {default_group}): ").strip() or default_group
     default_scope = preset.get("scope", "season")
-    scope = input(f"  Evaluation Scope [season / game / play] (default: {default_scope}): ").strip().lower() or default_scope
+    scope = prompt_input(f"  Evaluation Scope [season / game / play] (default: {default_scope}): ").strip().lower() or default_scope
     default_agg = preset.get("agg", "sum" if scope == "game" else "formula")
     agg = default_agg
     if scope in ("game", "play"):
-        agg = input(f"  Aggregation across {scope}s [sum / avg / count_true / rate / max / min] (default: {default_agg}): ").strip().lower() or default_agg
+        agg = prompt_input(f"  Aggregation across {scope}s [sum / avg / count_true / rate / max / min] (default: {default_agg}): ").strip().lower() or default_agg
 
     default_filter = preset.get("filter_expr", "")
-    filter_expr = input(f"  Optional Play Filter (e.g. `is_screen == 1` or `down == 3` or `conf == 'AFC'`) [{default_filter or 'None'}]: ").strip() or default_filter
+    filter_expr = prompt_input(f"  Optional Play Filter (e.g. `is_screen == 1` or `down == 3` or `conf == 'AFC'`) [{default_filter or 'None'}]: ").strip() or default_filter
     default_formula = preset.get("formula", "(yards_per_play * 2.5) + (epa_per_play * 20.0)")
-    formula = input(f"  Formula (default: {default_formula}): ").strip() or default_formula
+    formula = prompt_input(f"  Formula (default: {default_formula}): ").strip() or default_formula
     default_unit = preset.get("unit", "pts")
-    unit = input(f"  Unit label (default: {default_unit}): ").strip() or default_unit
+    unit = prompt_input(f"  Unit label (default: {default_unit}): ").strip() or default_unit
     default_desc = preset.get("description", f"Custom {scope}-scoped stat grouped by {group_by}.")
-    desc = input(f"  Description (default: {default_desc}): ").strip() or default_desc
+    desc = prompt_input(f"  Description (default: {default_desc}): ").strip() or default_desc
     default_calc = preset.get("calculation_explained", f"Evaluated at {scope} scope ({agg}) with filter `{filter_expr or 'all plays'}` via `{formula}`.")
-    calc = input(f"  Calculation explanation (default: {default_calc}): ").strip() or default_calc
+    calc = prompt_input(f"  Calculation explanation (default: {default_calc}): ").strip() or default_calc
 
     try:
         sdef = engine.register_custom_stat(
@@ -2694,100 +2713,192 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
         print(f"\n  {C.RED}✖ Error creating stat: {exc}{C.RESET}")
 
 
+def render_slash_help() -> str:
+    return f"""
+{C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
+│                      NFL-STAT-CLI : NATURAL LANGUAGE & /COMMANDS                      │
+├───────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}
+  {C.BOLD}{C.GOLD}Default Mode (Natural Language):{C.RESET}
+    Type any question or stat request directly (no slash needed):
+    • {C.DIM}"What is the average yards after catch on screen passes in 2025?"{C.RESET}
+    • {C.DIM}"Show Patrick Mahomes touchdown play from behind the offense"{C.RESET}
+    • {C.DIM}"Show Jared Goff screen play behind the defense"{C.RESET}
+    • {C.DIM}"Create a stat called third_down_value with formula yards_per_play * 2 + epa_per_play * 15 where down == 3 by qb"{C.RESET}
+
+  {C.BOLD}{C.GOLD}Slash Commands:{C.RESET}
+    {C.BOLD}{C.CYAN}/help{C.RESET}                           Show this command & natural-language reference
+    {C.BOLD}{C.CYAN}/stat{C.RESET} [stat_id]                 Evaluate any Traditional or Custom Stat leaderboard (Table only)
+    {C.BOLD}{C.CYAN}/create{C.RESET}                         Launch the Composable Custom Stat Builder (Season / Game / Play scope)
+    {C.BOLD}{C.CYAN}/play{C.RESET} [qb/team/camera]          Diagram a specific play on the ASCII field (behind-offense / behind-defense / sideline)
+    {C.BOLD}{C.CYAN}/camera{C.RESET} <offense|defense|side>  Set default camera angle for play diagrams
+    {C.BOLD}{C.CYAN}/query{C.RESET}                          Run an ad-hoc season filter & group query
+    {C.BOLD}{C.CYAN}/stats{C.RESET}                          List all registered traditional and custom stats & formulas
+    {C.BOLD}{C.CYAN}/page{C.RESET}                           View Saved Stat Page (2024 historical lookback & 2025 tracking)
+    {C.BOLD}{C.CYAN}/qb-wins{C.RESET}                        Run MLB-style QB Meaningful Wins (MW), Losses (ML) & 0-100 Impact Score table
+    {C.BOLD}{C.CYAN}/screen-pass{C.RESET}                    Run Screen Pass Effectiveness table (Yards Gained, YAC, xYAC, EPA)
+    {C.BOLD}{C.CYAN}/play-efficiency{C.RESET} [AFC|NFC]      Rank most efficient offensive play concepts by yards gained
+    {C.BOLD}{C.CYAN}/export{C.RESET} [file.json]             Export custom stats to JSON
+    {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
+    {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
+    {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
+{C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
+
+
 def interactive_tui(engine: StatEngine, bridge: NFLDataBridge, slm_model: Optional[str] = None) -> None:
-    """Interactive terminal interface loop for *nix and Windows."""
+    """
+    Natural-Language-first interactive interface with /command support and
+    readline-safe prompt wrapping so multi-line inputs can backspace across line wraps.
+    """
     print(AsciiArtRenderer.banner())
     plays = bridge.load_pbp([2024, 2025])
     detected_slm = NaturalLanguageStatAssistant.detect_ollama_model(slm_model)
     slm_status = f"Ollama SLM ({detected_slm})" if detected_slm else "Built-in Deterministic AST Parser (Offline)"
+    default_camera = "behind-offense"
     print(f"  {C.GREEN}✔ Loaded {len(plays)} play-by-play records via [{bridge.last_source_used}]{C.RESET}")
-    print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}]{C.RESET}")
-
-    menu = f"""
-{C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
-│                             NFL-STAT-CLI INTERACTIVE MENU                             │
-├───────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}
-  {C.BOLD}[1]{C.RESET} 📊 {C.GOLD}Evaluate Any Stat Leaderboard / Yearly Average (Table Only — No Field){C.RESET}
-  {C.BOLD}[2]{C.RESET} 🧪 {C.MAGENTA}Create or Customize a Stat (Season, Game-by-Game, or Play-by-Play Scope){C.RESET}
-  {C.BOLD}[3]{C.RESET} 🏈 {C.GREEN}Diagram a Specific Play on ASCII Field (Behind Offense / Behind Defense / Sideline){C.RESET}
-  {C.BOLD}[4]{C.RESET} 🔎 {C.CYAN}Ad-Hoc Season Query (Filter by Down/Concept/Conf & Group by QB/Team/Concept){C.RESET}
-  {C.BOLD}[5]{C.RESET} 📌 {C.WHITE}View Saved Stat Page (Historical Lookback & Forward Season Tracking){C.RESET}
-  {C.BOLD}[6]{C.RESET} 💾 {C.YELLOW}Export / Import Custom Stats JSON{C.RESET}
-  {C.BOLD}[7]{C.RESET} 💬 {C.CYAN}Ask a Natural-Language Question (Smart Output: Table for Averages, Field for Plays){C.RESET}
-  {C.BOLD}[q]{C.RESET} ❌ Quit
-{C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
+    print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}] • Default Play Camera: [{default_camera}]{C.RESET}")
+    print(f"  {C.DIM}Ask any NFL stat or play question in plain English, or type {C.RESET}{C.BOLD}{C.GOLD}/help{C.RESET}{C.DIM} for commands ({C.RESET}{C.BOLD}/quit{C.RESET}{C.DIM} or {C.RESET}{C.BOLD}close{C.RESET}{C.DIM} to exit).{C.RESET}")
 
     while True:
-        print(menu)
         try:
-            choice = input(f"{C.BOLD}{C.GOLD}nfl-stat-cli ❯ {C.RESET}").strip().lower()
+            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat > {C.RESET}").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting nfl-stat-cli.")
             break
 
-        if choice in ("q", "quit", "exit"):
+        if not raw_in:
+            continue
+
+        low_in = raw_in.lower()
+        if low_in in ("q", "quit", "/quit", "/q", "close", "/close", "exit", "/exit"):
+            print("Exiting nfl-stat-cli.")
             break
-        elif choice == "1":
-            stat_names = list(engine.stats.keys())
-            print(f"\n  {C.BOLD}{C.CYAN}Available Traditional & Custom Stats:{C.RESET}")
-            for i, sname in enumerate(stat_names, 1):
-                s = engine.stats[sname]
-                print(f"    [{i:2d}] {C.BOLD}{s.name:<28}{C.RESET} — {s.title} [{s.category.upper()} • by {s.group_by}]")
-            sel = input("  Pick stat number or name (default: 1): ").strip() or "1"
-            chosen_stat = stat_names[0]
-            if sel.isdigit() and 1 <= int(sel) <= len(stat_names):
-                chosen_stat = stat_names[int(sel) - 1]
-            elif sel in engine.stats:
-                chosen_stat = sel
-            season_str = input("  Season [2024/2025] (default: 2025): ").strip() or "2025"
-            season_val = int(season_str) if season_str.isdigit() else 2025
-            conf_val = input("  Conference filter [AFC/NFC/all] (default: all): ").strip().upper()
-            conf_arg = conf_val if conf_val in ("AFC", "NFC") else None
-            group_val = input(f"  Group by override [qb/team/play_concept/conference/receiver/game] (Enter for default `{engine.stats[chosen_stat].group_by}`): ").strip() or None
-            s_plays = [p for p in plays if int(p.get("season", 2025)) == season_val] or plays
-            if chosen_stat in ("qb_meaningful_win", "qb_meaningful_loss", "qb_impact_score") and not group_val:
-                print(render_qb_meaningful_wins_view(engine, s_plays, season_val, conf_arg, view_mode="table"))
-            else:
-                print(render_general_stat_view(engine, s_plays, chosen_stat, season_val, conf=conf_arg, group_override=group_val, view_mode="table"))
-        elif choice == "2":
-            interactive_custom_stat_wizard(engine, plays)
-        elif choice == "3":
-            print(f"\n{C.BOLD}{C.GREEN}=== 🏈 SPECIFIC PLAY EXPLORER & MULTI-ANGLE DIAGRAMMER ==={C.RESET}")
-            qb_q = input("  Filter by QB/Player name (e.g. Mahomes, Allen, Goff, or Enter for any): ").strip() or None
-            team_q = input("  Filter by Team (e.g. KC, BUF, DET, BAL, or Enter for any): ").strip() or None
-            concept_q = input("  Filter by Concept (e.g. screen, play_action_deep, rush_outside, or Enter for any): ").strip() or None
-            sort_q = input("  Pick top play by [yards_gained / epa / wpa / yac] (default: yards_gained): ").strip() or "yards_gained"
-            cam_q = input("  Camera View [behind-offense / behind-defense / sideline / all] (default: behind-offense): ").strip() or "behind-offense"
-            print(render_specific_play_view(
-                engine, plays, season=2025, team=team_q, qb=qb_q, concept=concept_q, sort_by=sort_q, camera=cam_q
-            ))
-        elif choice == "4":
-            print(f"\n{C.BOLD}{C.CYAN}=== 🔎 AD-HOC SEASON FILTER & GROUP QUERY ==={C.RESET}")
-            stat_q = input("  Metric to evaluate (e.g. yards_per_play, epa_per_play, screen_yards_after_catch, passer_rating): ").strip() or "yards_per_play"
-            if stat_q not in engine.stats:
-                stat_q = "yards_per_play"
-            grp_q = input("  Group by [qb / team / play_concept / conference / division / down / qtr / game] (default: play_concept): ").strip() or "play_concept"
-            flt_q = input("  Filter expression (e.g. `conf == 'AFC'`, `is_screen == 1`, `down == 3`, or Enter for none): ").strip()
-            p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
-            print(render_general_stat_view(engine, p25, stat_q, 2025, group_override=grp_q, extra_filter=flt_q, view_mode="table"))
-        elif choice == "5":
-            print(render_stat_page(engine, plays))
-        elif choice == "6":
-            sub = input("  [e]xport to JSON or [i]mport from JSON? (e/i): ").strip().lower()
-            if sub == "i":
-                path_str = input("  Path to JSON file to import: ").strip()
+
+        # Slash commands (/command)
+        if raw_in.startswith("/"):
+            parts = raw_in.split()
+            cmd_token = parts[0].lower()
+            cmd_args = parts[1:]
+
+            if cmd_token in ("/help", "/h", "/?", "/commands", "/menu"):
+                print(render_slash_help())
+            elif cmd_token in ("/stats", "/list", "/list-stats", "/catalog"):
+                rows = [
+                    [s.name, s.title, s.category.upper(), s.group_by, f"{s.scope}/{s.agg}", s.filter_expr or "—", s.formula[:42]]
+                    for s in engine.stats.values()
+                ]
+                print(AsciiArtRenderer.render_table(
+                    "Registered Traditional & Custom Stats Catalog",
+                    ["Stat ID", "Title", "Type", "Group By", "Scope/Agg", "Filter", "Formula"],
+                    rows,
+                    alignments=["left", "left", "center", "center", "center", "left", "left"],
+                ))
+            elif cmd_token in ("/stat", "/leaderboard"):
+                if cmd_args and cmd_args[0] in engine.stats:
+                    chosen_stat = cmd_args[0]
+                    conf_arg = "AFC" if "afc" in [a.lower() for a in cmd_args] else ("NFC" if "nfc" in [a.lower() for a in cmd_args] else None)
+                    p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
+                    print(render_general_stat_view(engine, p25, chosen_stat, 2025, conf=conf_arg, view_mode="table"))
+                else:
+                    stat_names = list(engine.stats.keys())
+                    print(f"\n  {C.BOLD}{C.CYAN}Available Traditional & Custom Stats:{C.RESET}")
+                    for i, sname in enumerate(stat_names, 1):
+                        s = engine.stats[sname]
+                        print(f"    [{i:2d}] {C.BOLD}{s.name:<28}{C.RESET} — {s.title} [{s.category.upper()} • by {s.group_by}]")
+                    sel = prompt_input("  Pick stat number or name (default: 1): ").strip() or "1"
+                    chosen_stat = stat_names[0]
+                    if sel.isdigit() and 1 <= int(sel) <= len(stat_names):
+                        chosen_stat = stat_names[int(sel) - 1]
+                    elif sel in engine.stats:
+                        chosen_stat = sel
+                    season_str = prompt_input("  Season [2024/2025] (default: 2025): ").strip() or "2025"
+                    season_val = int(season_str) if season_str.isdigit() else 2025
+                    conf_val = prompt_input("  Conference filter [AFC/NFC/all] (default: all): ").strip().upper()
+                    conf_arg = conf_val if conf_val in ("AFC", "NFC") else None
+                    group_val = prompt_input(f"  Group by override [qb/team/play_concept/conference/receiver/game] (Enter for default `{engine.stats[chosen_stat].group_by}`): ").strip() or None
+                    s_plays = [p for p in plays if int(p.get("season", 2025)) == season_val] or plays
+                    if chosen_stat in ("qb_meaningful_win", "qb_meaningful_loss", "qb_impact_score") and not group_val:
+                        print(render_qb_meaningful_wins_view(engine, s_plays, season_val, conf_arg, view_mode="table"))
+                    else:
+                        print(render_general_stat_view(engine, s_plays, chosen_stat, season_val, conf=conf_arg, group_override=group_val, view_mode="table"))
+            elif cmd_token in ("/create", "/create-stat", "/new", "/build"):
+                interactive_custom_stat_wizard(engine, plays)
+            elif cmd_token in ("/play", "/diagram", "/field"):
+                if cmd_args:
+                    nl_play_q = "show play " + " ".join(cmd_args)
+                    parsed = NaturalLanguageStatAssistant.interpret_query(nl_play_q, engine=engine, slm_model=slm_model)
+                    parsed["intent"] = "specific_play"
+                    parsed["show_field"] = True
+                    if not any(k in nl_play_q.lower() for k in ("behind", "offense", "defense", "sideline")):
+                        parsed["camera"] = default_camera
+                    print(handle_nl_query_result(parsed, engine, plays))
+                else:
+                    print(f"\n{C.BOLD}{C.GREEN}=== 🏈 SPECIFIC PLAY EXPLORER & MULTI-ANGLE DIAGRAMMER ==={C.RESET}")
+                    qb_q = prompt_input("  Filter by QB/Player name (e.g. Mahomes, Allen, Goff, or Enter for any): ").strip() or None
+                    team_q = prompt_input("  Filter by Team (e.g. KC, BUF, DET, BAL, or Enter for any): ").strip() or None
+                    concept_q = prompt_input("  Filter by Concept (e.g. screen, play_action_deep, rush_outside, or Enter for any): ").strip() or None
+                    sort_q = prompt_input("  Pick top play by [yards_gained / epa / wpa / yac] (default: yards_gained): ").strip() or "yards_gained"
+                    cam_q = prompt_input(f"  Camera View [behind-offense / behind-defense / sideline / all] (default: {default_camera}): ").strip() or default_camera
+                    print(render_specific_play_view(
+                        engine, plays, season=2025, team=team_q, qb=qb_q, concept=concept_q, sort_by=sort_q, camera=cam_q
+                    ))
+            elif cmd_token in ("/camera", "/perspective"):
+                if cmd_args:
+                    cam_in = cmd_args[0].lower()
+                    if cam_in in ("offense", "behind-offense", "behind_offense"):
+                        default_camera = "behind-offense"
+                    elif cam_in in ("defense", "behind-defense", "behind_defense"):
+                        default_camera = "behind-defense"
+                    elif cam_in in ("side", "sideline", "broadcast"):
+                        default_camera = "sideline"
+                    elif cam_in == "all":
+                        default_camera = "all"
+                    print(f"  {C.GREEN}✔ Default play camera set to: {default_camera}{C.RESET}")
+                else:
+                    print(f"  Current play camera: {C.BOLD}{default_camera}{C.RESET} (Usage: `/camera behind-offense`, `/camera behind-defense`, or `/camera sideline`)")
+            elif cmd_token in ("/query", "/filter"):
+                print(f"\n{C.BOLD}{C.CYAN}=== 🔎 AD-HOC SEASON FILTER & GROUP QUERY ==={C.RESET}")
+                stat_q = prompt_input("  Metric to evaluate (e.g. yards_per_play, epa_per_play, screen_yards_after_catch, passer_rating): ").strip() or "yards_per_play"
+                if stat_q not in engine.stats:
+                    stat_q = "yards_per_play"
+                grp_q = prompt_input("  Group by [qb / team / play_concept / conference / division / down / qtr / game] (default: play_concept): ").strip() or "play_concept"
+                flt_q = prompt_input("  Filter expression (e.g. `conf == 'AFC'`, `is_screen == 1`, `down == 3`, or Enter for none): ").strip()
+                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
+                print(render_general_stat_view(engine, p25, stat_q, 2025, group_override=grp_q, extra_filter=flt_q, view_mode="table"))
+            elif cmd_token in ("/page", "/stat-page"):
+                print(render_stat_page(engine, plays))
+            elif cmd_token == "/qb-wins":
+                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
+                print(render_qb_meaningful_wins_view(engine, p25, 2025, None, view_mode="table"))
+            elif cmd_token == "/screen-pass":
+                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
+                print(render_screen_pass_view(engine, p25, 2025, None, view_mode="table"))
+            elif cmd_token == "/play-efficiency":
+                conf_arg = cmd_args[0].upper() if (cmd_args and cmd_args[0].upper() in ("AFC", "NFC")) else "AFC"
+                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
+                print(render_play_efficiency_view(engine, p25, 2025, conf_arg, view_mode="table"))
+            elif cmd_token == "/export":
+                path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename (default: custom_stats_export.json): ").strip() or "custom_stats_export.json")
+                out_p = engine.export_custom_stats_json(Path(path_str))
+                print(f"  {C.GREEN}✔ Exported custom stats to {out_p.resolve()}{C.RESET}")
+            elif cmd_token == "/import":
+                path_str = cmd_args[0] if cmd_args else prompt_input("  Path to JSON file to import: ").strip()
                 if path_str and Path(path_str).exists():
                     names = engine.import_custom_stats_json(Path(path_str))
                     print(f"  {C.GREEN}✔ Imported {len(names)} custom stats: {', '.join(names)}{C.RESET}")
+                else:
+                    print(f"  {C.RED}✖ File not found: {path_str}{C.RESET}")
+            elif cmd_token in ("/clear", "/cls"):
+                os.system("cls" if os.name == "nt" else "clear")
+                print(AsciiArtRenderer.banner())
             else:
-                path_str = input("  Export filename (default: custom_stats_export.json): ").strip() or "custom_stats_export.json"
-                out_p = engine.export_custom_stats_json(Path(path_str))
-                print(f"  {C.GREEN}✔ Exported custom stats to {out_p.resolve()}{C.RESET}")
-        elif choice == "7":
-            q = input("  Ask a stat or play question (e.g. 'average screen YAC by team in 2025' or 'show Mahomes touchdown play behind the defense'): ").strip()
-            if q:
-                parsed = NaturalLanguageStatAssistant.interpret_query(q, engine=engine, slm_model=slm_model)
-                print(handle_nl_query_result(parsed, engine, plays))
+                print(f"  {C.YELLOW}Unknown command `{cmd_token}`. Type `/help` to see all available slash commands.{C.RESET}")
+            continue
+
+        # Default: Natural Language Query
+        parsed = NaturalLanguageStatAssistant.interpret_query(raw_in, engine=engine, slm_model=slm_model)
+        if parsed.get("intent") == "specific_play" and not any(k in low_in for k in ("behind", "offense", "defense", "sideline")):
+            parsed["camera"] = default_camera
+        print(handle_nl_query_result(parsed, engine, plays))
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

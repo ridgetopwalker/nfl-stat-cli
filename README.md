@@ -23,7 +23,9 @@ A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and in
   - **`--camera behind-offense`**: All-22 view behind the QB/Offense looking **upfield (`▲`)** toward the Defense (`DE`, `DT`, `LB`, `CB`, `FS`, `SS`) and Opponent End Zone.
   - **`--camera behind-defense`**: All-22 view behind the Defensive Secondary looking at the Offense driving **downward (`▼`)** toward the viewer, with laterally mirrored perspective (`DEF LEFT / OFF RIGHT` on the left, `DEF RIGHT / OFF LEFT` on the right).
   - **`--camera sideline`**: Classic 100-yard left-to-right broadcast view.
-- **Hybrid Local Small Language Model (SLM) + Deterministic NL Parser**:
+- **Natural-Language-First Interactive Interface + `/command` System**:
+  - Launching `./nfl-stat` (or `nfl-stat`) drops directly into a natural-language prompt (`nfl-stat > `) with full multi-line GNU `readline` line-wrap and backspace support.
+  - Type any NFL stat question, play diagram request, or custom stat definition in plain English, or use `/commands` (`/help` lists all commands; `/quit`, `quit`, `/close`, or `close` exits).
   - Automatically connects to a local Ollama SLM (`qwen2.5:1.5b`, `qwen2.5-coder:1.5b`, `llama3.2:1b`, `phi3:mini`, etc.) if running, or falls back to the zero-latency built-in AST/rule parser.
 
 ## One-Step Installation
@@ -57,9 +59,17 @@ Once the installer finishes verifying `nfl-stat`, it will prompt:
 ## Quickstart Examples
 
 ```bash
-# 1. Launch the interactive colorized TUI
+# 1. Launch the interactive Natural Language + /command interface
 ./nfl-stat
 # (Or simply `nfl-stat` if added to your PATH)
+# Inside `nfl-stat > `, ask anything in plain English or run `/help` to view all slash commands:
+#   nfl-stat > What is the average yards after catch on screen passes in 2025?
+#   nfl-stat > Show Lamar Jackson longest play from behind the defense
+#   nfl-stat > /help
+#   nfl-stat > /stat qb_impact_score
+#   nfl-stat > /create
+#   nfl-stat > /play mahomes behind-offense
+#   nfl-stat > close   (or /quit, quit, /close)
 
 # 2. Evaluate any stat leaderboard across the season (outputs Table only — no ASCII field)
 ./nfl-stat stat screen_yards_after_catch --season 2025
