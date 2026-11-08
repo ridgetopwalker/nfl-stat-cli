@@ -1623,17 +1623,27 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="%",
         dependencies=["turnovers", "plays"],
     ),
-    "screen_yards_after_catch": StatDefinition(
-        name="screen_yards_after_catch",
-        title="Screen Pass Yards After Catch (Screen YAC/play)",
+    "plays": StatDefinition(
+        name="plays",
+        title="Total Plays",
         category="traditional",
         group_by="team",
-        formula="total_yac / plays",
-        description="Average yards gained after the catch on screen pass plays (air_yards <= 0 or charted screen).",
-        calculation_explained="Filters play-by-play to screen passes (is_screen == 1) and divides sum(yards_after_catch) by total screen plays.",
-        unit="YAC/screen",
-        filter_expr="is_screen == 1",
-        dependencies=["total_yac", "plays"],
+        formula="plays",
+        description="Total offensive snaps or matching plays.",
+        calculation_explained="Count of plays across matching criteria.",
+        unit="plays",
+        dependencies=["plays"],
+    ),
+    "pass_attempts": StatDefinition(
+        name="pass_attempts",
+        title="Pass Attempts",
+        category="traditional",
+        group_by="qb",
+        formula="pass_attempts",
+        description="Total pass attempts thrown (excluding sacks).",
+        calculation_explained="Sum of pass attempts across matching plays.",
+        unit="att",
+        dependencies=["pass_attempts"],
     ),
     "yards_after_catch": StatDefinition(
         name="yards_after_catch",
@@ -1889,22 +1899,19 @@ EXAMPLE_CUSTOM_STATS: Dict[str, StatDefinition] = {
         agg="sum",
         dependencies=["team_win", "qb_impact_score"],
     ),
-    "screen_effectiveness_index": StatDefinition(
-        name="screen_effectiveness_index",
-        title="Screen Pass Effectiveness Index (SPEI)",
+    "explosive_pass_rate": StatDefinition(
+        name="explosive_pass_rate",
+        title="Explosive Pass Rate (%)",
         category="custom",
         group_by="team",
-        formula="(yards_per_play * 3.5) + (screen_yards_after_catch * 2.5) + (yac_over_expected * 4.0) + (epa_per_play * 25.0)",
-        description="Composite screen-game rating combining screen yards gained, screen YAC, YAC over expected, and screen EPA.",
-        calculation_explained=(
-            "Composes traditional/custom building blocks on screen plays (`is_screen == 1`): "
-            "3.5 * `yards_per_play` + 2.5 * `screen_yards_after_catch` + 4.0 * `yac_over_expected` + 25.0 * `epa_per_play`."
-        ),
-        unit="idx",
-        filter_expr="is_screen == 1",
+        formula="(explosive_plays / nz(pass_attempts, 1)) * 100.0",
+        description="Percentage of pass attempts that gain 20 or more yards.",
+        calculation_explained="Explosive pass plays (>= 20 yards) divided by total pass attempts multiplied by 100.",
+        unit="%",
+        filter_expr="pass_attempt == 1",
         scope="season",
         agg="formula",
-        dependencies=["yards_per_play", "screen_yards_after_catch", "yac_over_expected", "epa_per_play"],
+        dependencies=["explosive_plays", "pass_attempts"],
     ),
 }
 
@@ -2081,8 +2088,8 @@ class StatEngine:
                 "qb_impact_score",
                 "qb_meaningful_win",
                 "qb_meaningful_loss",
-                "screen_yards_after_catch",
-                "screen_effectiveness_index",
+                "yards_after_catch",
+                "passer_rating",
                 "yards_per_play",
             ],
             "lookback_history": {},
@@ -3989,8 +3996,10 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:success\s+rate|offensive\s+success)\b", "success_rate_pct", "team"),
         # EPA per Play
         (r"\b(?:epa\s+per\s+play|epa/play|epa)\b", "epa_per_play", "qb"),
-        # Screen YAC
-        (r"\b(?:screen\s+yac|screen\s+yards\s+after\s+catch)\b", "screen_yards_after_catch", "team"),
+        # Play Count / Volume (including screens, passes, runs, plays)
+        (r"\b(?:most\s+screen\s+plays|most\s+screen\s+passes|most\s+screens|screen\s+passes|screen\s+plays)\b", "plays", "team"),
+        (r"\b(?:most\s+plays|total\s+plays|offensive\s+snaps|snaps)\b", "plays", "team"),
+        (r"\b(?:pass\s+attempts|dropbacks)\b", "pass_attempts", "qb"),
         # YAC over Expected
         (r"\b(?:yac\s+over\s+expected|yacoe)\b", "yac_over_expected", "team"),
         # Yards After Catch (General YAC across all completed passes)
@@ -4209,7 +4218,7 @@ class NaturalLanguageStatAssistant:
             filter_parts.append("half_seconds_remaining <= 120")
         if "play action" in ql or "play-action" in ql:
             filter_parts.append("play_action == 1")
-        if "screen" in ql and not any(w in ql for w in ("screen yac", "screen yards after catch", "screen efficiency")):
+        if "screen" in ql:
             filter_parts.append("is_screen == 1")
 
         # Detect camera perspective
@@ -4596,9 +4605,6 @@ class NaturalLanguageStatAssistant:
                     "show_field": False,
                     "explanation": f"Evaluated per-game MLB-style QB Meaningful Wins (MW), Losses (ML), No-Decisions (ND), and 0-100 Impact Scores for {season}.",
                 }
-            elif "screen" in ql:
-                matched_stat = "screen_yards_after_catch" if ("yac" in ql or "after catch" in ql) else "screen_effectiveness_index"
-                matched_group = "team"
             elif "passer rating" in ql:
                 matched_stat = "passer_rating"
                 matched_group = "qb"
@@ -4612,15 +4618,11 @@ class NaturalLanguageStatAssistant:
                 matched_stat = "success_rate_pct"
                 matched_group = "team"
             elif "yac" in ql or "after catch" in ql:
-                if "screen" in ql:
-                    matched_stat = "screen_yards_after_catch"
-                    matched_group = "team"
-                elif "expected" in ql:
-                    matched_stat = "yac_over_expected"
-                    matched_group = "team"
-                else:
-                    matched_stat = "yards_after_catch"
-                    matched_group = "receiver"
+                matched_stat = "yac_over_expected" if "expected" in ql else "yards_after_catch"
+                matched_group = "receiver"
+            elif "screen" in ql or "screens" in ql:
+                matched_stat = "plays"
+                matched_group = "team"
             elif "epa" in ql:
                 matched_stat = "epa_per_play"
                 matched_group = "qb"
@@ -4697,7 +4699,7 @@ class NaturalLanguageStatAssistant:
                 position = "RB"
             elif matched_stat in ("passing_yards", "passer_rating", "pass_touchdowns", "any_a", "completion_pct", "yards_per_attempt", "qb_impact_score"):
                 position = "QB"
-            elif matched_stat in ("screen_yards_after_catch", "yac_over_expected", "yards_after_catch"):
+            elif matched_stat in ("yac_over_expected", "yards_after_catch"):
                 position = "WR"
 
         is_leader_query = any(w in ql for w in (
@@ -5043,57 +5045,18 @@ def render_screen_pass_view(
     camera: str = "behind-offense",
     team: Optional[str] = None,
 ) -> str:
-    screen_plays = [p for p in plays if int(p.get("is_screen", 0)) == 1 and (not conf or p.get("conf") == conf) and (not team or str(p.get("posteam", "")).upper() == team.upper())]
-    eval_engine = engine
-    if "screen_effectiveness_index" not in engine.stats:
-        eval_engine = copy.copy(engine)
-        eval_engine.stats = dict(engine.stats)
-        eval_engine.stats["screen_effectiveness_index"] = EXAMPLE_CUSTOM_STATS["screen_effectiveness_index"]
-
-    board = eval_engine.evaluate_stat_leaderboard("screen_effectiveness_index", screen_plays, conf=conf, team=team, group_override="team")
-    sdef_yac = eval_engine.stats["screen_yards_after_catch"]
-    sdef_idx = eval_engine.stats["screen_effectiveness_index"]
-
-    out: List[str] = []
-    if _should_show_table(view_mode, is_play_query=False):
-        headers = ["Rank", "Team", "Conf", "Screens", "Avg Yds Gained", "Screen YAC/Play", "EPA/Screen", "Screen Eff. Index"]
-        rows = []
-        for idx, r in enumerate(board, 1):
-            rows.append([
-                f"#{idx}",
-                f"{C.BOLD}{r['entity']}{C.RESET}",
-                r["conf"],
-                r["plays"],
-                f"{C.GREEN}{r['yards_per_play']:.1f} yds{C.RESET}",
-                f"{C.CYAN}{r['yac_per_play']:.1f} YAC{C.RESET}",
-                f"{r['epa_per_play']:+.2f}",
-                f"{C.GOLD}{r['value']:.1f}{C.RESET}",
-            ])
-        out.append(AsciiArtRenderer.render_table(
-            f"Screen Pass Effectiveness: Yards Gained & Yards After Catch ({season})",
-            headers,
-            rows,
-            alignments=["right", "center", "center", "right", "right", "right", "right", "right"],
-        ))
-
-    if _should_show_text(view_mode, is_play_query=False):
-        out.append(
-            f"\n{C.BOLD}{C.CYAN}📘 Screen Pass Stat Explanations:{C.RESET}\n"
-            f"  • {C.BOLD}{sdef_yac.title} (`{sdef_yac.name}`){C.RESET}: {sdef_yac.description}\n"
-            f"    {C.DIM}Formula:{C.RESET} `{sdef_yac.formula}` (Filter: `{sdef_yac.filter_expr}`)\n"
-            f"    {C.DIM}How Calculated:{C.RESET} {sdef_yac.calculation_explained}\n"
-            f"  • {C.BOLD}{sdef_idx.title} (`{sdef_idx.name}`){C.RESET}: {sdef_idx.description}\n"
-            f"    {C.DIM}Formula:{C.RESET} `{sdef_idx.formula}`\n"
-            f"    {C.DIM}How Calculated:{C.RESET} {sdef_idx.calculation_explained}"
-        )
-
-    if _should_show_field(view_mode, is_play_query=False) and board:
-        out.append(AsciiArtRenderer.render_field_and_play(
-            board[0]["best_play"],
-            title=f"TOP SCREEN PASS PLAY DIAGRAM ({board[0]['entity']} • +{board[0]['best_play']['yards_after_catch']:.0f} YAC)",
-            camera=camera,
-        ))
-    return "\n".join(out)
+    """Render screen pass plays using standard yardage efficiency and play filtering."""
+    return render_general_stat_view(
+        engine,
+        plays,
+        stat_name="yards_per_play",
+        season=season,
+        conf=conf,
+        team=team,
+        extra_filter="is_screen == 1",
+        view_mode=view_mode,
+        camera=camera,
+    )
 
 
 def render_play_efficiency_view(
@@ -5351,7 +5314,7 @@ def handle_nl_query_result(
         return (
             f"\n{C.BOLD}{C.RED}\u2716 Unsupported or ambiguous query:{C.RESET} \"{parsed.get('query', '')}\"\n"
             f"  {C.YELLOW}\U0001f4a1 Could not match your question to a recognized stat, play diagram, or custom stat action.{C.RESET}\n"
-            f"  \u2022 {C.BOLD}To evaluate a stat:{C.RESET} try 'epa per play', 'passer rating', 'screen yac', or 'qb impact score'.\n"
+            f"  \u2022 {C.BOLD}To evaluate a stat:{C.RESET} try 'epa per play', 'passer rating', 'yards after catch', or 'qb impact score'.\n"
             f"  \u2022 {C.BOLD}To diagram a play:{C.RESET} try 'show Mahomes touchdown play' or 'diagram Goff screen play'.\n"
             f"  \u2022 {C.BOLD}Available stats:{C.RESET} {stat_list} (type {C.CYAN}/stats{C.RESET} for full catalog, or {C.CYAN}/help{C.RESET} for guidance)."
         )
@@ -7289,6 +7252,8 @@ STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
         "⚡ Team & Offensive Efficiency",
         "Drive-level, per-snap, conversion, and ground-game efficiency across all plays.",
         [
+            "plays",
+            "pass_attempts",
             "yards_per_play",
             "yards_per_rush",
             "success_rate_pct",
@@ -7298,10 +7263,10 @@ STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
         ],
     ),
     (
-        "🎯 Screen Pass & YAC Analytics",
-        "Short-area distribution, run-after-catch, and model-expected YAC performance.",
+        "🎯 Receiving & Yards After Catch (YAC) Analytics",
+        "Target distribution, run-after-catch, and model-expected YAC performance across all completions.",
         [
-            "screen_yards_after_catch",
+            "yards_after_catch",
             "yac_over_expected",
         ],
     ),
