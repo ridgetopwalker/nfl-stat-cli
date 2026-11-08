@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Launcher for nfl-stat-cli in the project directory or via PATH symlink
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+else
+    exec python3 "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+fi

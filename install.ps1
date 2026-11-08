@@ -50,7 +50,7 @@ function Find-RealPython {
     return $null
 }
 
-$BarInnerWidth = 83  # '[' (1) + 83 + '] ' (2) + '100%' (4) = 90 chars total (matches banner width)
+$BarInnerWidth = 82  # '[' (1) + 82 + '] ' (2) + '100%' (4) = 89 chars total (matches banner width)
 
 function Update-CompactUI([int]$Percent, [string]$CommandText) {
     if ($VerboseMode) { return }
@@ -58,14 +58,13 @@ function Update-CompactUI([int]$Percent, [string]$CommandText) {
     $empty = $BarInnerWidth - $filled
     $barStr = "[" + ("#" * $filled) + ("-" * $empty) + ("] {0,3}%" -f $Percent)
     $cleanCmd = ($CommandText -replace "[\r\n]+", " ")
-    if ($cleanCmd.Length -gt 86) {
-        $cleanCmd = $cleanCmd.Substring(0, 86)
+    if ($cleanCmd.Length -gt 85) {
+        $cleanCmd = $cleanCmd.Substring(0, 85)
     }
     $esc = [char]27
-    [Console]::Write("$esc[2A`r$esc[2K")
+    [Console]::Write("`r$esc[2K$esc[1A`r$esc[2K")
     Write-Host $barStr -ForegroundColor Yellow
-    [Console]::Write("`r$esc[2K")
-    Write-Host ("> " + $cleanCmd) -ForegroundColor Cyan
+    [Console]::Write("> " + $cleanCmd)
 }
 
 if ($VerboseMode) {
@@ -77,11 +76,10 @@ if ($VerboseMode) {
     if ($PythonPreview) {
         & $PythonPreview -c "import nfl_stat_cli; print(nfl_stat_cli.AsciiArtRenderer.banner())" 2>$null
     } else {
-        Write-Host "+========================================================================================+" -ForegroundColor Yellow
-        Write-Host "|  NFL-STAT-CLI : nflverse (R) + sportsdataverse-py (Python) Custom Stat & Play Engine   |" -ForegroundColor Cyan
-        Write-Host "+========================================================================================+" -ForegroundColor Yellow
+        Write-Host "+=======================================================================================+" -ForegroundColor Yellow
+        Write-Host "|  NFL-STAT-CLI : nflverse (R) + sportsdataverse-py (Python) Custom Stat & Play Engine  |" -ForegroundColor Cyan
+        Write-Host "+=======================================================================================+" -ForegroundColor Yellow
     }
-    Write-Host ""
     Write-Host ""
     Update-CompactUI 5 "Checking Python 3 installation..."
 }
@@ -108,6 +106,11 @@ if (-not $PythonExe) {
         Start-Process -FilePath $installerPath -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_test=0" -Wait
         Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
         $PythonExe = Find-RealPython
+    }
+    if (-not $PythonExe) {
+        Write-Host ""
+        Write-Host "ERROR: Could not automatically install Python 3." -ForegroundColor Red
+        exit 1
     }
 }
 if ($VerboseMode) { Write-Host "[1/5] Using Python: $PythonExe" -ForegroundColor Green }
@@ -149,22 +152,51 @@ if ($VerboseMode) {
     & $PythonExe -m pip install -e . --no-build-isolation >$null 2>&1
 }
 
-# 4. Optional R & Local SLM
+# 4. Optional R
 $rscript = Get-Command Rscript -ErrorAction SilentlyContinue
 if ($rscript) {
     if (-not $VerboseMode) { Update-CompactUI 95 "Rscript -e install.packages('nflreadr')" }
     & Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" >$null 2>&1
 }
 
-# 5. Create launcher & finish
-$LauncherPath = Join-Path $ProjectRoot "nfl-stat-cli.bat"
+# 5. Create local folder launchers (nfl-stat.bat & nfl-stat-cli.bat) & verify
 $LauncherContent = "@echo off`r`n`"$PythonExe`" `"%~dp0nfl_stat_cli.py`" %*`r`n"
-Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ASCII
+Set-Content -Path (Join-Path $ProjectRoot "nfl-stat.bat") -Value $LauncherContent -Encoding ASCII
+Set-Content -Path (Join-Path $ProjectRoot "nfl-stat-cli.bat") -Value $LauncherContent -Encoding ASCII
 
 if ($VerboseMode) {
     Write-Host "[5/5] Verifying nfl-stat-cli installation..." -ForegroundColor Cyan
-    & $PythonExe (Join-Path $ProjectRoot "nfl_stat_cli.py") list-stats
-    Write-Host "  [OK] INSTALLATION COMPLETE!" -ForegroundColor Green
+    & (Join-Path $ProjectRoot "nfl-stat.bat") list-stats
+    $VerifyCode = $LASTEXITCODE
+    if ($VerifyCode -eq 0) {
+        Write-Host "  [OK] INSTALLATION COMPLETE! Run: .\nfl-stat" -ForegroundColor Green
+    }
 } else {
-    Update-CompactUI 100 "[OK] Installed! Run: .\nfl-stat-cli.bat (use .\install.ps1 -v for verbose logs)"
+    Update-CompactUI 98 ".\nfl-stat.bat --version"
+    & (Join-Path $ProjectRoot "nfl-stat.bat") --version >$null 2>&1
+    $VerifyCode = $LASTEXITCODE
+    if ($VerifyCode -eq 0) {
+        Update-CompactUI 100 "Done! Run: .\nfl-stat  (or .\install.ps1 -v for verbose)"
+    } else {
+        Update-CompactUI 100 "ERROR: Verification failed."
+    }
+    Write-Host ""
+}
+
+if ($VerifyCode -eq 0 -and [Environment]::UserInteractive) {
+    $ans = Read-Host "? Add 'nfl-stat' to your PATH so you can run it from anywhere? [y/N]"
+    if ($ans -match "^[yY]") {
+        $CurrentUserPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+        $PathParts = ($CurrentUserPath -split ";") | Where-Object { $_ -ne "" }
+        if ($PathParts -notcontains $ProjectRoot) {
+            $NewUserPath = ($PathParts + $ProjectRoot) -join ";"
+            [System.Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
+        }
+        if (($env:Path -split ";") -notcontains $ProjectRoot) {
+            $env:Path = "$ProjectRoot;$env:Path"
+        }
+        Write-Host "[OK] Added '$ProjectRoot' to your PATH! You can now run 'nfl-stat' from anywhere." -ForegroundColor Green
+    } else {
+        Write-Host "Skipped adding to global PATH. You can run '.\nfl-stat' in this folder anytime." -ForegroundColor DarkGray
+    }
 }

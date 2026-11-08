@@ -40,6 +40,55 @@ print_banner() {
     printf "${BOLD}${GOLD}╚═══════════════════════════════════════════════════════════════════════════════════════╝${RESET}\n"
 }
 
+create_local_launcher() {
+    cat > "$SCRIPT_DIR/nfl-stat" <<'EOF'
+#!/usr/bin/env bash
+# Launcher for nfl-stat-cli in the project directory or via PATH symlink
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+else
+    exec python3 "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+fi
+EOF
+    chmod +x "$SCRIPT_DIR/nfl-stat" "$SCRIPT_DIR/nfl_stat_cli.py"
+}
+
+prompt_add_to_path() {
+    if [ ! -t 0 ]; then
+        return 0
+    fi
+    printf "${BOLD}${CYAN}?${RESET} Add ${BOLD}nfl-stat${RESET} to your PATH so you can run it from anywhere? [y/N]: "
+    read -r ans || true
+    case "$ans" in
+        [yY]|[yY][eE][sS])
+            mkdir -p "$HOME/.local/bin"
+            ln -sf "$SCRIPT_DIR/nfl-stat" "$HOME/.local/bin/nfl-stat"
+            for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+                if [ -f "$rc_file" ] && ! grep -q '\.local/bin' "$rc_file" 2>/dev/null; then
+                    printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc_file"
+                fi
+            done
+            if [ -w "/usr/local/bin" ]; then
+                ln -sf "$SCRIPT_DIR/nfl-stat" "/usr/local/bin/nfl-stat" 2>/dev/null || true
+            elif command -v sudo >/dev/null 2>&1; then
+                sudo ln -sf "$SCRIPT_DIR/nfl-stat" "/usr/local/bin/nfl-stat" 2>/dev/null || true
+            fi
+            printf "${GREEN}✔ Added 'nfl-stat' to PATH! You can now run 'nfl-stat' from anywhere (or './nfl-stat' here).${RESET}\n"
+            ;;
+        *)
+            printf "${DIM}Skipped adding to global PATH. You can run './nfl-stat' in this folder anytime.${RESET}\n"
+            ;;
+    esac
+}
+
 # ==============================================================================
 # VERBOSE MODE (-v / --verbose): Full-log installer
 # ==============================================================================
@@ -104,17 +153,18 @@ if [ "$VERBOSE" -eq 1 ]; then
         Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" || true
     fi
 
-    chmod +x "$SCRIPT_DIR/nfl_stat_cli.py"
+    create_local_launcher
     echo "[5/5] Verifying nfl-stat-cli installation..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/nfl_stat_cli.py" list-stats
+    "$SCRIPT_DIR/nfl-stat" list-stats
 
     echo ""
     echo "======================================================================"
     echo "  ✔ INSTALLATION COMPLETE!"
-    echo "  Run interactively:   $PYTHON_BIN nfl_stat_cli.py"
-    echo "  Diagram a play:      $PYTHON_BIN nfl_stat_cli.py play --qb Mahomes --camera behind-offense"
-    echo "                       $PYTHON_BIN nfl_stat_cli.py play --qb Goff --camera behind-defense"
+    echo "  Run in this folder:  ./nfl-stat"
+    echo "  Diagram a play:      ./nfl-stat play --qb Mahomes --camera behind-offense"
+    echo "                       ./nfl-stat play --qb Goff --camera behind-defense"
     echo "======================================================================"
+    prompt_add_to_path
     exit 0
 fi
 
@@ -139,7 +189,6 @@ fi
 BAR_INNER_WIDTH=$(( TARGET_WIDTH - 7 ))
 CMD_MAX_LEN=$(( TARGET_WIDTH - 4 ))
 
-# Redraw the single progress bar line (Line 1) and single command line (Line 2) in-place
 update_ui() {
     local pct="$1"
     local cmd_text="$2"
@@ -162,8 +211,6 @@ update_ui() {
 
     local clean_cmd="${cmd_text:0:$CMD_MAX_LEN}"
 
-    # Cursor rests on Line 2 (command line).
-    # Clear Line 2, move up 1 line to Line 1 (progress bar), clear Line 1, print bar + \n, print command (no \n).
     printf "\r\033[2K\033[1A\r\033[2K"
     printf "${BOLD}${GOLD}[${GREEN}%s${GRAY}%s${GOLD}] %3d%%${RESET}\n" "$bar_fill" "$bar_empty" "$pct"
     printf "${CYAN}❯${RESET} ${DIM}%s${RESET}" "$clean_cmd"
@@ -183,7 +230,6 @@ run_step() {
 }
 
 print_banner
-# Create Line 1 (progress bar) and move cursor onto Line 2 (command line)
 printf "\n"
 
 update_ui 5 "Checking Python 3 installation..."
@@ -233,7 +279,8 @@ if command -v Rscript >/dev/null 2>&1; then
     run_step 96 98 "Rscript -e install.packages('nflreadr')" Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" || true
 fi
 
-chmod +x "$SCRIPT_DIR/nfl_stat_cli.py"
-run_step 98 100 "$PYTHON_BIN nfl_stat_cli.py --version" "$PYTHON_BIN" "$SCRIPT_DIR/nfl_stat_cli.py" --version
-update_ui 100 "Done! Run: ./.venv/bin/python nfl_stat_cli.py  (-v for verbose)"
+create_local_launcher
+run_step 98 100 "./nfl-stat --version" "$SCRIPT_DIR/nfl-stat" --version
+update_ui 100 "Done! Run: ./nfl-stat  (or ./install.sh -v for verbose)"
 printf "\n"
+prompt_add_to_path
