@@ -1907,7 +1907,9 @@ class StatEngine:
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for p in filtered:
             gval = str(p.get(key_field) or "").strip()
-            if not gval or gval.lower() == "unknown qb":
+            if not gval and key_field == "player_name":
+                gval = str(p.get("receiver_player_name") or p.get("rusher_player_name") or p.get("qb_name") or p.get("kicker_player_name") or p.get("punter_player_name") or "").strip()
+            if not gval or gval.lower() in ("unknown qb", "unknown player"):
                 continue
             groups.setdefault(gval, []).append(p)
 
@@ -1953,6 +1955,7 @@ class StatEngine:
         season: Optional[int] = None,
         conf: Optional[str] = None,
         team: Optional[str] = None,
+        player: Optional[str] = None,
         qb: Optional[str] = None,
         concept: Optional[str] = None,
         play_type: Optional[str] = None,
@@ -1974,9 +1977,19 @@ class StatEngine:
             res = [p for p in res if str(p.get("conf", "")).upper() == conf.upper()]
         if team:
             res = [p for p in res if team.upper() in (str(p.get("posteam", "")).upper(), str(p.get("defteam", "")).upper())]
-        if qb:
-            q_low = qb.lower()
-            res = [p for p in res if q_low in str(p.get("qb_name", "")).lower() or q_low in str(p.get("player_name", "")).lower() or q_low in str(p.get("desc", "")).lower()]
+        target_player = player or qb
+        if target_player:
+            p_low = target_player.lower()
+            res = [
+                p for p in res
+                if p_low in str(p.get("player_name", "")).lower()
+                or p_low in str(p.get("qb_name", "")).lower()
+                or p_low in str(p.get("receiver_player_name", "")).lower()
+                or p_low in str(p.get("rusher_player_name", "")).lower()
+                or p_low in str(p.get("kicker_player_name", "")).lower()
+                or p_low in str(p.get("punter_player_name", "")).lower()
+                or p_low in str(p.get("desc", "")).lower()
+            ]
         if concept:
             c_low = concept.lower()
             res = [p for p in res if c_low in str(p.get("play_concept", "")).lower() or (c_low == "screen" and int(p.get("is_screen", 0)) == 1)]
@@ -2612,6 +2625,41 @@ class NaturalLanguageStatAssistant:
 
     AMBIGUOUS_TEAM_ABBRS: Set[str] = {"NO", "MIN", "LA", "NE", "SEA", "TEN", "IND", "WAS", "BUF", "CAR"}
 
+    KNOWN_PLAYERS: Tuple[str, ...] = (
+        # Quarterbacks
+        "mahomes", "allen", "jackson", "stroud", "watson", "fields", "goff", "purdy", "burrow",
+        "hurts", "herbert", "love", "prescott", "stafford", "tagovailoa", "daniels", "williams",
+        "maye", "nix", "rodgers", "cousins", "murray", "lawrence", "levis", "young", "minshew",
+        "brissett", "darnold", "carr", "o'connell", "devito", "ridder", "lance", "dalton",
+        "tannehill", "flacco", "wilson", "pickett", "trubisky", "winston", "lock", "rush",
+        "browning", "heinicke",
+        # Running backs
+        "gibbs", "cook", "henry", "barkley", "mccaffrey", "taylor", "kamara", "jacobs", "hall",
+        "mixon", "walker", "pollard", "bijan", "robinson", "montgomery", "achane", "kyren",
+        "swift", "conner", "mostert", "etienne", "harris", "stevenson", "charbonnet", "dowdle",
+        "hubbard", "ford", "singletary", "benson", "corum", "vidal", "guerendo", "mason",
+        # Wide receivers
+        "worthy", "jefferson", "chase", "lamb", "hill", "st brown", "st. brown", "adams", "aiyuk",
+        "samuel", "diggs", "evans", "collins", "nacua", "kupp", "moore", "pickens", "metcalf",
+        "smith", "higgins", "flowers", "olave", "london", "reed", "rice", "dell", "waddle",
+        "hopkins", "mclaurin", "godwin", "sutton", "ridley", "lockett", "shakir", "jeudy",
+        "legette", "thomas", "nabers", "odunze", "harrison", "downs", "thielen", "douglas",
+        "meyers", "palmer", "cooper", "mcconkey", "lazard", "slayton",
+        # Tight ends
+        "kelce", "kittle", "laporta", "andrews", "bowers", "hockenson", "goedert", "ferguson",
+        "njoku", "pitts", "kmet", "kraft", "likely", "otton", "schultz", "engram", "freiermuth",
+        "fant", "gesicki", "conklin",
+        # Specialists (K/P)
+        "butker", "tucker", "boswell", "moody", "bass", "mcpherson", "dicker", "aubrey",
+        "koo", "folk", "prater", "fairbairn", "gay", "santoso", "townsend", "stonehouse",
+        "cole", "bojorquez", "dixon", "gillikin", "fox", "wishnowsky",
+        # Defensive players
+        "parsons", "watt", "bosa", "garrett", "crosby", "hutchinson", "surtain", "gardner",
+        "hamilton", "warner", "hunter", "sweat", "jones", "donald", "mack", "queen",
+        "winfield", "kerby", "branch", "bland", "roquan", "sneed", "bowman", "burns",
+        "thibodeaux",
+    )
+
     @classmethod
     def detect_ollama_model(cls, requested_model: Optional[str] = None) -> Optional[str]:
         if requested_model and requested_model.strip().lower() in ("none", "off", "disable", "disabled"):
@@ -2655,6 +2703,11 @@ class NaturalLanguageStatAssistant:
         grp = parsed.get("group_by")
         if grp and str(grp).lower() not in GROUP_BY_COLUMN_MAP:
             parsed["group_by"] = None
+        if "qb" in parsed:
+            if "player" not in parsed or not parsed["player"]:
+                parsed["player"] = parsed.pop("qb")
+            else:
+                parsed.pop("qb")
         if engine and intent == "stat_query":
             sname = str(parsed.get("stat_name") or "").strip().lower()
             if sname not in engine.stats:
@@ -2671,13 +2724,13 @@ class NaturalLanguageStatAssistant:
             "Respond ONLY with a valid JSON object matching one of these intents:\n"
             "1. 'stat_query': when the user asks for a season average, leaderboard, ranking, or aggregate stat across the year. "
             "Set 'show_field': false.\n"
-            "2. 'specific_play': ONLY when the user asks to see, diagram, or find a specific single play (e.g. longest play, touchdown play, specific QB/team play, or behind offense/defense view). "
+            "2. 'specific_play': ONLY when the user asks to see, diagram, or find a specific single play (e.g. longest play, touchdown play, specific QB/player/team play, or behind offense/defense view). "
             "Set 'show_field': true and 'camera': 'behind-offense' | 'behind-defense' | 'sideline'.\n"
             "3. 'create_stat': when the user wants to define/create/make a new custom stat.\n"
             f"Available stats: {', '.join(available_stats)}.\n"
             "JSON keys: {\"intent\": \"stat_query|specific_play|create_stat\", \"stat_name\": \"...\", "
             "\"group_by\": \"qb|team|play_concept|conference|receiver|rusher|game\", \"filter_expr\": \"...\", "
-            "\"season\": 2025, \"conf\": null, \"team\": null, \"qb\": null, \"concept\": null, "
+            "\"season\": 2025, \"conf\": null, \"team\": null, \"player\": null, \"concept\": null, "
             "\"sort_by\": \"yards_gained|epa|wpa|yac\", \"camera\": \"behind-offense|behind-defense|sideline\", "
             "\"show_field\": false, \"formula\": \"\", \"title\": \"\", \"scope\": \"season|game|play\", \"agg\": \"formula|sum|avg\", \"explanation\": \"...\"}"
         )
@@ -2763,18 +2816,34 @@ class NaturalLanguageStatAssistant:
                         team_filter = t_abbr
                         break
 
-        qb_filter: Optional[str] = None
-        for qb_key in ("mahomes", "allen", "jackson", "stroud", "watson", "fields", "goff", "purdy", "worthy", "kelce", "gibbs", "cook", "burrow", "hurts", "herbert", "love", "prescott", "stafford", "tagovailoa", "daniels"):
-            if re.search(rf"\b{qb_key}\b", ql):
-                qb_filter = qb_key
+        player_filter: Optional[str] = None
+        for p_key in cls.KNOWN_PLAYERS:
+            if re.search(rf"\b{re.escape(p_key)}\b", ql):
+                player_filter = p_key
                 break
+
+        if not player_filter:
+            p_pat = re.search(r"\b(?:player\s+stats\s+for|stats\s+for|player|for|show|diagram)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b", q)
+            if p_pat:
+                cand = p_pat.group(1).strip()
+                cand_low = cand.lower()
+                ignore_words = {
+                    "the", "a", "an", "all", "each", "me", "play", "plays", "stat", "stats",
+                    "leaderboard", "rankings", "field", "ascii", "offense", "defense", "special",
+                    "teams", "team", "screen", "pass", "run", "touchdown", "interception",
+                    "sack", "longest", "best", "meaningful", "win", "loss", "impact", "score",
+                    "passer", "rating", "cpoe", "epa", "wpa", "yac", "afc", "nfc", "auto",
+                    "season", "game", "quarter", "qtr", "down", "view", "sideline", "camera",
+                } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
+                if cand_low not in ignore_words and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
+                    player_filter = cand
 
         # 1. Check if user is asking to CREATE a custom stat
         if any(ql.startswith(prefix) for prefix in ("create stat", "create a stat", "make a stat", "make stat", "define stat", "build stat")):
             name_m = re.search(r"(?:called|named)\s+([a-zA-Z0-9_]+)", ql)
-            formula_m = re.search(r"formula\s+(.+?)(?:\s+where\s+|\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|game)\b|$)", q, flags=re.IGNORECASE)
-            where_m = re.search(r"\bwhere\s+(.+?)(?:\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|game)\b|$)", q, flags=re.IGNORECASE)
-            by_m = re.search(r"\bby\s+(qb|team|play_concept|conference|receiver|rusher|game)\b", ql)
+            formula_m = re.search(r"formula\s+(.+?)(?:\s+where\s+|\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|player|game)\b|$)", q, flags=re.IGNORECASE)
+            where_m = re.search(r"\bwhere\s+(.+?)(?:\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|player|game)\b|$)", q, flags=re.IGNORECASE)
+            by_m = re.search(r"\bby\s+(qb|team|play_concept|conference|receiver|rusher|player|game)\b", ql)
             s_name = name_m.group(1) if name_m else "custom_user_stat"
             s_formula = formula_m.group(1).strip() if formula_m else "yards_per_play + (epa_per_play * 10)"
             s_filter = where_m.group(1).strip() if where_m else ""
@@ -2790,35 +2859,38 @@ class NaturalLanguageStatAssistant:
                 "agg": "sum" if "ifelse" in s_formula else "formula",
                 "season": season,
                 "conf": conf,
+                "team": team_filter,
+                "player": player_filter,
                 "show_field": False,
                 "explanation": f"Created custom stat `{s_name}` grouped by `{s_group}` using formula `{s_formula}`.",
             }
 
         # 2. Check if user is asking to DRILL DOWN into a team or player
         is_drill_kw = any(w in ql for w in ("drill down", "drilldown", "team profile", "team breakdown", "player profile", "player breakdown"))
-        if is_drill_kw or (
+        has_specific_stat_kw = any(w in ql for w in ("epa", "rating", "yac", "cpoe", "wpa", "yards per play", "success rate", "explosive", "meaningful win", "qb win"))
+        if not has_specific_stat_kw and (is_drill_kw or (
             team_filter and any(w in ql for w in ("team stats", "stats for the chiefs", "stats for the bills", "stats for the lions", "team overview"))
         ) or (
-            qb_filter and any(w in ql for w in ("player stats", "stats for mahomes", "stats for allen", "stats for goff", "player overview"))
-        ):
-            if team_filter and not (qb_filter and any(p_term in ql for p_term in ("player", "qb", "quarterback"))):
+            player_filter and any(w in ql for w in ("stats for", "player stats", "stats", "overview", "profile", "breakdown", "drill"))
+        )):
+            if team_filter and not player_filter:
                 return {
                     "intent": "team_drilldown",
                     "season": season,
                     "team": team_filter,
+                    "player": player_filter,
                     "conf": conf,
                     "show_field": False,
                     "explanation": f"Drill-down into team analytics, offense/defense profile, and roster leaders for {team_filter} ({season}).",
                 }
-            if qb_filter:
+            if player_filter:
                 return {
                     "intent": "player_drilldown",
                     "season": season,
-                    "player": qb_filter,
-                    "qb": qb_filter,
+                    "player": player_filter,
                     "conf": conf,
                     "show_field": False,
-                    "explanation": f"Drill-down into player passing, rushing, receiving, and situational stats for {qb_filter.title()} ({season}).",
+                    "explanation": f"Drill-down into player passing, rushing, receiving, and situational stats for {player_filter.title()} ({season}).",
                 }
 
         # 3. Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
@@ -2829,7 +2901,7 @@ class NaturalLanguageStatAssistant:
         )
         is_aggregate_request = any(w in ql for w in (
             "average", "avg", "per play", "across the year", "across the season", "leaderboard",
-            "rankings", "rank teams", "rank qbs", "by team", "by qb", "by concept",
+            "rankings", "rank teams", "rank qbs", "rank players", "by team", "by qb", "by player", "by concept",
             "effectiveness", "meaningful win", "meaningful loss", "impact score",
             "passer rating", "completion", "success rate", "explosive play rate", "cpoe",
         ))
@@ -2840,7 +2912,10 @@ class NaturalLanguageStatAssistant:
                 "behind the defense", "behind defense", "longest play", "best play", "top play",
                 "touchdown play", "interception play", "sack play",
             ))
-            or (bool(re.search(r"\bplay\b", ql_without_stat_phrases)) and not is_aggregate_request and any(w in ql for w in ("show", "diagram", "longest", "best", "most efficient", "touchdown", "mahomes", "allen", "jackson", "goff", "stroud", "purdy")))
+            or (bool(re.search(r"\bplay\b", ql_without_stat_phrases)) and not is_aggregate_request and (
+                any(w in ql for w in ("show", "diagram", "longest", "best", "most efficient", "touchdown", "interception", "sack"))
+                or player_filter is not None
+            ))
         )
 
         if is_specific_play_request and not ("average" in ql or "across the year" in ql):
@@ -2852,7 +2927,7 @@ class NaturalLanguageStatAssistant:
                 "season": season,
                 "conf": conf,
                 "team": team_filter,
-                "qb": qb_filter,
+                "player": player_filter,
                 "concept": concept_filter,
                 "filter_expr": extra_filter,
                 "sort_by": sort_by,
@@ -2882,7 +2957,7 @@ class NaturalLanguageStatAssistant:
                     "season": season,
                     "conf": conf,
                     "team": team_filter,
-                    "qb": qb_filter,
+                    "player": player_filter,
                     "show_field": False,
                     "explanation": f"Evaluated per-game MLB-style QB Meaningful Wins (MW), Losses (ML), No-Decisions (ND), and 0-100 Impact Scores for {season}.",
                 }
@@ -2907,23 +2982,29 @@ class NaturalLanguageStatAssistant:
                     "season": season,
                     "conf": conf,
                     "team": team_filter,
-                    "qb": qb_filter,
+                    "player": player_filter,
                     "show_field": False,
                     "explanation": f"Could not determine a specific stat or play from query: '{query}'.",
                 }
 
         # Determine group_by override from query
         group_override: Optional[str] = None
-        if any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")) or (qb_filter and not group_override):
+        if any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")):
             group_override = "qb"
-        elif any(w in ql for w in ("by team", "teams", "each team", "team's", "per team")):
-            group_override = "team"
+        elif any(w in ql for w in ("by player", "players", "each player", "per player")):
+            group_override = "player"
         elif any(w in ql for w in ("by receiver", "receivers", "wide receiver", "each receiver")):
             group_override = "receiver"
+        elif any(w in ql for w in ("by rusher", "rushers", "running back", "each rusher")):
+            group_override = "rusher"
+        elif any(w in ql for w in ("by team", "teams", "each team", "team's", "per team")):
+            group_override = "team"
         elif any(w in ql for w in ("by concept", "play concept", "offensive play", "by play")):
             group_override = "play_concept"
         elif "by conference" in ql:
             group_override = "conference"
+        elif player_filter and not group_override:
+            group_override = "player" if "player" in GROUP_BY_COLUMN_MAP else "qb"
 
         filter_parts: List[str] = []
         if "3rd down" in ql or "third down" in ql:
@@ -2945,7 +3026,7 @@ class NaturalLanguageStatAssistant:
             "season": season,
             "conf": conf,
             "team": team_filter,
-            "qb": qb_filter,
+            "player": player_filter,
             "show_field": False,
             "camera": camera,
             "explanation": f"Evaluated `{matched_stat}` across {season} (season aggregate/leaderboard — no ASCII field needed).",
@@ -3057,6 +3138,7 @@ def render_specific_play_view(
     season: Optional[int] = None,
     conf: Optional[str] = None,
     team: Optional[str] = None,
+    player: Optional[str] = None,
     qb: Optional[str] = None,
     concept: Optional[str] = None,
     play_type: Optional[str] = None,
@@ -3066,12 +3148,14 @@ def render_specific_play_view(
     game_id: Optional[str] = None,
     camera: str = "behind-offense",
 ) -> str:
+    target_player = player or qb
     matched = engine.query_plays(
         plays,
         season=season,
         conf=conf,
         team=team,
-        qb=qb,
+        player=target_player,
+        qb=target_player,
         concept=concept,
         play_type=play_type,
         filter_expr=filter_expr,
@@ -3082,7 +3166,16 @@ def render_specific_play_view(
     if not matched:
         return f"\n{C.RED}No matching play found for the given criteria.{C.RESET}"
     chosen = matched[0]
-    title = f"SPECIFIC PLAY DIAGRAM — {chosen.get('qb_name') or chosen.get('player_name') or 'Play'} ({chosen.get('posteam', '')} vs {chosen.get('defteam', '')})"
+    p_name = (
+        chosen.get("player_name")
+        or chosen.get("receiver_player_name")
+        or chosen.get("rusher_player_name")
+        or chosen.get("kicker_player_name")
+        or chosen.get("punter_player_name")
+        or chosen.get("qb_name")
+        or "Play"
+    )
+    title = f"SPECIFIC PLAY DIAGRAM — {p_name} ({chosen.get('posteam', '')} vs {chosen.get('defteam', '')})"
     return AsciiArtRenderer.render_field_and_play(chosen, title=title, camera=camera)
 
 
@@ -3389,7 +3482,7 @@ def handle_nl_query_result(
     s_plays = require_season_plays(all_plays, season)
     conf = parsed.get("conf")
     team = parsed.get("team")
-    qb = parsed.get("qb")
+    player = parsed.get("player") or parsed.get("qb")
     camera = camera_override or parsed.get("camera") or "behind-offense"
     slm_tag = f" [SLM: {parsed['slm_model_used']}]" if parsed.get("slm_model_used") else " [Local Rule/AST Parser]"
     header = f"\n{C.BOLD}{C.CYAN}🤖 Query Interpretation{slm_tag}:{C.RESET} {parsed.get('explanation', '')}"
@@ -3400,7 +3493,7 @@ def handle_nl_query_result(
         return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t)
 
     if intent == "player_drilldown":
-        target_player = qb or parsed.get("player") or "Mahomes"
+        target_player = player or "Mahomes"
         return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=False)
 
     if intent == "create_stat":
@@ -3424,23 +3517,28 @@ def handle_nl_query_result(
             season=season,
             conf=conf,
             team=team,
-            qb=qb,
+            player=player,
+            qb=player,
             concept=parsed.get("concept"),
             filter_expr=parsed.get("filter_expr", ""),
             sort_by=parsed.get("sort_by", "yards_gained"),
             camera=camera,
         )
 
-    if qb:
-        q_low = str(qb).lower()
-        qb_filtered = [
+    if player:
+        p_low = str(player).lower()
+        player_filtered = [
             p for p in s_plays
-            if q_low in str(p.get("qb_name", "")).lower()
-            or q_low in str(p.get("player_name", "")).lower()
-            or q_low in str(p.get("desc", "")).lower()
+            if p_low in str(p.get("player_name", "")).lower()
+            or p_low in str(p.get("qb_name", "")).lower()
+            or p_low in str(p.get("receiver_player_name", "")).lower()
+            or p_low in str(p.get("rusher_player_name", "")).lower()
+            or p_low in str(p.get("kicker_player_name", "")).lower()
+            or p_low in str(p.get("punter_player_name", "")).lower()
+            or p_low in str(p.get("desc", "")).lower()
         ]
-        if qb_filtered:
-            s_plays = qb_filtered
+        if player_filtered:
+            s_plays = player_filtered
 
     if intent == "qb_wins_report":
         return header + "\n" + render_qb_meaningful_wins_view(engine, s_plays, season, conf, view_mode=view_override, camera=camera, team=team)
@@ -4698,7 +4796,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     play_p = sub.add_parser("play", parents=[common], help="Find and diagram a specific play on the ASCII gridiron (supports behind-offense, behind-defense, sideline)")
     play_p.add_argument("--play-id", type=int, default=None, help="Specific play_id to render")
     play_p.add_argument("--game-id", default=None, help="Specific game_id to pair with --play-id (e.g. 2025_01_KC_BAL)")
-    play_p.add_argument("--qb", default=None, help="Filter by QB or player name (e.g. Mahomes, Allen, Goff)")
+    play_p.add_argument("--player", "--qb", dest="player", default=None, help="Filter by player name across all positions (e.g. Mahomes, Worthy, Gibbs, Parsons)")
     play_p.add_argument("--concept", default=None, help="Filter by play concept (e.g. screen, play_action_deep, rush_outside)")
     play_p.add_argument("--play-type", choices=["pass", "run"], default=None, help="Filter by pass or run")
     play_p.add_argument("--filter", default="", help="Custom play filter expression (e.g. 'touchdown == 1')")
@@ -4830,13 +4928,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(render_player_drilldown_view(engine, season_plays, season=args.season, player_name=args.player_name, team=args.team, interactive=False))
         elif cmd == "play":
             cam = getattr(args, "perspective", None) or resolved_camera
+            target_p = getattr(args, "player", None) or getattr(args, "qb", None)
             print(render_specific_play_view(
                 engine,
                 season_plays,
                 season=args.season,
                 conf=args.conf,
                 team=args.team,
-                qb=args.qb,
+                player=target_p,
+                qb=target_p,
                 concept=args.concept,
                 play_type=args.play_type,
                 filter_expr=args.filter,

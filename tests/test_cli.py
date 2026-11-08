@@ -1,5 +1,6 @@
 import importlib.util
 from importlib import resources
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -194,3 +195,69 @@ def test_interactive_tui_and_play_explorer():
     assert "Select Play Phase" in res.stdout
     assert "IN-DEPTH PLAY ANALYTICS" in res.stdout
     assert "auto-selected" in res.stdout
+
+
+def test_why_command_lists_player_not_qb():
+    input_text = "\n".join([
+        "show Worthy touchdown play",
+        "/why",
+        "quit",
+    ]) + "\n"
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "Last Natural Language Query Parsed Intent:" in res.stdout
+    why_block = cli.strip_ansi(res.stdout.split("Last Natural Language Query Parsed Intent:")[1].split("nfl-stat>")[0])
+    json_start = why_block.find("{")
+    json_end = why_block.rfind("}") + 1
+    parsed_json = json.loads(why_block[json_start:json_end])
+    assert "player" in parsed_json
+    assert "qb" not in parsed_json
+    assert parsed_json["player"] == "worthy"
+    assert parsed_json["intent"] == "specific_play"
+
+
+@pytest.mark.parametrize("query,expected_player,expected_intent", [
+    ("show Worthy touchdown play", "worthy", "specific_play"),
+    ("show Mahomes touchdown play", "mahomes", "specific_play"),
+    ("diagram Gibbs 40 yard run", "gibbs", "specific_play"),
+    ("diagram Parsons sack play", "parsons", "specific_play"),
+    ("drill down into Xavier Worthy", "worthy", "player_drilldown"),
+    ("stats for Jahmyr Gibbs", "gibbs", "player_drilldown"),
+    ("stats for Justin Tucker", "tucker", "player_drilldown"),
+    ("epa per play", None, "stat_query"),
+    ("tell me something unrelated", None, "ambiguous"),
+])
+def test_multi_position_player_recognition_and_no_qb_key(engine, query, expected_player, expected_intent):
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(query, engine, slm_model="off")
+    assert "qb" not in parsed, f"'qb' field must not be present in parsed intent for query: {query}"
+    assert "player" in parsed, f"'player' field must be present in parsed intent for query: {query}"
+    assert parsed["player"] == expected_player
+    assert parsed["intent"] == expected_intent
+
+
+def test_cli_play_subcommand_player_flag():
+    root = Path(__file__).resolve().parents[1]
+    res_player = subprocess.run(
+        [sys.executable, str(root / "nfl_stat_cli.py"), "play", "--player", "Worthy", "--season", "2025"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_player.returncode == 0, res_player.stderr
+    assert "SPECIFIC PLAY DIAGRAM" in res_player.stdout
+    assert "Worthy" in res_player.stdout or "X.Worthy" in res_player.stdout
+
+    # Test backward compatibility with --qb flag
+    res_qb = subprocess.run(
+        [sys.executable, str(root / "nfl_stat_cli.py"), "play", "--qb", "Mahomes", "--season", "2025"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_qb.returncode == 0, res_qb.stderr
+    assert "SPECIFIC PLAY DIAGRAM" in res_qb.stdout
+    assert "Mahomes" in res_qb.stdout or "P.Mahomes" in res_qb.stdout
+
