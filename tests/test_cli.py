@@ -1025,6 +1025,7 @@ def test_general_yac_stat_and_down_filter():
     assert p["intent"] == "stat_query"
     assert p["stat_name"] == "yards_after_catch"
     assert p["group_by"] == "player"
+    assert p["position"] is None, "Generic player queries must not default position to WR"
     assert p["filter_expr"] == "down == 1"
     assert p["limit"] == 5
 
@@ -1032,6 +1033,60 @@ def test_general_yac_stat_and_down_filter():
     assert "Yards After Catch (YAC)" in out
     assert "Screen Pass" not in out
     assert "A.St. Brown" in out
+
+
+def test_position_filtering_on_receiving_and_general_stats():
+    engine = cli.StatEngine()
+    bridge = cli.NFLDataBridge()
+    plays = [bridge._normalize_row(r, idx) for idx, r in enumerate(cli.SAMPLE_PBP_PLAYS, 1)]
+
+    # 1. WR positional query on 1st down YAC
+    p_wr = cli.NaturalLanguageStatAssistant.interpret_query(
+        "which wr has the most yac on 1st down?", engine, slm_model="off"
+    )
+    assert p_wr["position"] == "WR"
+    assert p_wr["group_by"] == "receiver"
+    out_wr = cli.strip_ansi(cli.handle_nl_query_result(p_wr, engine, plays))
+    assert "Pos: WR" in out_wr
+    assert "A.St. Brown" in out_wr
+    assert "R.Rice" in out_wr
+    assert "N.Harris" not in out_wr
+
+    # 2. RB positional query on 1st down YAC (must group by receiver, not rusher, and filter to RBs)
+    p_rb = cli.NaturalLanguageStatAssistant.interpret_query(
+        "which rb has the most yac on 1st down?", engine, slm_model="off"
+    )
+    assert p_rb["position"] == "RB"
+    assert p_rb["group_by"] == "receiver"
+    out_rb = cli.strip_ansi(cli.handle_nl_query_result(p_rb, engine, plays))
+    assert "Pos: RB" in out_rb
+    assert "N.Harris" in out_rb
+    assert "A.St. Brown" not in out_rb
+    assert "R.Rice" not in out_rb
+
+    # 3. TE positional query on YAC
+    p_te = cli.NaturalLanguageStatAssistant.interpret_query(
+        "which te has the most yac?", engine, slm_model="off"
+    )
+    assert p_te["position"] == "TE"
+    assert p_te["group_by"] == "receiver"
+    out_te = cli.strip_ansi(cli.handle_nl_query_result(p_te, engine, plays))
+    assert "Pos: TE" in out_te
+    assert "T.Kelce" in out_te
+    assert "I.Likely" in out_te
+    assert "A.St. Brown" not in out_te
+    assert "N.Harris" not in out_te
+
+    # 4. evaluate_stat_leaderboard position parameter filtering
+    board_te = engine.evaluate_stat_leaderboard("yards_after_catch", plays, position="TE")
+    for r in board_te:
+        assert r["position"] == "TE"
+        assert r["entity"] in ("T.Kelce", "I.Likely")
+
+    board_rb = engine.evaluate_stat_leaderboard("yards_after_catch", plays, position="RB")
+    for r in board_rb:
+        assert r["position"] == "RB"
+        assert r["entity"] in ("J.Gibbs", "J.Cook", "N.Harris", "J.McKinnon")
 
     # 3. Special screen stats removed; screen is an attribute filter (is_screen == 1)
     assert "screen_yards_after_catch" not in engine.stats

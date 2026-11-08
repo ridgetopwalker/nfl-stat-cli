@@ -448,6 +448,248 @@ def find_coach_team(coach_name: str) -> Optional[Tuple[str, str, str]]:
                 return (team, name, role)
     return None
 
+
+# ---------------------------------------------------------------------------
+# Canonical Player Position Registry & Position Resolver
+# ---------------------------------------------------------------------------
+
+KNOWN_PLAYER_POSITIONS: Dict[str, str] = {
+    # Quarterbacks
+    "mahomes": "QB", "p.mahomes": "QB", "patrick mahomes": "QB",
+    "allen": "QB", "j.allen": "QB", "josh allen": "QB",
+    "jackson": "QB", "l.jackson": "QB", "lamar jackson": "QB",
+    "stroud": "QB", "c.stroud": "QB", "c.j. stroud": "QB",
+    "watson": "QB", "d.watson": "QB", "deshaun watson": "QB",
+    "fields": "QB", "j.fields": "QB", "justin fields": "QB",
+    "goff": "QB", "j.goff": "QB", "jared goff": "QB",
+    "purdy": "QB", "b.purdy": "QB", "brock purdy": "QB",
+    "burrow": "QB", "j.burrow": "QB", "joe burrow": "QB",
+    "hurts": "QB", "j.hurts": "QB", "jalen hurts": "QB",
+    "herbert": "QB", "j.herbert": "QB", "justin herbert": "QB",
+    "love": "QB", "j.love": "QB", "jordan love": "QB",
+    "prescott": "QB", "d.prescott": "QB", "dak prescott": "QB",
+    "stafford": "QB", "m.stafford": "QB", "matthew stafford": "QB",
+    "tagovailoa": "QB", "t.tagovailoa": "QB", "tua tagovailoa": "QB",
+    "daniels": "QB", "j.daniels": "QB", "jayden daniels": "QB",
+    "caleb williams": "QB", "c.williams": "QB",
+    "maye": "QB", "d.maye": "QB", "drake maye": "QB",
+    "nix": "QB", "b.nix": "QB", "bo nix": "QB",
+    "rodgers": "QB", "a.rodgers": "QB", "aaron rodgers": "QB",
+    "cousins": "QB", "k.cousins": "QB", "kirk cousins": "QB",
+    "murray": "QB", "k.murray": "QB", "kyler murray": "QB",
+    "lawrence": "QB", "t.lawrence": "QB", "trevor lawrence": "QB",
+    "levis": "QB", "w.levis": "QB", "will levis": "QB",
+    "young": "QB", "b.young": "QB", "bryce young": "QB",
+    "minshew": "QB", "g.minshew": "QB", "gardner minshew": "QB",
+    "brissett": "QB", "j.brissett": "QB",
+    "darnold": "QB", "s.darnold": "QB", "sam darnold": "QB",
+    "carr": "QB", "d.carr": "QB", "derek carr": "QB",
+    "o'connell": "QB", "devito": "QB", "ridder": "QB", "lance": "QB", "dalton": "QB",
+    "tannehill": "QB", "flacco": "QB", "j.flacco": "QB",
+    "russell wilson": "QB", "r.wilson": "QB",
+    "pickett": "QB", "trubisky": "QB", "winston": "QB", "lock": "QB", "rush": "QB",
+    "browning": "QB", "heinicke": "QB",
+
+    # Running backs
+    "warren": "RB", "j.warren": "RB", "jaylen warren": "RB",
+    "gibbs": "RB", "j.gibbs": "RB", "jahmyr gibbs": "RB",
+    "jeanty": "RB", "a.jeanty": "RB", "ashton jeanty": "RB",
+    "tuten": "RB", "b.tuten": "RB", "bhayshul tuten": "RB",
+    "cook": "RB", "j.cook": "RB", "james cook": "RB", "d.cook": "RB", "dalvin cook": "RB",
+    "henry": "RB", "d.henry": "RB", "derrick henry": "RB",
+    "barkley": "RB", "s.barkley": "RB", "saquon barkley": "RB",
+    "mccaffrey": "RB", "c.mccaffrey": "RB", "christian mccaffrey": "RB",
+    "taylor": "RB", "j.taylor": "RB", "jonathan taylor": "RB",
+    "kamara": "RB", "a.kamara": "RB", "alvin kamara": "RB",
+    "jacobs": "RB", "j.jacobs": "RB", "josh jacobs": "RB",
+    "hall": "RB", "b.hall": "RB", "breece hall": "RB",
+    "mixon": "RB", "j.mixon": "RB", "joe mixon": "RB",
+    "walker": "RB", "k.walker": "RB", "kenneth walker": "RB",
+    "pollard": "RB", "t.pollard": "RB", "tony pollard": "RB",
+    "bijan": "RB", "bijan robinson": "RB", "b.robinson": "RB",
+    "montgomery": "RB", "d.montgomery": "RB", "david montgomery": "RB",
+    "achane": "RB", "d.achane": "RB", "devon achane": "RB",
+    "kyren": "RB", "kyren williams": "RB", "k.williams": "RB",
+    "swift": "RB", "d.swift": "RB", "d'andre swift": "RB",
+    "conner": "RB", "j.conner": "RB", "james conner": "RB",
+    "mostert": "RB", "r.mostert": "RB", "raheem mostert": "RB",
+    "etienne": "RB", "t.etienne": "RB", "travis etienne": "RB",
+    "harris": "RB", "n.harris": "RB", "najee harris": "RB",
+    "stevenson": "RB", "r.stevenson": "RB", "rhamondre stevenson": "RB",
+    "charbonnet": "RB", "z.charbonnet": "RB", "zach charbonnet": "RB",
+    "dowdle": "RB", "r.dowdle": "RB", "rico dowdle": "RB",
+    "hubbard": "RB", "c.hubbard": "RB", "chuba hubbard": "RB",
+    "ford": "RB", "j.ford": "RB", "jerome ford": "RB",
+    "singletary": "RB", "d.singletary": "RB", "devin singletary": "RB",
+    "benson": "RB", "t.benson": "RB", "trey benson": "RB",
+    "corum": "RB", "b.corum": "RB", "blake corum": "RB",
+    "vidal": "RB", "k.vidal": "RB", "kimani vidal": "RB",
+    "guerendo": "RB", "i.guerendo": "RB", "isaac guerendo": "RB",
+    "mason": "RB", "j.mason": "RB", "jordan mason": "RB",
+    "ray davis": "RB", "r.davis": "RB",
+    "chubb": "RB", "n.chubb": "RB", "nick chubb": "RB",
+    "hunt": "RB", "k.hunt": "RB", "kareem hunt": "RB",
+    "mckinnon": "RB", "j.mckinnon": "RB", "jerick mckinnon": "RB",
+    "allgeier": "RB", "t.allgeier": "RB", "edwards-helaire": "RB",
+
+    # Tight ends
+    "fannin": "TE", "h.fannin": "TE", "harold fannin": "TE",
+    "kelce": "TE", "t.kelce": "TE", "travis kelce": "TE",
+    "kittle": "TE", "g.kittle": "TE", "george kittle": "TE",
+    "laporta": "TE", "s.laporta": "TE", "sam laporta": "TE",
+    "andrews": "TE", "m.andrews": "TE", "mark andrews": "TE",
+    "bowers": "TE", "b.bowers": "TE", "brock bowers": "TE",
+    "hockenson": "TE", "t.hockenson": "TE", "t.j. hockenson": "TE",
+    "goedert": "TE", "d.goedert": "TE", "dallas goedert": "TE",
+    "ferguson": "TE", "j.ferguson": "TE", "jake ferguson": "TE",
+    "njoku": "TE", "d.njoku": "TE", "david njoku": "TE",
+    "pitts": "TE", "k.pitts": "TE", "kyle pitts": "TE",
+    "kmet": "TE", "c.kmet": "TE", "cole kmet": "TE",
+    "kraft": "TE", "t.kraft": "TE", "tucker kraft": "TE",
+    "likely": "TE", "i.likely": "TE", "isaiah likely": "TE",
+    "otton": "TE", "c.otton": "TE", "cade otton": "TE",
+    "schultz": "TE", "d.schultz": "TE", "dalton schultz": "TE",
+    "engram": "TE", "e.engram": "TE", "evan engram": "TE",
+    "freiermuth": "TE", "p.freiermuth": "TE", "pat freiermuth": "TE",
+    "fant": "TE", "n.fant": "TE", "noah fant": "TE",
+    "gesicki": "TE", "m.gesicki": "TE", "mike gesicki": "TE",
+    "conklin": "TE", "t.conklin": "TE", "tyler conklin": "TE",
+    "mcbride": "TE", "t.mcbride": "TE", "trey mcbride": "TE",
+    "mayer": "TE", "m.mayer": "TE", "michael mayer": "TE",
+    "hunter henry": "TE", "h.henry": "TE",
+    "knox": "TE", "d.knox": "TE", "musgrave": "TE", "l.musgrave": "TE",
+    "dulcich": "TE", "sinnott": "TE", "sanders": "TE", "j.sanders": "TE",
+
+    # Wide receivers
+    "worthy": "WR", "x.worthy": "WR", "xavier worthy": "WR",
+    "jefferson": "WR", "j.jefferson": "WR", "justin jefferson": "WR",
+    "chase": "WR", "j.chase": "WR", "ja'marr chase": "WR",
+    "lamb": "WR", "c.lamb": "WR", "ceedee lamb": "WR",
+    "hill": "WR", "t.hill": "WR", "tyreek hill": "WR",
+    "st brown": "WR", "st. brown": "WR", "a.st brown": "WR", "a.st. brown": "WR", "amon-ra st. brown": "WR",
+    "adams": "WR", "d.adams": "WR", "davante adams": "WR",
+    "aiyuk": "WR", "b.aiyuk": "WR", "brandon aiyuk": "WR",
+    "samuel": "WR", "d.samuel": "WR", "deebo samuel": "WR", "c.samuel": "WR", "curtis samuel": "WR",
+    "diggs": "WR", "s.diggs": "WR", "stefon diggs": "WR",
+    "evans": "WR", "m.evans": "WR", "mike evans": "WR",
+    "collins": "WR", "n.collins": "WR", "nico collins": "WR",
+    "nacua": "WR", "p.nacua": "WR", "puka nacua": "WR",
+    "kupp": "WR", "c.kupp": "WR", "cooper kupp": "WR",
+    "moore": "WR", "d.moore": "WR", "dj moore": "WR",
+    "pickens": "WR", "g.pickens": "WR", "george pickens": "WR",
+    "metcalf": "WR", "d.metcalf": "WR", "dk metcalf": "WR",
+    "devonta smith": "WR", "d.smith": "WR",
+    "higgins": "WR", "t.higgins": "WR", "tee higgins": "WR",
+    "flowers": "WR", "z.flowers": "WR", "zay flowers": "WR",
+    "olave": "WR", "c.olave": "WR", "chris olave": "WR",
+    "london": "WR", "d.london": "WR", "drake london": "WR",
+    "reed": "WR", "j.reed": "WR", "jayden reed": "WR",
+    "rice": "WR", "r.rice": "WR", "rashee rice": "WR",
+    "tank dell": "WR", "t.dell": "WR",
+    "waddle": "WR", "j.waddle": "WR", "jaylen waddle": "WR",
+    "hopkins": "WR", "d.hopkins": "WR", "deandre hopkins": "WR",
+    "mclaurin": "WR", "t.mclaurin": "WR", "terry mclaurin": "WR",
+    "godwin": "WR", "c.godwin": "WR", "chris godwin": "WR",
+    "sutton": "WR", "c.sutton": "WR", "courtland sutton": "WR",
+    "ridley": "WR", "c.ridley": "WR", "calvin ridley": "WR",
+    "lockett": "WR", "t.lockett": "WR", "tyler lockett": "WR",
+    "shakir": "WR", "k.shakir": "WR", "khalil shakir": "WR",
+    "jeudy": "WR", "j.jeudy": "WR", "jerry jeudy": "WR",
+    "legette": "WR", "x.legette": "WR", "xavier legette": "WR",
+    "thomas": "WR", "b.thomas": "WR", "brian thomas": "WR",
+    "nabers": "WR", "m.nabers": "WR", "malik nabers": "WR",
+    "odunze": "WR", "r.odunze": "WR", "rome odunze": "WR",
+    "harrison": "WR", "m.harrison": "WR", "marvin harrison": "WR",
+    "downs": "WR", "j.downs": "WR", "josh downs": "WR",
+    "thielen": "WR", "a.thielen": "WR", "adam thielen": "WR",
+    "douglas": "WR", "d.douglas": "WR",
+    "meyers": "WR", "j.meyers": "WR", "jakobi meyers": "WR",
+    "palmer": "WR", "j.palmer": "WR", "joshua palmer": "WR",
+    "cooper": "WR", "a.cooper": "WR", "amari cooper": "WR",
+    "mcconkey": "WR", "l.mcconkey": "WR", "ladd mcconkey": "WR",
+    "lazard": "WR", "a.lazard": "WR", "allen lazard": "WR",
+    "slayton": "WR", "d.slayton": "WR", "darius slayton": "WR",
+    "washington": "WR", "p.washington": "WR", "parker washington": "WR",
+    "wester": "WR", "l.wester": "WR", "lajohntay wester": "WR",
+    "mitchell": "WR", "a.mitchell": "WR",
+    "coleman": "WR", "k.coleman": "WR",
+    "garrett wilson": "WR", "g.wilson": "WR",
+    "gabe davis": "WR", "g.davis": "WR",
+    "bateman": "WR", "r.bateman": "WR", "mooney": "WR", "kirk": "WR", "pittman": "WR",
+
+    # Specialists (K/P)
+    "butker": "K", "h.butker": "K", "tucker": "K", "j.tucker": "K",
+    "boswell": "K", "c.boswell": "K", "moody": "K", "j.moody": "K",
+    "bass": "K", "t.bass": "K", "mcpherson": "K", "e.mcpherson": "K",
+    "dicker": "K", "c.dicker": "K", "aubrey": "K", "b.aubrey": "K",
+    "koo": "K", "folk": "K", "prater": "K", "fairbairn": "K", "gay": "K", "santoso": "K",
+    "townsend": "P", "t.townsend": "P", "stonehouse": "P", "r.stonehouse": "P",
+    "cole": "P", "a.cole": "P", "bojorquez": "P", "dixon": "P", "gillikin": "P", "fox": "P", "wishnowsky": "P",
+
+    # Defensive players
+    "parsons": "DEF", "m.parsons": "DEF", "watt": "DEF", "t.watt": "DEF",
+    "bosa": "DEF", "n.bosa": "DEF", "j.bosa": "DEF",
+    "garrett": "DEF", "m.garrett": "DEF", "crosby": "DEF", "m.crosby": "DEF",
+    "hutchinson": "DEF", "a.hutchinson": "DEF", "surtain": "DEF", "p.surtain": "DEF",
+    "gardner": "DEF", "s.gardner": "DEF", "hamilton": "DEF", "k.hamilton": "DEF",
+    "warner": "DEF", "f.warner": "DEF", "hunter": "DEF", "sweat": "DEF",
+    "chris jones": "DEF", "c.jones": "DEF", "donald": "DEF", "mack": "DEF", "queen": "DEF",
+    "winfield": "DEF", "kerby": "DEF", "branch": "DEF", "bland": "DEF",
+    "roquan": "DEF", "sneed": "DEF", "bowman": "DEF", "burns": "DEF", "thibodeaux": "DEF",
+}
+
+
+def get_player_position(player_name: str, plays: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+    """
+    Resolve a player's official football position (QB, RB, WR, TE, K, P, DEF).
+    Looks up in the canonical registry, matches play-by-play row position attributes,
+    or falls back to action-based inference.
+    """
+    if not player_name:
+        return None
+    raw = str(player_name).strip()
+    p_low = raw.lower()
+
+    # 1. Exact match in canonical registry
+    if p_low in KNOWN_PLAYER_POSITIONS:
+        return KNOWN_PLAYER_POSITIONS[p_low]
+
+    # Clean leading initials/periods (e.g. "J.Warren" -> "warren", "X. Worthy" -> "worthy")
+    cleaned = re.sub(r"^[a-z]\.\s*", "", p_low)
+    if cleaned in KNOWN_PLAYER_POSITIONS:
+        return KNOWN_PLAYER_POSITIONS[cleaned]
+
+    parts = p_low.replace(".", " ").split()
+    if len(parts) > 1 and parts[-1] in KNOWN_PLAYER_POSITIONS:
+        return KNOWN_PLAYER_POSITIONS[parts[-1]]
+
+    # 2. Check play rows if plays are provided
+    if plays:
+        for p in plays:
+            if raw == p.get("receiver_player_name") or p_low in str(p.get("receiver_player_name", "")).lower():
+                pos = str(p.get("receiver_position") or p.get("position") or p.get("player_position") or "").strip().upper()
+                if pos:
+                    return pos
+            if raw == p.get("rusher_player_name") or p_low in str(p.get("rusher_player_name", "")).lower():
+                pos = str(p.get("rusher_position") or p.get("position") or p.get("player_position") or "").strip().upper()
+                if pos:
+                    return pos
+            if raw == p.get("qb_name") or p_low in str(p.get("qb_name", "")).lower():
+                return "QB"
+
+        # 3. Usage-based heuristic from play volume
+        rec_count = sum(1 for p in plays if raw == p.get("receiver_player_name"))
+        rush_count = sum(1 for p in plays if raw == p.get("rusher_player_name"))
+        pass_count = sum(1 for p in plays if raw == p.get("qb_name") or raw == p.get("passer_player_name"))
+        if pass_count > 0:
+            return "QB"
+        if rush_count > rec_count:
+            return "RB"
+        if rec_count > 0:
+            return "WR"
+
+    return None
+
 SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
     # KC (AFC) - Patrick Mahomes
     {"play_id": 101, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "KC", "defteam": "BAL", "conf": "AFC",
@@ -1043,6 +1285,25 @@ class NFLDataBridge:
             rusher_name = qb_name
         explicit_player = _safe_str(r.get("player_name"), "")
         skill_player = explicit_player or receiver_name or rusher_name or qb_name or kicker_name or punter_name
+
+        receiver_pos = _safe_str(r.get("receiver_position") or r.get("receiver_pos"), "")
+        rusher_pos = _safe_str(r.get("rusher_position") or r.get("rusher_pos"), "")
+        passer_pos = _safe_str(r.get("passer_position") or r.get("passer_pos"), "")
+        explicit_pos = _safe_str(r.get("player_position") or r.get("position") or r.get("pos"), "")
+
+        if receiver_name and not receiver_pos:
+            receiver_pos = get_player_position(receiver_name) or ""
+        if rusher_name and not rusher_pos:
+            rusher_pos = get_player_position(rusher_name) or ""
+        if qb_name and not passer_pos:
+            passer_pos = "QB"
+        if skill_player and not explicit_pos:
+            explicit_pos = receiver_pos if (skill_player == receiver_name and receiver_pos) else (
+                rusher_pos if (skill_player == rusher_name and rusher_pos) else (
+                    passer_pos if (skill_player == qb_name and passer_pos) else (get_player_position(skill_player) or "")
+                )
+            )
+
         home_score = _safe_int(r.get("home_score"), 0)
         away_score = _safe_int(r.get("away_score"), 0)
         score_diff = _safe_float(r.get("score_differential"), float(abs(home_score - away_score)))
@@ -1179,6 +1440,11 @@ class NFLDataBridge:
             "kicker_player_name": kicker_name,
             "punter_player_name": punter_name,
             "player_name": skill_player,
+            "receiver_position": receiver_pos,
+            "rusher_position": rusher_pos,
+            "passer_position": passer_pos,
+            "player_position": explicit_pos,
+            "position": explicit_pos,
             "coach": coach,
             "head_coach": coach,
             "oc": oc,
@@ -2694,6 +2960,7 @@ class StatEngine:
         division: Optional[str] = None,
         week: Optional[int] = None,
         qtr: Optional[int] = None,
+        position: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Evaluate a traditional or custom stat across entities and return a sorted leaderboard."""
         if stat_name not in self.stats:
@@ -2739,8 +3006,19 @@ class StatEngine:
                 continue
             groups.setdefault(gval, []).append(p)
 
+        pos_target = position.upper() if position else None
+        is_player_group = (
+            group_col in ("player", "rusher", "receiver", "qb")
+            or key_field in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name", "penalty_player_name")
+        )
+
         rows: List[Dict[str, Any]] = []
         for gval, gplays in groups.items():
+            ent_pos = get_player_position(gval, gplays) or ""
+            if pos_target and is_player_group:
+                if ent_pos and ent_pos != pos_target:
+                    continue
+
             metrics = self.evaluate_all_metrics_for_group(gplays)
             sample_play = max(gplays, key=lambda x: float(x.get("yards_gained", 0.0)))
             mw = int(round(metrics.get("qb_meaningful_win", 0.0)))
@@ -2762,6 +3040,7 @@ class StatEngine:
                 "entity": gval,
                 "team": ent_team,
                 "conf": ent_conf,
+                "position": ent_pos,
                 "value": round(val, 2),
                 "plays": int(metrics["plays"]),
                 "games_played": gp,
@@ -3884,18 +4163,18 @@ class NaturalLanguageStatAssistant:
         "browning", "heinicke",
         # Running backs
         "gibbs", "cook", "henry", "barkley", "mccaffrey", "taylor", "kamara", "jacobs", "hall",
-        "mixon", "walker", "pollard", "bijan", "robinson", "montgomery", "achane", "kyren",
-        "swift", "conner", "mostert", "etienne", "harris", "stevenson", "charbonnet", "dowdle",
-        "hubbard", "ford", "singletary", "benson", "corum", "vidal", "guerendo", "mason",
+        "warren", "jeanty", "tuten", "mixon", "walker", "pollard", "bijan", "robinson", "montgomery",
+        "achane", "kyren", "swift", "conner", "mostert", "etienne", "harris", "stevenson", "charbonnet",
+        "dowdle", "hubbard", "ford", "singletary", "benson", "corum", "vidal", "guerendo", "mason",
         # Wide receivers
         "worthy", "jefferson", "chase", "lamb", "hill", "st brown", "st. brown", "adams", "aiyuk",
         "samuel", "diggs", "evans", "collins", "nacua", "kupp", "moore", "pickens", "metcalf",
         "smith", "higgins", "flowers", "olave", "london", "reed", "rice", "dell", "waddle",
         "hopkins", "mclaurin", "godwin", "sutton", "ridley", "lockett", "shakir", "jeudy",
         "legette", "thomas", "nabers", "odunze", "harrison", "downs", "thielen", "douglas",
-        "meyers", "palmer", "cooper", "mcconkey", "lazard", "slayton",
+        "meyers", "palmer", "cooper", "mcconkey", "lazard", "slayton", "washington", "wester",
         # Tight ends
-        "kelce", "kittle", "laporta", "andrews", "bowers", "hockenson", "goedert", "ferguson",
+        "fannin", "kelce", "kittle", "laporta", "andrews", "bowers", "hockenson", "goedert", "ferguson",
         "njoku", "pitts", "kmet", "kraft", "likely", "otton", "schultz", "engram", "freiermuth",
         "fant", "gesicki", "conklin",
         # Specialists (K/P)
@@ -4178,20 +4457,30 @@ class NaturalLanguageStatAssistant:
 
         # 4. Position detection
         position: Optional[str] = None
-        if re.search(r"\b(?:quarterback|quarterbacks|passer|passers|passing|pass|qb|qbs)\b", ql):
+        has_generic_player_prompt = any(w in ql for w in ("which player", "what player", "who is the player", "per player", "by player"))
+        if re.search(r"\b(?:quarterback|quarterbacks|qb|qbs)\b", ql):
             position = "QB"
-        elif re.search(r"\b(?:running\s*back|running\s*backs|rusher|rushers|rushing|rush|rb|rbs|halfback|tailback)\b", ql):
+        elif re.search(r"\b(?:running\s*back|running\s*backs|rb|rbs|halfback|tailback)\b", ql):
             position = "RB"
-        elif re.search(r"\b(?:wide\s*receiver|wide\s*receivers|wr|wrs|wideout|wideouts|receiving|receiver)\b", ql):
+        elif re.search(r"\b(?:wide\s*receiver|wide\s*receivers|wr|wrs|wideout|wideouts)\b", ql):
             position = "WR"
         elif re.search(r"\b(?:tight\s*end|tight\s*ends|te|tes)\b", ql):
             position = "TE"
-        elif re.search(r"\b(?:kicker|kickers|placekicker|pk|kicking)\b", ql):
+        elif re.search(r"\b(?:kicker|kickers|placekicker|pk)\b", ql):
             position = "K"
-        elif re.search(r"\b(?:punter|punters|punting)\b", ql):
+        elif re.search(r"\b(?:punter|punters)\b", ql):
             position = "P"
         elif re.search(r"\b(?:defense|defensive|pass\s*rusher|edge\s*rusher|cornerback|safety|linebacker|def)\b", ql):
             position = "DEF"
+        elif not has_generic_player_prompt:
+            if re.search(r"\b(?:passer|passers|passing|pass)\b", ql):
+                position = "QB"
+            elif re.search(r"\b(?:rusher|rushers|rushing|rush)\b", ql):
+                position = "RB"
+            elif re.search(r"\b(?:kicking)\b", ql):
+                position = "K"
+            elif re.search(r"\b(?:punting)\b", ql):
+                position = "P"
 
         # 5. Situation / Down & Distance
         filter_parts: List[str] = []
@@ -4673,6 +4962,11 @@ class NaturalLanguageStatAssistant:
         elif player_filter and not group_override:
             group_override = "player" if "player" in GROUP_BY_COLUMN_MAP else "qb"
 
+        receiving_stats = {"yards_after_catch", "yac_over_expected", "receptions", "targets", "receiving_yards", "yac_per_reception"}
+        if matched_stat in receiving_stats or matched_group == "receiver":
+            if group_override not in ("player", "receiver"):
+                group_override = "receiver"
+
         if matched_stat in ("timeouts", "timeouts_used", "timeouts_called"):
             if "team" in ql:
                 group_override = "team"
@@ -4694,13 +4988,11 @@ class NaturalLanguageStatAssistant:
             matched_group = "rusher"
             group_override = "rusher"
 
-        if not position:
+        if not position and not has_generic_player_prompt:
             if matched_stat in ("rushing_yards", "rush_touchdowns", "yards_per_rush"):
                 position = "RB"
             elif matched_stat in ("passing_yards", "passer_rating", "pass_touchdowns", "any_a", "completion_pct", "yards_per_attempt", "qb_impact_score"):
                 position = "QB"
-            elif matched_stat in ("yac_over_expected", "yards_after_catch"):
-                position = "WR"
 
         is_leader_query = any(w in ql for w in (
             "who had the most", "who has the most", "which player has the most", "which qb has the most",
@@ -4780,6 +5072,7 @@ def render_general_stat_view(
     week: Optional[int] = None,
     qtr: Optional[int] = None,
     limit: Optional[int] = None,
+    position: Optional[str] = None,
 ) -> str:
     if stat_name not in engine.stats:
         matches = difflib.get_close_matches(stat_name, list(engine.stats.keys()), n=3, cutoff=0.5)
@@ -4788,7 +5081,7 @@ def render_general_stat_view(
     sdef = engine.stats[stat_name]
     group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
     board = engine.evaluate_stat_leaderboard(
-        stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr
+        stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr, position=position
     )
     display_board = board[:limit] if (limit and limit > 0) else board
 
@@ -4812,6 +5105,8 @@ def render_general_stat_view(
         sub_desc_parts = [str(season)]
         if limit and len(board) > limit:
             sub_desc_parts.append(f"Top {len(display_board)}")
+        if position:
+            sub_desc_parts.append(f"Pos: {position.upper()}")
         if conf:
             sub_desc_parts.append(conf)
         if division:
@@ -5443,6 +5738,7 @@ def handle_nl_query_result(
         week=week,
         qtr=qtr,
         limit=parsed.get("limit"),
+        position=parsed.get("position"),
     )
 
 
@@ -7842,6 +8138,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     stat_p.add_argument("--group-by", choices=list(GROUP_BY_COLUMN_MAP.keys()), default=None, help="Override grouping dimension")
     stat_p.add_argument("--filter", default="", help="Additional play filter expression (e.g. 'down == 3' or 'is_screen == 1')")
     stat_p.add_argument("--limit", type=int, default=None, help="Limit number of leaderboard rows to show (e.g. --limit 5)")
+    stat_p.add_argument("--position", "--pos", default=None, help="Filter leaderboard to a specific player position (e.g. QB, RB, WR, TE, K, P)")
 
     play_p = sub.add_parser("play", parents=[common], help="Find and diagram a specific play on the ASCII gridiron (supports behind-offense, behind-defense, sideline)")
     play_p.add_argument("--play-id", type=int, default=None, help="Specific play_id to render")
@@ -7994,6 +8291,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 view_mode=args.view,
                 camera=resolved_camera,
                 limit=getattr(args, "limit", None),
+                position=getattr(args, "position", None),
             ))
         elif cmd == "team":
             resolved_t = resolve_team_abbr(args.team_name) or args.team_name or "KC"
