@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import csv
 import datetime as dt
 import difflib
@@ -1066,7 +1067,7 @@ class StatDefinition:
 
 
 DEFAULT_STATS: Dict[str, StatDefinition] = {
-    # Traditional stats (available as building blocks for any custom stat)
+    # Traditional stats (built-in baseline and advanced NFL rate/volume metrics)
     "yards_per_play": StatDefinition(
         name="yards_per_play",
         title="Yards Per Play (YPP)",
@@ -1111,6 +1112,28 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="rtg",
         dependencies=["nfl_passer_rating"],
     ),
+    "completion_pct": StatDefinition(
+        name="completion_pct",
+        title="Completion Percentage (Comp %)",
+        category="traditional",
+        group_by="qb",
+        formula="(completions / nz(pass_attempts, 1)) * 100.0",
+        description="Percentage of pass attempts completed.",
+        calculation_explained="Completions divided by official pass attempts (excluding sacks) multiplied by 100.",
+        unit="%",
+        dependencies=["completions", "pass_attempts"],
+    ),
+    "yards_per_attempt": StatDefinition(
+        name="yards_per_attempt",
+        title="Yards Per Pass Attempt (Y/A)",
+        category="traditional",
+        group_by="qb",
+        formula="passing_yards / nz(pass_attempts, 1)",
+        description="Average passing yards gained per dropback pass attempt.",
+        calculation_explained="Passing yards gained divided by official pass attempts.",
+        unit="yds/att",
+        dependencies=["passing_yards", "pass_attempts"],
+    ),
     "any_a": StatDefinition(
         name="any_a",
         title="Adjusted Net Yards / Attempt (ANY/A)",
@@ -1122,6 +1145,17 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="ANY/A",
         dependencies=["passing_yards", "touchdowns", "interceptions", "sack_yards_estimated", "pass_attempts", "sacks"],
     ),
+    "yards_per_rush": StatDefinition(
+        name="yards_per_rush",
+        title="Yards Per Rush Attempt (YPC)",
+        category="traditional",
+        group_by="rusher",
+        formula="rushing_yards / nz(rush_attempts, 1)",
+        description="Average rushing yards gained per designed run attempt.",
+        calculation_explained="Rushing yards divided by rushing attempts.",
+        unit="yds/rush",
+        dependencies=["rushing_yards", "rush_attempts"],
+    ),
     "explosive_play_rate": StatDefinition(
         name="explosive_play_rate",
         title="Explosive Play Rate (20+ Yds %)",
@@ -1132,6 +1166,61 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         calculation_explained="Counts plays with yards_gained >= 20 divided by total plays * 100.",
         unit="%",
         dependencies=["explosive_plays", "plays"],
+    ),
+    "first_down_rate": StatDefinition(
+        name="first_down_rate",
+        title="First Down Conversion Rate (%)",
+        category="traditional",
+        group_by="team",
+        formula="(first_downs / plays) * 100.0",
+        description="Percentage of offensive plays that result in a first down or touchdown.",
+        calculation_explained="Counts plays earning first downs divided by total plays multiplied by 100.",
+        unit="%",
+        dependencies=["first_downs", "plays"],
+    ),
+    "touchdown_rate": StatDefinition(
+        name="touchdown_rate",
+        title="Touchdown Rate (%)",
+        category="traditional",
+        group_by="team",
+        formula="(touchdowns / plays) * 100.0",
+        description="Percentage of offensive plays resulting in a touchdown.",
+        calculation_explained="Touchdowns scored divided by total offensive snaps multiplied by 100.",
+        unit="%",
+        dependencies=["touchdowns", "plays"],
+    ),
+    "interception_rate": StatDefinition(
+        name="interception_rate",
+        title="Interception Rate (INT %)",
+        category="traditional",
+        group_by="qb",
+        formula="(interceptions / nz(pass_attempts, 1)) * 100.0",
+        description="Percentage of pass attempts intercepted by the defense.",
+        calculation_explained="Interceptions thrown divided by total pass attempts multiplied by 100.",
+        unit="%",
+        dependencies=["interceptions", "pass_attempts"],
+    ),
+    "sack_rate": StatDefinition(
+        name="sack_rate",
+        title="Sack Rate (%)",
+        category="traditional",
+        group_by="qb",
+        formula="(sacks / nz(pass_attempts + sacks, 1)) * 100.0",
+        description="Percentage of pass dropbacks resulting in a quarterback sack.",
+        calculation_explained="Sacks divided by total dropbacks (pass attempts + sacks) multiplied by 100.",
+        unit="%",
+        dependencies=["sacks", "pass_attempts"],
+    ),
+    "turnover_rate": StatDefinition(
+        name="turnover_rate",
+        title="Turnover Rate (%)",
+        category="traditional",
+        group_by="team",
+        formula="(turnovers / plays) * 100.0",
+        description="Percentage of offensive plays that end in a turnover (interception or lost fumble).",
+        calculation_explained="Turnovers (interceptions + fumbles lost) divided by total snaps multiplied by 100.",
+        unit="%",
+        dependencies=["turnovers", "plays"],
     ),
     "screen_yards_after_catch": StatDefinition(
         name="screen_yards_after_catch",
@@ -1156,7 +1245,10 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="yds",
         dependencies=["total_yac", "total_xyac", "completions"],
     ),
-    # Composable Custom Stats (built using the exact same engine capabilities available to the user!)
+}
+
+# Example / Showcase Custom Stats (demonstrating how custom stats work without polluting a fresh install)
+EXAMPLE_CUSTOM_STATS: Dict[str, StatDefinition] = {
     "qb_impact_score": StatDefinition(
         name="qb_impact_score",
         title="QB Game Impact Score (0-100)",
@@ -1421,9 +1513,6 @@ class StatEngine:
                         )
                     except Exception:
                         continue
-                for core_game_stat in ("qb_meaningful_win", "qb_meaningful_loss"):
-                    if core_game_stat in self.stats and "win_rate" in self.stats[core_game_stat].formula:
-                        self.stats[core_game_stat] = DEFAULT_STATS[core_game_stat]
             except Exception:
                 try:
                     backup = self.custom_stats_file.with_suffix(".json.corrupt")
@@ -1445,7 +1534,7 @@ class StatEngine:
         custom_only = {
             k: asdict(v)
             for k, v in self.stats.items()
-            if v.category == "custom" and (k not in DEFAULT_STATS or v.formula != DEFAULT_STATS[k].formula or v.filter_expr != DEFAULT_STATS[k].filter_expr)
+            if v.category == "custom"
         }
         payload = {
             "schema_version": "2.0",
@@ -1570,6 +1659,47 @@ class StatEngine:
             self.stat_page["pinned_stats"].append(clean_name)
         self.save_state()
         return stat_def
+
+    def delete_custom_stat(self, name: str) -> StatDefinition:
+        """
+        Delete a user-created custom stat definition.
+        Built-in traditional stats cannot be deleted.
+        Removes the stat from self.stats, unpins from stat_page, and cleans lookback history.
+        """
+        clean_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.strip().lower()).strip("_")
+        if clean_name not in self.stats:
+            for k, v in self.stats.items():
+                if v.title.lower() == name.strip().lower():
+                    clean_name = k
+                    break
+        if clean_name not in self.stats:
+            matches = difflib.get_close_matches(clean_name, [k for k, v in self.stats.items() if v.category == "custom"], n=3, cutoff=0.5)
+            hint = f" Did you mean: {', '.join(matches)}?" if matches else ""
+            raise KeyError(f"Stat '{name}' is not registered.{hint}")
+
+        target = self.stats[clean_name]
+        if target.category == "traditional":
+            raise ValueError(f"Cannot delete built-in traditional stat '{target.name}' ({target.title}). Only custom stats can be deleted.")
+
+        dependent_stats = [
+            k for k, v in self.stats.items()
+            if v.category == "custom" and k != clean_name and clean_name in v.dependencies
+        ]
+        if dependent_stats:
+            raise ValueError(
+                f"Cannot delete custom stat '{clean_name}' because other custom stats depend on it: {', '.join(dependent_stats)}. "
+                f"Please delete dependent stats first."
+            )
+
+        del self.stats[clean_name]
+
+        if clean_name in self.stat_page.get("pinned_stats", []):
+            self.stat_page["pinned_stats"].remove(clean_name)
+        if "lookback_history" in self.stat_page and clean_name in self.stat_page["lookback_history"]:
+            del self.stat_page["lookback_history"][clean_name]
+
+        self.save_state()
+        return target
 
     def export_custom_stats_json(self, target_path: Path, include_traditional: bool = False) -> Path:
         exported = {
@@ -3132,7 +3262,7 @@ class NaturalLanguageStatAssistant:
     @classmethod
     def _validate_slm_response(cls, parsed: Dict[str, Any], engine: Optional[StatEngine]) -> Optional[Dict[str, Any]]:
         intent = str(parsed.get("intent") or "").strip().lower()
-        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report", "team_drilldown", "player_drilldown"):
+        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report", "team_drilldown", "player_drilldown", "stat_page", "delete_stat"):
             return None
         parsed["intent"] = intent
         if "show_field" in parsed:
@@ -3291,6 +3421,20 @@ class NaturalLanguageStatAssistant:
                 "player": None,
                 "show_field": False,
                 "explanation": "Display Saved Stat Page with historical lookback and forward tracking.",
+            }
+
+        # Check if user is asking to DELETE a custom stat
+        del_m = re.match(r"^(?:delete|remove|drop)\s+(?:custom\s+)?stat\s+([a-zA-Z0-9_]+)$", ql)
+        if del_m:
+            return {
+                "intent": "delete_stat",
+                "stat_name": del_m.group(1),
+                "season": season,
+                "conf": None,
+                "team": None,
+                "player": None,
+                "show_field": False,
+                "explanation": f"Delete custom stat `{del_m.group(1)}`.",
             }
 
         # 1. Check if user is asking to CREATE a custom stat
@@ -3643,10 +3787,18 @@ def render_qb_meaningful_wins_view(
     camera: str = "behind-offense",
     team: Optional[str] = None,
 ) -> str:
-    board = engine.evaluate_stat_leaderboard("qb_impact_score", plays, conf=conf, team=team, group_override="qb")
-    sdef_win = engine.stats["qb_meaningful_win"]
-    sdef_loss = engine.stats["qb_meaningful_loss"]
-    sdef_imp = engine.stats["qb_impact_score"]
+    eval_engine = engine
+    needed_example_stats = [k for k in ("qb_impact_score", "qb_meaningful_win", "qb_meaningful_loss") if k not in engine.stats]
+    if needed_example_stats:
+        eval_engine = copy.copy(engine)
+        eval_engine.stats = dict(engine.stats)
+        for k in needed_example_stats:
+            eval_engine.stats[k] = EXAMPLE_CUSTOM_STATS[k]
+
+    board = eval_engine.evaluate_stat_leaderboard("qb_impact_score", plays, conf=conf, team=team, group_override="qb")
+    sdef_win = eval_engine.stats["qb_meaningful_win"]
+    sdef_loss = eval_engine.stats["qb_meaningful_loss"]
+    sdef_imp = eval_engine.stats["qb_impact_score"]
 
     out: List[str] = []
     if _should_show_table(view_mode, is_play_query=False):
@@ -3766,9 +3918,15 @@ def render_screen_pass_view(
     team: Optional[str] = None,
 ) -> str:
     screen_plays = [p for p in plays if int(p.get("is_screen", 0)) == 1 and (not conf or p.get("conf") == conf) and (not team or str(p.get("posteam", "")).upper() == team.upper())]
-    board = engine.evaluate_stat_leaderboard("screen_effectiveness_index", screen_plays, conf=conf, team=team, group_override="team")
-    sdef_yac = engine.stats["screen_yards_after_catch"]
-    sdef_idx = engine.stats["screen_effectiveness_index"]
+    eval_engine = engine
+    if "screen_effectiveness_index" not in engine.stats:
+        eval_engine = copy.copy(engine)
+        eval_engine.stats = dict(engine.stats)
+        eval_engine.stats["screen_effectiveness_index"] = EXAMPLE_CUSTOM_STATS["screen_effectiveness_index"]
+
+    board = eval_engine.evaluate_stat_leaderboard("screen_effectiveness_index", screen_plays, conf=conf, team=team, group_override="team")
+    sdef_yac = eval_engine.stats["screen_yards_after_catch"]
+    sdef_idx = eval_engine.stats["screen_effectiveness_index"]
 
     out: List[str] = []
     if _should_show_table(view_mode, is_play_query=False):
@@ -3982,6 +4140,14 @@ def handle_nl_query_result(
     intent = parsed.get("intent", "stat_query")
     if intent in ("stat_page", "page"):
         return header + "\n" + render_stat_page(engine, all_plays)
+
+    if intent == "delete_stat":
+        stat_to_del = parsed.get("stat_name", "")
+        try:
+            deleted = engine.delete_custom_stat(stat_to_del)
+            return header + f"\n  {C.GREEN}✔ Successfully deleted custom stat `{deleted.name}` ({deleted.title}).{C.RESET}"
+        except (KeyError, ValueError) as err:
+            return header + f"\n  {C.RED}✖ {err}{C.RESET}"
 
     if intent == "team_drilldown":
         resolved_t = resolve_team_abbr(team) or team or "KC"
@@ -5757,24 +5923,28 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
 STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
     (
         "🏈 Quarterback & Passing Analytics",
-        "Passer rating, efficiency, and impact metrics evaluated at season and per-game scopes.",
+        "Passer rating, accuracy, yardage efficiency, and dropback impact metrics.",
         [
             "passer_rating",
+            "completion_pct",
+            "yards_per_attempt",
             "any_a",
             "epa_per_play",
-            "qb_impact_score",
-            "qb_meaningful_win",
-            "qb_meaningful_loss",
-            "qb_quality_start",
+            "touchdown_rate",
+            "interception_rate",
+            "sack_rate",
         ],
     ),
     (
         "⚡ Team & Offensive Efficiency",
-        "Drive-level, per-snap, and situational conversion efficiency across all plays.",
+        "Drive-level, per-snap, conversion, and ground-game efficiency across all plays.",
         [
             "yards_per_play",
+            "yards_per_rush",
             "success_rate_pct",
+            "first_down_rate",
             "explosive_play_rate",
+            "turnover_rate",
         ],
     ),
     (
@@ -5783,7 +5953,6 @@ STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
         [
             "screen_yards_after_catch",
             "yac_over_expected",
-            "screen_effectiveness_index",
         ],
     ),
 ]
@@ -5857,6 +6026,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/player{C.RESET} [name]                  Drill down into player passing, rushing, and receiving stats
     {C.BOLD}{C.CYAN}/stat{C.RESET} [stat_id]                 Evaluate any Traditional or Custom Stat leaderboard (Table only)
     {C.BOLD}{C.CYAN}/create{C.RESET}                         Launch the Composable Custom Stat Builder (Season / Game / Play scope)
+    {C.BOLD}{C.CYAN}/delete{C.RESET} [stat_id]                Delete a user-created custom stat (or list custom stats to delete)
     {C.BOLD}{C.CYAN}/play{C.RESET} [phase/query]             Interactive play explorer (pass/run concepts, generic chalkboards & drilldowns)
     {C.BOLD}{C.CYAN}/games{C.RESET} [week/team]             Browse games by team/week, view quarter play tables & step plays
     {C.BOLD}{C.CYAN}/camera{C.RESET} <offense|defense|side>  Set default camera angle for play diagrams
@@ -6004,6 +6174,37 @@ def interactive_tui(
                             print(render_general_stat_view(engine, s_plays, chosen_stat, season_val, conf=conf_arg, team=default_team, group_override=group_val, view_mode="table"))
                 elif cmd_token in ("/create", "/create-stat", "/new", "/build"):
                     interactive_custom_stat_wizard(engine, plays, season=active_season)
+                elif cmd_token in ("/delete", "/delete-stat", "/rm-stat", "/remove-stat"):
+                    custom_stats = [v for v in engine.stats.values() if v.category == "custom"]
+                    if not custom_stats:
+                        print(f"  {C.YELLOW}⚠ No custom stats currently exist to delete.{C.RESET}")
+                        print(f"  {C.DIM}All registered stats are built-in traditional stats (which cannot be deleted). Use `/create` to build custom stats.{C.RESET}")
+                        continue
+
+                    target_name = cmd_args[0].strip() if cmd_args else ""
+                    if not target_name:
+                        print(f"\n{C.BOLD}{C.RED}=== 🗑️  DELETE CUSTOM STAT ==={C.RESET}")
+                        print(f"  Currently registered custom stats ({len(custom_stats)}):")
+                        for idx, s in enumerate(custom_stats, 1):
+                            deps_str = f" [Depends on: {', '.join(s.dependencies)}]" if s.dependencies else ""
+                            print(f"    [{idx}] {C.BOLD}{C.GOLD}{s.name:<24}{C.RESET} ({s.title}){deps_str}")
+                        try:
+                            sel = prompt_input(f"\n  Select stat to delete [1-{len(custom_stats)}] or enter stat name (or 'c' to cancel): ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            continue
+                        if not sel or sel.lower() in ("c", "cancel", "q", "quit"):
+                            print(f"  {C.DIM}Deletion canceled.{C.RESET}")
+                            continue
+                        if sel.isdigit() and 1 <= int(sel) <= len(custom_stats):
+                            target_name = custom_stats[int(sel) - 1].name
+                        else:
+                            target_name = sel
+
+                    try:
+                        deleted = engine.delete_custom_stat(target_name)
+                        print(f"  {C.GREEN}✔ Successfully deleted custom stat `{deleted.name}` ({deleted.title}).{C.RESET}")
+                    except (KeyError, ValueError) as err:
+                        print(f"  {C.RED}✖ {err}{C.RESET}")
                 elif cmd_token in ("/team", "/team-stats", "/team-drilldown"):
                     if cmd_args:
                         t_raw = cmd_args[0]
@@ -6221,6 +6422,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     create_p.add_argument("--filter", default="", help="Optional filter expression (e.g. 'is_screen == 1')")
     create_p.add_argument("--unit", default="", help="Unit label")
 
+    del_p = sub.add_parser("delete-stat", parents=[common], help="Delete a user-created custom statistic")
+    del_p.add_argument("name", help="Name or title of custom stat to delete")
+
     sub.add_parser("stat-page", parents=[common], help="Display saved Stat Page with historical lookback and forward tracking")
 
     exp_p = sub.add_parser("export-stats", parents=[common], help="Export custom stats (with descriptions & formulas) to JSON")
@@ -6290,6 +6494,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(AsciiArtRenderer.banner())
             names = engine.import_custom_stats_json(Path(args.input))
             print(f"\n{C.GREEN}✔ Imported {len(names)} custom stats: {', '.join(names)}{C.RESET}")
+            return 0
+        if cmd == "delete-stat":
+            print(AsciiArtRenderer.banner())
+            deleted = engine.delete_custom_stat(args.name)
+            print(f"\n{C.GREEN}✔ Successfully deleted custom stat `{deleted.name}` ({deleted.title}).{C.RESET}")
             return 0
 
         if cmd == "ask":

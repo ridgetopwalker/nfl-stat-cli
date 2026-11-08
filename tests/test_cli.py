@@ -389,4 +389,142 @@ def test_nl_query_stat_page(engine):
     assert parsed_plain["intent"] == "stat_page"
 
 
+def test_fresh_install_has_zero_custom_stats(tmp_path):
+    fresh_engine = cli.StatEngine(storage_dir=tmp_path / "fresh")
+    custom_stats = [k for k, v in fresh_engine.stats.items() if v.category == "custom"]
+    assert len(custom_stats) == 0, f"Expected 0 custom stats on fresh install, got: {custom_stats}"
+    trad_stats = [k for k, v in fresh_engine.stats.items() if v.category == "traditional"]
+    assert len(trad_stats) >= 16
+    assert "yards_per_play" in trad_stats
+    assert "completion_pct" in trad_stats
+    assert "yards_per_attempt" in trad_stats
+    assert "yards_per_rush" in trad_stats
+
+
+def test_delete_custom_stat_success_and_cleanup(tmp_path):
+    test_engine = cli.StatEngine(storage_dir=tmp_path / "del_test")
+    test_engine.register_custom_stat(
+        name="test_del_stat",
+        title="Test Delete Stat",
+        group_by="qb",
+        formula="yards_per_play * 2.0",
+        description="To be deleted",
+        calculation_explained="YPP times 2",
+    )
+    assert "test_del_stat" in test_engine.stats
+    assert "test_del_stat" in test_engine.stat_page["pinned_stats"]
+
+    deleted = test_engine.delete_custom_stat("test_del_stat")
+    assert deleted.name == "test_del_stat"
+    assert "test_del_stat" not in test_engine.stats
+    assert "test_del_stat" not in test_engine.stat_page["pinned_stats"]
+
+    reloaded_engine = cli.StatEngine(storage_dir=tmp_path / "del_test")
+    assert "test_del_stat" not in reloaded_engine.stats
+
+
+def test_cannot_delete_traditional_stat(engine):
+    with pytest.raises(ValueError, match="Cannot delete built-in traditional stat"):
+        engine.delete_custom_stat("yards_per_play")
+
+
+def test_cannot_delete_stat_with_dependents(tmp_path):
+    test_engine = cli.StatEngine(storage_dir=tmp_path / "dep_test")
+    test_engine.register_custom_stat(
+        name="base_custom",
+        title="Base Custom",
+        group_by="qb",
+        formula="yards_per_play * 2.0",
+        description="Base stat",
+        calculation_explained="Base",
+    )
+    test_engine.register_custom_stat(
+        name="chained_custom",
+        title="Chained Custom",
+        group_by="qb",
+        formula="base_custom + 10.0",
+        description="Chained stat",
+        calculation_explained="Chained",
+    )
+    with pytest.raises(ValueError, match="other custom stats depend on it"):
+        test_engine.delete_custom_stat("base_custom")
+
+    test_engine.delete_custom_stat("chained_custom")
+    deleted_base = test_engine.delete_custom_stat("base_custom")
+    assert deleted_base.name == "base_custom"
+
+
+def test_interactive_tui_delete_stat(tmp_path):
+    input_text = "\n".join([
+        "/create",
+        "1",                    # Scratch
+        "tui_del_stat",         # Identifier
+        "TUI Delete Stat",      # Title
+        "qb",                   # Group by
+        "season",               # Scope
+        "",                     # Filter (none)
+        "yards_per_play * 3.0", # Formula
+        "pts",                  # Unit
+        "TUI test description", # Description
+        "TUI explanation",      # Explained
+        "/delete tui_del_stat", # Delete command
+        "quit",
+    ]) + "\n"
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "TUI Delete Stat" in res.stdout
+    assert "Successfully deleted custom stat `tui_del_stat`" in res.stdout
+
+
+def test_cli_delete_stat_subcommand(tmp_path):
+    export_json = tmp_path / "import_stat.json"
+    export_json.write_text(json.dumps({
+        "stats": {
+            "cli_del_stat": {
+                "name": "cli_del_stat",
+                "title": "CLI Delete Stat",
+                "group_by": "qb",
+                "formula": "yards_per_play + 1",
+                "description": "desc",
+                "calculation_explained": "expl",
+                "unit": "yds",
+                "filter_expr": "",
+                "scope": "season",
+                "agg": "formula",
+            }
+        }
+    }), encoding="utf-8")
+    res_imp = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "import-stats", "--input", str(export_json)],
+        capture_output=True,
+        text=True,
+    )
+    assert res_imp.returncode == 0, res_imp.stderr
+    assert "Imported 1 custom stats" in res_imp.stdout
+
+    res_del = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "delete-stat", "cli_del_stat"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_del.returncode == 0, res_del.stderr
+    assert "Successfully deleted custom stat `cli_del_stat`" in res_del.stdout
+
+
+def test_nl_query_delete_stat(engine):
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query("delete custom stat my_stat", engine, slm_model="off")
+    assert parsed["intent"] == "delete_stat"
+    assert parsed["stat_name"] == "my_stat"
+
+    parsed2 = cli.NaturalLanguageStatAssistant.interpret_query("remove stat test_stat", engine, slm_model="off")
+    assert parsed2["intent"] == "delete_stat"
+    assert parsed2["stat_name"] == "test_stat"
+
+
+
 
