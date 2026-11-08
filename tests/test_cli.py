@@ -877,6 +877,16 @@ def test_timeouts_data_and_nlp_queries():
     assert p_to_team["group_by"] == "team"
     assert p_to_team["limit"] == 5
 
+    # 6. NLP Query with quarter abbreviation typo: "which coach has called the most timeouts in the 4th qrt"
+    p_qtr = cli.NaturalLanguageStatAssistant.interpret_query("which coach has called the most timeouts in the 4th qrt", engine, slm_model="off")
+    assert p_qtr["intent"] == "stat_query"
+    assert p_qtr["stat_name"] == "timeouts"
+    assert p_qtr["group_by"] == "coach"
+    assert p_qtr["qtr"] == 4
+    assert p_qtr["limit"] == 5
+    out_qtr = cli.strip_ansi(cli.handle_nl_query_result(p_qtr, engine, plays))
+    assert "Q4" in out_qtr
+
 
 def test_coaching_staff_data_and_nlp_queries():
     engine = cli.StatEngine()
