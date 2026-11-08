@@ -3919,16 +3919,56 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:first\s+down|first\s+downs|1st\s+downs)\b", "first_downs", "team"),
         # Timeouts Used / Called
         (r"\b(?:timeouts?\s+used|timeouts?\s+called|used\s+(?:the\s+)?most\s+timeouts?|called\s+(?:the\s+)?most\s+timeouts?|call\s+(?:the\s+)?most\s+timeouts?|most\s+timeouts?|timeouts?|timeout)\b", "timeouts", "coach"),
+        # Penalty Yards in Favor / Drawn / Benefited
+        (
+            r"\b(?:(?:total\s+)?(?:yards|yardage|yds)\s+(?:in|of|from|on)\s+penalt(?:y|ies)\s+in\s+(?:their|its)?\s*favor)\b|"
+            r"\b(?:penalt(?:y|ies)\s+(?:yards|yardage|yds)\s+in\s+(?:their|its)?\s*favor)\b|"
+            r"\b(?:penalty\s+yards\s+drawn|opponent\s+penalty\s+yards|penalty\s+yardage\s+drawn|penalty\s+yardage\s+in\s+(?:their|its)?\s*favor)\b|"
+            r"\b(?:benefited\s+(?:the\s+most\s+)?(?:in|from)\s+penalt(?:y|ies)\s+yards)\b|"
+            r"\b(?:benefitted\s+(?:the\s+most\s+)?(?:in|from)\s+penalt(?:y|ies)\s+yards)\b|"
+            r"\b(?:penalty\s+yards\s+awarded|yards\s+from\s+opponent\s+penalties)\b",
+            "penalty_yards_drawn",
+            "team",
+        ),
         # Penalties in Favor / Drawn / Benefited
-        (r"\b(?:penalties\s+in\s+(?:their|its)?\s*favor|penalties\s+drawn|opponent\s+penalties|penalties\s+against\s+(?:their\s+)?opponents?|benefited\s+(?:the\s+most\s+)?from\s+penalties|benefitted\s+(?:the\s+most\s+)?from\s+penalties|penalties\s+awarded|penalties\s+in\s+favor)\b", "penalties_drawn", "team"),
-        (r"\b(?:penalty\s+yards\s+in\s+(?:their|its)?\s*favor|penalty\s+yards\s+drawn|opponent\s+penalty\s+yards|penalty\s+yardage\s+in\s+(?:their|its)?\s*favor)\b", "penalty_yards_drawn", "team"),
+        (
+            r"\b(?:penalties\s+in\s+(?:their|its)?\s*favor|penalties\s+drawn|opponent\s+penalties|penalties\s+against\s+(?:their\s+)?opponents?)\b|"
+            r"\b(?:benefited\s+(?:the\s+most\s+)?from\s+penalties|benefitted\s+(?:the\s+most\s+)?from\s+penalties)\b|"
+            r"\b(?:penalties\s+awarded|penalties\s+in\s+favor)\b",
+            "penalties_drawn",
+            "team",
+        ),
+        # Net Penalty Yards
+        (
+            r"\b(?:net\s+(?:total\s+)?(?:penalty\s+yards|penalty\s+yardage|yards\s+in\s+penalties))\b|"
+            r"\b(?:penalty\s+yards\s+differential|penalty\s+yards\s+margin)\b",
+            "net_penalty_yards",
+            "team",
+        ),
         # Net Penalties
-        (r"\b(?:net\s+penalties|net\s+penalty|penalty\s+differential|penalty\s+margin)\b", "net_penalties", "team"),
-        (r"\b(?:net\s+penalty\s+yards|net\s+penalty\s+yardage)\b", "net_penalty_yards", "team"),
-        # Penalty Yards
-        (r"\b(?:penalty\s+yards|pen\s+yds|penalty\s+yardage|yards\s+penalized)\b|\b(?:most\s+penalty\s+yards|highest\s+penalty\s+yards)\b", "penalty_yards", "team"),
-        # Total Penalties
-        (r"\b(?:penalties|penalty|flags)\b|\b(?:most\s+penalties|fewest\s+penalties|least\s+penalties|penalized\s+the\s+most)\b", "penalties", "team"),
+        (
+            r"\b(?:net\s+penalties|net\s+penalty|penalty\s+differential|penalty\s+margin)\b",
+            "net_penalties",
+            "team",
+        ),
+        # Penalty Yards (Assessed / Committed)
+        (
+            r"\b(?:(?:total\s+)?(?:yards|yardage|yds)\s+(?:in|of|from|to|on)\s+penalt(?:y|ies))\b|"
+            r"\b(?:penalt(?:y|ies)\s+(?:yards|yardage|yds))\b|"
+            r"\b(?:penalized\s+(?:for\s+)?(?:the\s+)?(?:most\s+)?(?:total\s+)?yards)\b|"
+            r"\b(?:(?:lost|gave\s+up|surrendered)\s+(?:the\s+)?(?:most\s+)?yards\s+(?:to|on|from|in)\s+penalt(?:y|ies))\b|"
+            r"\b(?:pen\s+yds|penalty\s+yardage|yards\s+penalized)\b|"
+            r"\b(?:most\s+penalty\s+yards|highest\s+penalty\s+yards|total\s+penalty\s+yards)\b",
+            "penalty_yards",
+            "team",
+        ),
+        # Total Penalties (Count)
+        (
+            r"\b(?:penalties|penalty|flags)\b|"
+            r"\b(?:most\s+penalties|fewest\s+penalties|least\s+penalties|penalized\s+the\s+most)\b",
+            "penalties",
+            "team",
+        ),
         # Explosive Play Rate
         (r"\b(?:explosive\s+play\s+rate|explosive\s+plays)\b", "explosive_play_rate", "team"),
         # Success Rate
