@@ -690,6 +690,64 @@ def test_show_startup_loading_includes_years_and_downcast(capsys, monkeypatch):
     assert "Ready! Launching NFL-STAT-CLI..." in out
 
 
+def test_nl_most_yards_queries_and_top_5_limit(engine, sample_plays):
+    # 1. "who had the most yards this year?"
+    p1 = cli.NaturalLanguageStatAssistant.interpret_query("who had the most yards this year?", engine, slm_model="off")
+    assert p1["intent"] == "stat_query"
+    assert p1["stat_name"] == "passing_yards"
+    assert p1["player"] is None
+    assert p1["limit"] == 5
+    out1 = cli.strip_ansi(cli.handle_nl_query_result(p1, engine, sample_plays))
+    assert "Top 5" in out1
+    rows1 = [l for l in out1.splitlines() if l.strip().startswith("│") and "#" in l]
+    assert len(rows1) <= 5
+
+    # 2. "which player has the most yards this year?"
+    p2 = cli.NaturalLanguageStatAssistant.interpret_query("which player has the most yards this year?", engine, slm_model="off")
+    assert p2["intent"] == "stat_query"
+    assert p2["stat_name"] == "passing_yards"
+    assert p2["player"] is None  # Must NOT mistakenly extract "has the" or "which player"
+    assert p2["limit"] == 5
+    out2 = cli.strip_ansi(cli.handle_nl_query_result(p2, engine, sample_plays))
+    assert "Top 5" in out2
+    rows2 = [l for l in out2.splitlines() if l.strip().startswith("│") and "#" in l]
+    assert len(rows2) <= 5
+
+    # 3. "who is leading in the most passing yards"
+    p3 = cli.NaturalLanguageStatAssistant.interpret_query("who is leading in the most passing yards", engine, slm_model="off")
+    assert p3["intent"] == "stat_query"
+    assert p3["stat_name"] == "passing_yards"
+    assert p3["limit"] == 5
+    out3 = cli.strip_ansi(cli.handle_nl_query_result(p3, engine, sample_plays))
+    assert "Top 5" in out3
+    rows3 = [l for l in out3.splitlines() if l.strip().startswith("│") and "#" in l]
+    assert len(rows3) <= 5
+
+    # 4. "top 3 passing yards"
+    p4 = cli.NaturalLanguageStatAssistant.interpret_query("top 3 passing yards", engine, slm_model="off")
+    assert p4["intent"] == "stat_query"
+    assert p4["stat_name"] == "passing_yards"
+    assert p4["limit"] == 3
+    out4 = cli.strip_ansi(cli.handle_nl_query_result(p4, engine, sample_plays))
+    assert "Top 3" in out4
+    rows4 = [l for l in out4.splitlines() if l.strip().startswith("│") and "#" in l]
+    assert len(rows4) == 3
+
+
+def test_cli_stat_subcommand_limit_flag():
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "stat", "passing_yards", "--limit", "2", "--season", "2025"],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    out = cli.strip_ansi(res.stdout)
+    assert "Top 2" in out
+    rows = [l for l in out.splitlines() if l.strip().startswith("│") and "#" in l]
+    assert len(rows) == 2
+
+
+
 
 
 
