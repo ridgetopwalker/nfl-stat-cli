@@ -14,6 +14,12 @@ def engine(tmp_path):
     return cli.StatEngine(storage_dir=tmp_path)
 
 
+@pytest.fixture
+def sample_plays():
+    bridge = cli.NFLDataBridge(engine="offline")
+    return bridge.load_pbp([2024, 2025])
+
+
 def test_ambiguous_query_needs_no_season_data(engine):
     query = "tell me something unrelated 2024 AFC Chiefs"
     parsed = cli.NaturalLanguageStatAssistant.interpret_query(query, engine, slm_model="off")
@@ -524,6 +530,120 @@ def test_nl_query_delete_stat(engine):
     parsed2 = cli.NaturalLanguageStatAssistant.interpret_query("remove stat test_stat", engine, slm_model="off")
     assert parsed2["intent"] == "delete_stat"
     assert parsed2["stat_name"] == "test_stat"
+
+
+def test_nl_dataset_info_queries(engine, sample_plays):
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query("what is the last game you have data from?", engine, slm_model="off")
+    assert parsed["intent"] == "dataset_info"
+    assert parsed["subquery"] == "last_game"
+    assert parsed["show_field"] is False
+    assert "player" in parsed
+    assert "qb" not in parsed
+
+    output = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, sample_plays))
+    assert "LATEST LOADED GAME IN DATASET" in output
+    assert "2025_03_BAL_DAL" in output
+    assert "BAL @ DAL" in output
+    assert "BAL 28" in output
+
+    parsed_all = cli.NaturalLanguageStatAssistant.interpret_query("what games do you have data from?", engine, slm_model="off")
+    assert parsed_all["intent"] == "dataset_info"
+    assert parsed_all["subquery"] == "all_games"
+    out_all = cli.strip_ansi(cli.handle_nl_query_result(parsed_all, engine, sample_plays))
+    assert "NFL Loaded Games" in out_all
+
+
+def test_nl_passing_yard_leaders_queries(engine, sample_plays):
+    for q in ("who had the most passing yard this season", "who had the most passing yards"):
+        parsed = cli.NaturalLanguageStatAssistant.interpret_query(q, engine, slm_model="off")
+        assert parsed["intent"] == "stat_query"
+        assert parsed["stat_name"] == "passing_yards"
+        assert parsed["group_by"] == "qb"
+        assert parsed["show_field"] is False
+        assert "player" in parsed
+        assert "qb" not in parsed
+
+        out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, sample_plays))
+        assert "Passing Yards (Pass Yds)" in out
+        assert "P.Mahomes" in out
+        assert "76.00 yds" in out
+        assert "Leader: P.Mahomes" in out
+
+
+def test_nl_divisions_weeks_quarters_situations_and_positions(engine, sample_plays):
+    p_div = cli.NaturalLanguageStatAssistant.interpret_query("who led the afc north in passing yards", engine, slm_model="off")
+    assert p_div["intent"] == "stat_query"
+    assert p_div["stat_name"] == "passing_yards"
+    assert p_div["division"] == "AFC North"
+    assert p_div["conf"] == "AFC"
+    out_div = cli.strip_ansi(cli.handle_nl_query_result(p_div, engine, sample_plays))
+    assert "AFC North" in out_div
+    assert "L.Jackson" in out_div
+    assert "P.Mahomes" not in out_div  # KC is AFC West
+
+    p_wk = cli.NaturalLanguageStatAssistant.interpret_query("passing yards in week 1", engine, slm_model="off")
+    assert p_wk["week"] == 1
+    assert p_wk["stat_name"] == "passing_yards"
+    out_wk = cli.strip_ansi(cli.handle_nl_query_result(p_wk, engine, sample_plays))
+    assert "Week 1" in out_wk
+
+    p_qtr = cli.NaturalLanguageStatAssistant.interpret_query("passing yards in 4th quarter", engine, slm_model="off")
+    assert p_qtr["qtr"] == 4
+    assert p_qtr["stat_name"] == "passing_yards"
+    out_qtr = cli.strip_ansi(cli.handle_nl_query_result(p_qtr, engine, sample_plays))
+    assert "Q4" in out_qtr
+
+    p_rush = cli.NaturalLanguageStatAssistant.interpret_query("who had the most rushing yards", engine, slm_model="off")
+    assert p_rush["stat_name"] == "rushing_yards"
+    assert p_rush["group_by"] == "rusher"
+    assert p_rush["position"] == "RB"
+    out_rush = cli.strip_ansi(cli.handle_nl_query_result(p_rush, engine, sample_plays))
+    assert "Rushing Yards (Rush Yds)" in out_rush
+
+    p_td = cli.NaturalLanguageStatAssistant.interpret_query("who had the most touchdowns", engine, slm_model="off")
+    assert p_td["stat_name"] == "touchdowns"
+    assert p_td["group_by"] == "player"
+    out_td = cli.strip_ansi(cli.handle_nl_query_result(p_td, engine, sample_plays))
+    assert "Total Touchdowns (TD)" in out_td
+
+    p_sit = cli.NaturalLanguageStatAssistant.interpret_query("3rd and short conversion rate", engine, slm_model="off")
+    assert "down == 3 and ydstogo <= 2" in p_sit["filter_expr"]
+
+    p_rz = cli.NaturalLanguageStatAssistant.interpret_query("red zone efficiency", engine, slm_model="off")
+    assert "yardline_100 <= 20" in p_rz["filter_expr"]
+
+
+def test_interactive_tui_nl_dataset_and_passing_yards_with_why():
+    input_text = "\n".join([
+        "what is the last game you have data from?",
+        "/why",
+        "who had the most passing yard this season",
+        "/why",
+        "quit",
+    ]) + "\n"
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    out = cli.strip_ansi(res.stdout)
+    assert "LATEST LOADED GAME IN DATASET" in out
+    assert "2025_03_BAL_DAL" in out
+    assert "Passing Yards (Pass Yds)" in out
+    assert "P.Mahomes" in out
+
+    # Verify both /why outputs contain valid JSON with 'player' and without 'qb'
+    why_sections = out.split("Last Natural Language Query Parsed Intent:")
+    assert len(why_sections) >= 3  # Header + 2 queries
+    for sec in why_sections[1:]:
+        j_start = sec.find("{")
+        j_end = sec.find("}") + 1
+        parsed = json.loads(sec[j_start:j_end])
+        assert "player" in parsed
+        assert "qb" not in parsed
+
 
 
 
