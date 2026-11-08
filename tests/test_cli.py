@@ -96,10 +96,16 @@ def test_stats_catalog_layout(engine):
     plain = cli.strip_ansi(catalog)
     assert "REGISTERED STATS & ANALYTICS CATALOG" in plain
     assert "Quarterback & Passing Analytics" in plain
-    assert "Team & Offensive Efficiency" in plain
+    assert "Rushing & Ground Game Analytics" in plain
     assert "Receiving & Yards After Catch (YAC) Analytics" in plain
+    assert "Team Offense, Scoring & Drive Efficiency" in plain
+    assert "Penalties, Discipline & Situational Operations" in plain
     assert "epa_per_play" in plain
     assert "passer_rating" in plain
+    assert "passing_yards" in plain
+    assert "rushing_yards" in plain
+    assert "penalties" in plain
+    assert "timeouts" in plain
     assert "Formula:" in plain
 
 
@@ -405,6 +411,9 @@ def test_fresh_install_has_zero_custom_stats(tmp_path):
     assert "completion_pct" in trad_stats
     assert "yards_per_attempt" in trad_stats
     assert "yards_per_rush" in trad_stats
+    catalog = cli.render_stats_catalog(fresh_engine)
+    plain_cat = cli.strip_ansi(catalog)
+    assert "User-Created & Imported Custom Stats" not in plain_cat
 
 
 def test_delete_custom_stat_success_and_cleanup(tmp_path):

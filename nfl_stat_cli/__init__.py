@@ -7236,30 +7236,30 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
 STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
     (
         "🏈 Quarterback & Passing Analytics",
-        "Passer rating, accuracy, yardage efficiency, and dropback impact metrics.",
+        "Passer rating, completions, yardage, accuracy, touchdowns, sacks, and dropback efficiency.",
         [
-            "passer_rating",
+            "passing_yards",
+            "completions",
+            "pass_attempts",
             "completion_pct",
             "yards_per_attempt",
             "any_a",
-            "epa_per_play",
-            "touchdown_rate",
+            "passer_rating",
+            "pass_touchdowns",
+            "interceptions",
             "interception_rate",
+            "sacks",
             "sack_rate",
+            "epa_per_play",
         ],
     ),
     (
-        "⚡ Team & Offensive Efficiency",
-        "Drive-level, per-snap, conversion, and ground-game efficiency across all plays.",
+        "🏃 Rushing & Ground Game Analytics",
+        "Designed runs, rush yardage, per-carry efficiency, and rushing touchdowns.",
         [
-            "plays",
-            "pass_attempts",
-            "yards_per_play",
+            "rushing_yards",
             "yards_per_rush",
-            "success_rate_pct",
-            "first_down_rate",
-            "explosive_play_rate",
-            "turnover_rate",
+            "rush_touchdowns",
         ],
     ),
     (
@@ -7268,6 +7268,45 @@ STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
         [
             "yards_after_catch",
             "yac_over_expected",
+        ],
+    ),
+    (
+        "⚡ Team Offense, Scoring & Drive Efficiency",
+        "Drive-level, per-snap volume, series conversion, explosive plays, and scoring rates.",
+        [
+            "plays",
+            "yards_per_play",
+            "first_downs",
+            "first_down_rate",
+            "touchdowns",
+            "touchdown_rate",
+            "success_rate_pct",
+            "explosive_play_rate",
+            "turnover_rate",
+        ],
+    ),
+    (
+        "🚩 Penalties, Discipline & Situational Operations",
+        "Accepted penalties, penalty yardage, penalties drawn, differentials, and timeouts.",
+        [
+            "penalties",
+            "penalty_yards",
+            "penalties_drawn",
+            "penalty_yards_drawn",
+            "net_penalties",
+            "net_penalty_yards",
+            "timeouts",
+        ],
+    ),
+    (
+        "🏆 Advanced QB Impact & Game Decisions (Built-in Analytics)",
+        "Composite game impact rating (0-100), meaningful wins/losses, quality starts, and explosive pass rate.",
+        [
+            "qb_impact_score",
+            "qb_meaningful_win",
+            "qb_meaningful_loss",
+            "qb_quality_start",
+            "explosive_pass_rate",
         ],
     ),
 ]
@@ -7283,7 +7322,11 @@ def render_stats_catalog(engine: StatEngine) -> str:
     for _, _, keys in STAT_CATALOG_GROUPS:
         categorized.update(keys)
 
-    user_created = [k for k in all_stats if k not in categorized]
+    # User-created or externally imported stats ONLY (never built-in stats designed at coding stage)
+    builtin_names = set(DEFAULT_STATS.keys()) | set(EXAMPLE_CUSTOM_STATS.keys()) | {
+        "qb_impact_score", "qb_meaningful_win", "qb_meaningful_loss", "qb_quality_start", "explosive_pass_rate",
+    }
+    user_created = [k for k in all_stats if k not in categorized and k not in builtin_names]
     sections = list(STAT_CATALOG_GROUPS)
     if user_created:
         sections.append((
