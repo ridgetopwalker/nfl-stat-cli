@@ -345,3 +345,14 @@ def test_cli_play_subcommand_player_flag():
     assert "SPECIFIC PLAY DIAGRAM" in res_qb.stdout
     assert "Mahomes" in res_qb.stdout or "P.Mahomes" in res_qb.stdout
 
+
+def test_show_startup_loading(capsys, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cli.os, "system", lambda cmd: None)
+    cli.show_startup_loading(is_interactive=True)
+    out = capsys.readouterr().out
+    assert "Loading..." in out
+    assert "100%" in out
+    assert "Ready! Launching NFL-STAT-CLI..." in out
+
+
