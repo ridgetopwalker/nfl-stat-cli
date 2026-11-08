@@ -404,6 +404,33 @@ SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
      "down": 2, "ydstogo": 9, "yardline_100": 38, "series_success": 0, "touchdown": 0, "interception": 0, "sack": 1,
      "team_win": 0, "home_score": 34, "away_score": 28, "qtr": 4,
      "desc": "(03:10 Q4) K.Murray sacked at ARI 29 for -9 yards (G.Rousseau), fumble RECOVERED by BUF-D.Williams."},
+    # Overtime & Goal Line Run (2025 Week 1 LA @ DET)
+    {"play_id": 120, "season": 2025, "week": 1, "game_id": "2025_01_LA_DET", "posteam": "DET", "defteam": "LA", "conf": "NFC",
+     "qb_name": "J.Goff", "receiver_player_name": "", "rusher_player_name": "D.Montgomery", "player_name": "D.Montgomery",
+     "play_type": "run", "play_concept": "rush_inside", "play_direction": "middle", "is_screen": 0, "play_action": 0, "shotgun": 0,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": 1.0,
+     "epa": 3.82, "wpa": 0.350, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 0, "rush_attempt": 1,
+     "down": 1, "ydstogo": 1, "yardline_100": 1, "series_success": 1, "touchdown": 1, "interception": 0, "sack": 0,
+     "team_win": 1, "home_score": 26, "away_score": 20, "qtr": 5,
+     "desc": "(05:24 OT) D.Montgomery up the middle for 1 yard, TOUCHDOWN (Game Winner in Overtime)."},
+    # Quick Slant / Timing Pass (2025 Week 1 BAL @ KC)
+    {"play_id": 121, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "KC", "defteam": "BAL", "conf": "AFC",
+     "qb_name": "P.Mahomes", "receiver_player_name": "T.Kelce", "rusher_player_name": "", "player_name": "T.Kelce",
+     "play_type": "pass", "play_concept": "quick_slant", "play_direction": "middle", "is_screen": 0, "play_action": 0, "shotgun": 1,
+     "air_yards": 6.0, "yards_after_catch": 5.0, "xyac_mean_yardage": 4.0, "yards_gained": 11.0,
+     "epa": 1.15, "wpa": 0.045, "cpoe": 7.5, "complete_pass": 1, "pass_attempt": 1, "rush_attempt": 0,
+     "down": 2, "ydstogo": 4, "yardline_100": 45, "series_success": 1, "touchdown": 0, "interception": 0, "sack": 0,
+     "team_win": 1, "home_score": 27, "away_score": 20, "qtr": 2,
+     "desc": "(04:30 Q2) P.Mahomes pass short middle to T.Kelce to BAL 34 for 11 yards (quick slant)."},
+    # Inside Zone Run (2025 Week 1 BAL @ KC)
+    {"play_id": 122, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "BAL", "defteam": "KC", "conf": "AFC",
+     "qb_name": "L.Jackson", "receiver_player_name": "", "rusher_player_name": "D.Henry", "player_name": "D.Henry",
+     "play_type": "run", "play_concept": "rush_inside", "play_direction": "middle", "is_screen": 0, "play_action": 0, "shotgun": 0,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": 13.0,
+     "epa": 1.28, "wpa": 0.052, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 0, "rush_attempt": 1,
+     "down": 1, "ydstogo": 10, "yardline_100": 65, "series_success": 1, "touchdown": 0, "interception": 0, "sack": 0,
+     "team_win": 0, "home_score": 27, "away_score": 20, "qtr": 2,
+     "desc": "(08:15 Q2) D.Henry up the middle to KC 52 for 13 yards (inside zone)."},
 
     # 2024 Historical Lookback plays for Stat Page trend tracking
     {"play_id": 201, "season": 2024, "week": 1, "game_id": "2024_01_DET_KC", "posteam": "KC", "defteam": "DET", "conf": "AFC",
@@ -2586,6 +2613,347 @@ class AsciiArtRenderer:
         )
         return legend + "\n" + summary_box
 
+    @classmethod
+    def render_generic_play_concept_diagram(cls, concept_key: str, title: Optional[str] = None) -> str:
+        """
+        Render a generic playbook chalkboard diagram for a play concept/sub-type
+        showing player alignments, movement vectors, and tactical scheme notes.
+        """
+        ck = str(concept_key or "").strip().lower()
+        alias_map = {
+            "screen_pass": "screen", "bubble": "screen", "tunnel": "screen",
+            "play_action": "play_action_deep", "deep": "play_action_deep", "post": "play_action_deep",
+            "slant": "quick_slant", "slants": "quick_slant", "pass_short": "quick_slant", "quick": "quick_slant",
+            "cross": "intermediate_cross", "crosser": "intermediate_cross", "mesh": "intermediate_cross", "pass_intermediate": "intermediate_cross",
+            "outside_zone": "rush_outside", "stretch": "rush_outside", "sweep": "rush_outside", "pitch": "rush_outside",
+            "inside_zone": "rush_inside", "dive": "rush_inside", "iso": "rush_inside", "run": "rush_inside",
+            "power": "power_gap", "counter": "power_gap", "gap": "power_gap",
+            "scramble": "qb_scramble", "keep": "qb_scramble", "option": "qb_scramble",
+            "sack": "pass_rush_sack", "blitz": "pass_rush_sack", "pressure": "pass_rush_sack",
+            "int": "turnover_interception", "interception": "turnover_interception", "takeaway": "turnover_interception",
+            "tfl": "tfl_run_stop", "stop": "tfl_run_stop", "run_stop": "tfl_run_stop",
+            "fg": "field_goal", "fieldgoal": "field_goal", "extra_point": "field_goal", "kick": "field_goal",
+            "punts": "punt",
+        }
+        resolved = alias_map.get(ck, ck)
+
+        schemes: Dict[str, Dict[str, Any]] = {
+            "screen": {
+                "title": "SCREEN PASS SCHEME (Offense • Pass)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  +15 yds",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET}                                          │",
+                    f"   │               {C.BLUE}[CB]{C.RESET}                                                  {C.BLUE}[CB]{C.RESET}          │  +10 yds",
+                    f"   │                              {C.BLUE}[WLB]{C.RESET}        {C.BLUE}[MLB]{C.RESET}        {C.BLUE}[SLB]{C.RESET}                      │",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}        {C.BLUE}[DT]{C.RESET}              {C.BLUE}[DT]{C.RESET}        {C.BLUE}[DE]{C.RESET}               │  +05 yds",
+                    f"───┼───────────────────────────────────────────────────────────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │            {C.GREEN}(WR2){C.RESET}            {C.GREEN}(LT){C.RESET}   {C.GREEN}(LG){C.RESET}   {C.GREEN}(C){C.RESET}   {C.GREEN}(RG){C.RESET}   {C.GREEN}(RT){C.RESET}                       │",
+                    f"   │              │                                          │                         │  -05 yds",
+                    f"   │              │ (Perimeter Block)                        │ (Pull & Lead)           │",
+                    f"   │              ▼                                          ▼                         │",
+                    f"   │           {C.GREEN}(WR1){C.RESET} ◄══════════════════ {C.CYAN}[QB]{C.RESET}                                          │  -07 yds",
+                    f"   │       (Catch Behind LOS)              \\                                           │",
+                    f"   │                                        \\-(RB Seal)                                │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Lures aggressive edge rushers upfield, releasing linemen into flat convoy.",
+                    f"• {C.BOLD}Blocking Scheme:{C.RESET} Center & LT pass-set; RG & RT pull into perimeter alley.",
+                    f"• {C.BOLD}Read Progression:{C.RESET} Catch snap -> 1-step trigger to WR1 in flat -> WR2 & RG seal alley.",
+                    f"• {C.BOLD}Ideal Situation:{C.RESET} 2nd/3rd & 7+ against heavy pass rush or blitz look.",
+                ],
+            },
+            "play_action_deep": {
+                "title": "PLAY-ACTION DEEP SHOT SCHEME (Offense • Pass)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                       ▲                                           │  +35 yds (Post)",
+                    f"   │                                       │                                           │",
+                    f"   │               ▲                       │ (Deep Post Cut)                           │  +25 yds",
+                    f"   │               │ (Go Route)          {C.BLUE}[FS]{C.RESET}                                          │",
+                    f"   │             {C.BLUE}[CB]{C.RESET}                      │                             {C.BLUE}[CB]{C.RESET}          │  +15 yds",
+                    f"   │                              {C.BLUE}[WLB]{C.RESET}        {C.BLUE}[MLB]{C.RESET}        {C.BLUE}[SLB]{C.RESET}                      │",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}        {C.BLUE}[DT]{C.RESET}              {C.BLUE}[DT]{C.RESET}        {C.BLUE}[DE]{C.RESET}               │  +05 yds",
+                    f"───┼───────────────────────────────────────────────────────────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │            {C.GREEN}(WR1){C.RESET}            {C.GREEN}(LT){C.RESET}   {C.GREEN}(LG){C.RESET}   {C.GREEN}(C){C.RESET}   {C.GREEN}(RG){C.RESET}   {C.GREEN}(RT){C.RESET}            {C.GREEN}(WR2){C.RESET}          │",
+                    f"   │              ▲                         (Max Protect)            ▲                 │  -05 yds",
+                    f"   │              │                                                 / (Post Angle)     │",
+                    f"   │              │                      {C.CYAN}[QB]{C.RESET}                        /                  │  -07 yds",
+                    f"   │              │                       ▲  (Fake Hand-off)       /                   │",
+                    f"   │              │                       └── {C.GREEN}(RB){C.RESET} ──► (Mesh)                         │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Sells run at the mesh point to pull linebackers up, creating a deep vertical window.",
+                    f"• {C.BOLD}Protection:{C.RESET} 7-man max protection with RB chip & check-release.",
+                    f"• {C.BOLD}Read Progression:{C.RESET} 1. Deep Post (WR2), 2. Go route (WR1), 3. RB checkdown.",
+                    f"• {C.BOLD}Ideal Situation:{C.RESET} 1st & 10 or 2nd & 2-4 off successful run establishment.",
+                ],
+            },
+            "quick_slant": {
+                "title": "QUICK GAME & SLANT SCHEME (Offense • Pass)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET}                                          │  +15 yds",
+                    f"   │               {C.BLUE}[CB]{C.RESET}                                                  {C.BLUE}[CB]{C.RESET}          │  +10 yds",
+                    f"   │                   \\                      {C.BLUE}[MLB]{C.RESET}                                    │",
+                    f"   │                    ▼ (Slant Cut)                                                  │  +05 yds",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}        {C.BLUE}[DT]{C.RESET}              {C.BLUE}[DT]{C.RESET}        {C.BLUE}[DE]{C.RESET}               │",
+                    f"───┼───────────────────────────────────────────────────────────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │            {C.GREEN}(WR1){C.RESET} ──►       {C.GREEN}(LT){C.RESET}   {C.GREEN}(LG){C.RESET}   {C.GREEN}(C){C.RESET}   {C.GREEN}(RG){C.RESET}   {C.GREEN}(RT){C.RESET}            {C.GREEN}(TE){C.RESET}           │",
+                    f"   │            (3-step timing)                                                        │  -05 yds",
+                    f"   │                                     {C.CYAN}[QB]{C.RESET} (1-3 Step Trigger)                        │",
+                    f"   │                                       ▲                                           │  -07 yds",
+                    f"   │                                       │                                           │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} High-percentage rhythm throw getting ball out in under 2.2 seconds before rush arrives.",
+                    f"• {C.BOLD}Footwork:{C.RESET} 3 steps from under center or 1 hitch in shotgun.",
+                    f"• {C.BOLD}Target Window:{C.RESET} In between the numbers and hash, underneath dropping zone linebackers.",
+                    f"• {C.BOLD}Ideal Situation:{C.RESET} 3rd & 3-6 or beat blitz/man coverage.",
+                ],
+            },
+            "intermediate_cross": {
+                "title": "INTERMEDIATE CROSSER & MESH SCHEME (Offense • Pass)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET}                                          │  +20 yds",
+                    f"   │               {C.BLUE}[CB]{C.RESET}                                                  {C.BLUE}[CB]{C.RESET}          │  +15 yds",
+                    f"   │                    ◄═════════════════════════════════════ (Deep Crosser)          │  +12 yds",
+                    f"   │                              {C.BLUE}[WLB]{C.RESET}        {C.BLUE}[MLB]{C.RESET}        {C.BLUE}[SLB]{C.RESET}                      │",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}        {C.BLUE}[DT]{C.RESET}              {C.BLUE}[DT]{C.RESET}        {C.BLUE}[DE]{C.RESET}               │  +05 yds",
+                    f"───┼───────────────────────────────────────────────────────────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │            {C.GREEN}(WR1){C.RESET}            {C.GREEN}(LT){C.RESET}   {C.GREEN}(LG){C.RESET}   {C.GREEN}(C){C.RESET}   {C.GREEN}(RG){C.RESET}   {C.GREEN}(RT){C.RESET}            {C.GREEN}(WR2){C.RESET}          │",
+                    f"   │              ▲                                                     ▲              │  -05 yds",
+                    f"   │              │ (Clearout)                           {C.CYAN}[QB]{C.RESET}           │ (Over Route) │",
+                    f"   │              │                                        ▼            │              │  -07 yds",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Deep crossing route runs away from man coverage leverage across open field turf.",
+                    f"• {C.BOLD}Clearout:{C.RESET} Playside WR takes boundary cornerback deep to vacate intermediate honey hole.",
+                    f"• {C.BOLD}Ideal Situation:{C.RESET} 2nd & medium or 3rd & 6-10 vs Cover 1 / Cover 3.",
+                ],
+            },
+            "rush_inside": {
+                "title": "INSIDE ZONE & DIVE SCHEME (Offense • Run)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET}                                          │  +15 yds",
+                    f"   │               {C.BLUE}[CB]{C.RESET}                                                  {C.BLUE}[CB]{C.RESET}          │  +10 yds",
+                    f"   │                              {C.BLUE}[WLB]{C.RESET}        {C.BLUE}[MLB]{C.RESET}        {C.BLUE}[SLB]{C.RESET}                      │",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}        {C.BLUE}[DT]{C.RESET}        ▲     {C.BLUE}[DT]{C.RESET}        {C.BLUE}[DE]{C.RESET}               │  +05 yds",
+                    f"───┼───────────────────────────────────────────────┼───────────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │            {C.GREEN}(WR1){C.RESET}            {C.GREEN}(LT){C.RESET}──►{C.GREEN}(LG){C.RESET}──►{C.GREEN}(C){C.RESET} │ ──►{C.GREEN}(RG){C.RESET}   {C.GREEN}(RT){C.RESET}            {C.GREEN}(TE){C.RESET}           │",
+                    f"   │                                    (A-Gap Crease)                                 │  -05 yds",
+                    f"   │                                     {C.CYAN}[QB]{C.RESET}    ▲                                     │",
+                    f"   │                                       \\    │ (One-Cut Vertical)                   │  -07 yds",
+                    f"   │                                        \\── {C.GREEN}(RB){C.RESET}                                   │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Offensive linemen take lateral zone steps, combo-blocking down lineman to second-level LB.",
+                    f"• {C.BOLD}RB Track:{C.RESET} Aim at frontside guard, read 1-technique helmet, plant and cut vertically.",
+                    f"• {C.BOLD}Crease Options:{C.RESET} Frontside A-gap, Frontside B-gap, or Backside Cutback.",
+                    f"• {C.BOLD}Ideal Situation:{C.RESET} Base 1st down or short-yardage power situations.",
+                ],
+            },
+            "rush_outside": {
+                "title": "OUTSIDE ZONE & STRETCH SCHEME (Offense • Run)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET}                                          │  +15 yds",
+                    f"   │               {C.BLUE}[CB]{C.RESET}                                                  {C.BLUE}[CB]{C.RESET}          │  +10 yds",
+                    f"   │                              {C.BLUE}[WLB]{C.RESET}        {C.BLUE}[MLB]{C.RESET}        {C.BLUE}[SLB]{C.RESET}                      │",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}        {C.BLUE}[DT]{C.RESET}              {C.BLUE}[DT]{C.RESET}   ▲    {C.BLUE}[DE]{C.RESET}               │  +05 yds",
+                    f"───┼─────────────────────────────────────────────────────────────┼─────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │                         {C.GREEN}(LT)──► (LG)──► (C)──► (RG)──► (RT){C.RESET} │          {C.GREEN}(TE){C.RESET}          │",
+                    f"   │                               (Lateral Stretch Flow)        │ (Perimeter Edge)    │  -05 yds",
+                    f"   │                                     {C.CYAN}[QB]{C.RESET}                    │                     │",
+                    f"   │                                       \\════════════════════►{C.GREEN}(RB){C.RESET}                  │  -07 yds",
+                    f"   │                                                              (Speed to Corner)    │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Flow offensive line wide to perimeter, forcing defensive front to stretch laterally.",
+                    f"• {C.BOLD}RB Read:{C.RESET} Press edge outside tight end; if edge is sealed, turn corner; if edge widens, one-cut vertical.",
+                    f"• {C.BOLD}Key Block:{C.RESET} Reach block by playside tackle and tight end on defensive end.",
+                    f"• {C.BOLD}Ideal Situation:{C.RESET} Explosive chunk running play against heavy interior fronts.",
+                ],
+            },
+            "power_gap": {
+                "title": "POWER & COUNTER GAP SCHEME (Offense • Run)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET}                                          │  +15 yds",
+                    f"   │               {C.BLUE}[CB]{C.RESET}                                                  {C.BLUE}[CB]{C.RESET}          │  +10 yds",
+                    f"   │                              {C.BLUE}[WLB]{C.RESET}        {C.BLUE}[MLB]{C.RESET}        {C.BLUE}[SLB]{C.RESET}                      │",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}        {C.BLUE}[DT]{C.RESET}              {C.BLUE}[DT]{C.RESET} ◄─── {C.BLUE}[DE]{C.RESET} (Kickout)     │  +05 yds",
+                    f"───┼─────────────────────────────────────────────────────────────┼─────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │                         {C.GREEN}(LT)     (LG)──►(C)    (RG)     (RT){C.RESET} │          {C.GREEN}(TE){C.RESET}          │",
+                    f"   │                                   │                      ▲  │ (C-Gap Hole)        │  -05 yds",
+                    f"   │                                   └───────(Pulling Guard)┘  │                     │",
+                    f"   │                                     {C.CYAN}[QB]{C.RESET}                    ▲                     │  -07 yds",
+                    f"   │                                       \\                      │ (Follow Puller)     │",
+                    f"   │                                        \\───────────────────►{C.GREEN}(RB){C.RESET}                  │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Man/gap blocking scheme with backside guard pulling across formation to kick out DE.",
+                    f"• {C.BOLD}Lead Blocker:{C.RESET} H-back/fullback wraps through C-gap to seal playside linebacker.",
+                    f"• {C.BOLD}Ideal Situation:{C.RESET} Red zone, 3rd & 1-2, goal line physical interior running.",
+                ],
+            },
+            "qb_scramble": {
+                "title": "QB KEEP & SCRAMBLE SCHEME (Offense • Run)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET} (Deep Drop)                              │  +20 yds",
+                    f"   │               {C.BLUE}[CB]{C.RESET} (Turned Back in Man)                             {C.BLUE}[CB]{C.RESET}          │  +15 yds",
+                    f"   │                                                              ▲ (Vacated Alley)    │",
+                    f"   │                              {C.BLUE}[WLB]{C.RESET}        {C.BLUE}[MLB]{C.RESET}                  │                    │  +10 yds",
+                    f"   │                      {C.BLUE}[DE]{C.RESET}─►      {C.BLUE}[DT]{C.RESET}        {C.BLUE}[DT]{C.RESET}       {C.BLUE}[DE]{C.RESET}       │                    │  +05 yds",
+                    f"───┼───────────────────────\\───────┼───────┼───────/──────┼────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │                        \\    {C.GREEN}(LT)     (C)     (RT){C.RESET}  /               │                    │",
+                    f"   │                         \\   (Pocket Flushed) /               │                    │  -05 yds",
+                    f"   │                          \\                  /                │                    │",
+                    f"   │                           ▼               ▼                  │                    │  -08 yds",
+                    f"   │                                          {C.CYAN}[QB] ═══════════════┘{C.RESET}                    │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} When secondary coverage locks down receivers, mobile QB exploits vacated rush lanes.",
+                    f"• {C.BOLD}Impact:{C.RESET} Deflates defensive coverage and forces defense to assign a spy LB.",
+                ],
+            },
+            "pass_rush_sack": {
+                "title": "PASS RUSH & SACK SCHEME (Defense • Pressure)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     [FS]                                          │  +15 yds",
+                    f"   │               [CB]                                                  [CB]          │  +10 yds",
+                    f"   │                              [WLB]        [MLB]        ▲                          │",
+                    f"   │                      ▲           ▲                     │ (Green Dog Blitz)        │  +05 yds",
+                    f"   │              (Speed) │           │ (A-Gap Stunt)       │                          │",
+                    f"───┼──────────────────────┼───────────┼─────────────────────┼──────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │                     {C.BLUE}[DE]{C.RESET}─►     {C.BLUE}[DT]{C.RESET}             {C.BLUE}[DT]{C.RESET}     {C.BLUE}[DE]{C.RESET} ◄─ (Speed Bend)     │",
+                    f"   │                     (LT)        (LG)   (C)   (RG)     (RT)                        │  -05 yds",
+                    f"   │                       \\           │                    /                          │",
+                    f"   │                        \\          │                   /                           │",
+                    f"   │                         ▼         ▼                  ▼                            │  -08 yds",
+                    f"   │                                  {C.RED}💥 SACK ON [QB]{C.RESET}                                  │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Defensive front collapses pocket from edge and interior before routes can develop.",
+                    f"• {C.BOLD}Technique:{C.RESET} Edge rusher speed-to-power rip move with interior tackle stunting across center's face.",
+                    f"• {C.BOLD}Result:{C.RESET} Negative yardage, forced turnover opportunity, third-down shutdown.",
+                ],
+            },
+            "turnover_interception": {
+                "title": "TAKEAWAY & INTERCEPTION SCHEME (Defense • Turnover)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     {C.BLUE}[FS]{C.RESET} (Centerfield Range)                      │  +20 yds",
+                    f"   │               {C.BLUE}[CB]{C.RESET} ◄─── (Undercut Route)                                   [CB]          │  +15 yds",
+                    f"   │                 \\                                                                 │",
+                    f"   │                  ▼ {C.RED}🏈 INTERCEPTION!{C.RESET}                                                │  +10 yds",
+                    f"   │                 · · · · · · · · · (Ball Flight Trajectory)                        │",
+                    f"───┼─────────────────·─────────────────────────────────────────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │            (WR1) ·          (LT)   (LG)   (C)   (RG)   (RT)                       │",
+                    f"   │                  ·                                                                │  -05 yds",
+                    f"   │                   · · · · · · · · · [QB] (Forced Throw Under Duress)              │  -07 yds",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Coverage baiting and quick break on ball flight in response to QB release.",
+                    f"• {C.BOLD}Technique:{C.RESET} Cornerback / safety reads QB eyes, undercuts inside leverage, drives through receiver hands.",
+                    f"• {C.BOLD}Impact:{C.RESET} Instant change of possession and sudden-change field position swing.",
+                ],
+            },
+            "tfl_run_stop": {
+                "title": "RUN STOP & TACKLE FOR LOSS SCHEME (Defense • Run Defense)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                                     [FS]                                          │  +15 yds",
+                    f"   │               [CB]                                                  [CB]          │  +10 yds",
+                    f"   │                              [WLB]        ▲ (Fill Hole)     [SLB]                 │",
+                    f"   │                      [DE]                 │ (Stuffed at LOS)                      │  +05 yds",
+                    f"   │                              {C.BLUE}[DT]{C.RESET} ◄───────┼───────► {C.BLUE}[DT]{C.RESET}                         │",
+                    f"───┼───────────────────────────────\\───────────────────/───────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │                              {C.RED}▼ (Shoots B-Gap)    ▼{C.RESET}                                │",
+                    f"   │                             (LT)   (LG)   (C)   (RG)   (RT)                       │  -03 yds",
+                    f"   │                                       \\   │   /                                   │",
+                    f"   │                                    {C.RED}🛑 TACKLE FOR LOSS{C.RESET}                             │  -05 yds",
+                    f"   │                                        {C.GREEN}(RB){C.RESET}                                       │",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Philosophy:{C.RESET} Interior penetration disrupts backfield footwork and denies cutback lanes.",
+                    f"• {C.BOLD}Assignment:{C.RESET} Defensive tackle disengages reach block, linebackers fast-flow to seal B/C gaps.",
+                ],
+            },
+            "field_goal": {
+                "title": "FIELD GOAL & EXTRA POINT UNIT (Special Teams)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │                            \\                       /                              │  GOALPOSTS",
+                    f"   │                             \\  {C.YELLOW}🏈 (BALL SPLITS){C.RESET}   /                               │  UPRIGHTS",
+                    f"   │                              \\═══════════════════/                                │",
+                    f"   │                                        ▲                                          │  +10 yds",
+                    f"   │                      [Rush Block]      │ [Kick Trajectory]  [Rush Block]          │",
+                    f"───┼────────────────────────────────────────┼──────────────────────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │       (LW)  (LT)  (LG)  (LS: Long Snap)  (RG)  (RT)  (RW)                        │",
+                    f"   │                           │                                                       │  -04 yds",
+                    f"   │                           ▼ (7-8 Yard Snap)                                       │",
+                    f"   │                          {C.GREEN}(H){C.RESET} [Holder: Catch, Laces Away]                          │  -07 yds",
+                    f"   │                            \\                                                      │",
+                    f"   │                             \\──► {C.CYAN}(K){C.RESET} [Kicker: 3-Step Follow Through]             │  -09 yds",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Operation Time:{C.RESET} Snap-to-kick executed in 1.25 to 1.30 seconds.",
+                    f"• {C.BOLD}Protection:{C.RESET} Wings and tight ends step inside to pinch A/B rush gaps.",
+                    f"• {C.BOLD}Holder Execution:{C.RESET} Catch at spot, spin laces away toward target, plant index finger.",
+                ],
+            },
+            "punt": {
+                "title": "PUNT & COVERAGE UNIT (Special Teams)",
+                "art": [
+                    f"   {C.BOLD}LEFT SIDELINE{C.RESET}                                                           {C.BOLD}RIGHT SIDELINE{C.RESET}",
+                    f"   │  ▲ (Gunner Race)                                       ▲ (Gunner Race)            │  +45 yds",
+                    f"   │  │                                                     │                          │",
+                    f"   │  │                                 {C.YELLOW}🏈 (Deep Spiral){C.RESET}    │                          │  +30 yds",
+                    f"   │  │                                    /                │                          │",
+                    f"   │  │                       [Blockers]  /   [Blockers]    │                          │  +15 yds",
+                    f"───┼──┼──────────────────────────────────/──────────────────┼──────────────────────────┼── {C.YELLOW}LOS 00{C.RESET}",
+                    f"   │ (G1)   (T)   (G)   (LS: Long Snap)   (G)   (T)        (G2)                        │",
+                    f"   │                           │                                                       │  -06 yds",
+                    f"   │                           ▼ (14-15 Yard Snap)                                     │",
+                    f"   │                                                                                   │  -12 yds",
+                    f"   │                         {C.CYAN}[P]{C.RESET} (Punter 2-Step Drop & Directional Punt)          │  -15 yds",
+                    f"   └───────────────────────────────────────────────────────────────────────────────────┘",
+                ],
+                "notes": [
+                    f"• {C.BOLD}Hangtime Goal:{C.RESET} 4.40+ seconds to allow gunners to down ball inside 20-yard line.",
+                    f"• {C.BOLD}Directional Pin:{C.RESET} Angled toward boundary sideline to eliminate lateral return lanes.",
+                    f"• {C.BOLD}Protection:{C.RESET} Shield protectors absorb free rushers after 15-yard snap.",
+                ],
+            },
+        }
+
+        scheme = schemes.get(resolved, schemes["screen"])
+        display_title = title or scheme["title"]
+        header = [
+            f"\n{C.BOLD}{C.GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗",
+            f"║  🏈 PLAYBOOK CHALKBOARD: {pad_ansi(display_title, 76, 'left')} ║",
+            f"╚═══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}",
+        ]
+        out_lines = header + scheme["art"] + [f"   {C.BOLD}{C.CYAN}📋 Tactical Playbook Breakdown:{C.RESET}"] + [f"   {n}" for n in scheme["notes"]]
+        return "\n".join(out_lines)
+
 
 # ---------------------------------------------------------------------------
 # Hybrid Local Small Language Model (SLM) + Deterministic NL-to-Stat Engine
@@ -3589,6 +3957,56 @@ def filter_plays_by_phase(plays: List[Dict[str, Any]], phase: str) -> List[Dict[
         return res if res else plays
 
 
+def classify_play_concept_hierarchy(p: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Classify a play into a 3-tier taxonomy:
+    phase (offense/defense/special_teams) -> category (pass/run/trick/pass_rush/takeaway/run_stop/etc.) -> concept_key/name
+    """
+    phase = classify_play_phase(p)
+    pt = str(p.get("play_type", "")).lower()
+    desc = str(p.get("desc", "")).lower()
+    conc = str(p.get("play_concept", "")).lower()
+
+    if phase == "special_teams":
+        if pt in ("field_goal", "extra_point") or "field goal" in desc or "extra point" in desc:
+            return {"phase": "special_teams", "category": "field_goal", "concept_key": "field_goal", "concept_name": "Field Goal & Extra Point"}
+        if pt == "punt" or "punt" in desc:
+            return {"phase": "special_teams", "category": "punt", "concept_key": "punt", "concept_name": "Punt & Coverage"}
+        return {"phase": "special_teams", "category": "field_goal", "concept_key": "field_goal", "concept_name": "Special Teams Unit"}
+
+    if phase == "defense":
+        if int(p.get("interception", 0)) == 1 or "intercepted" in desc or "fumble recovered" in desc or "recovered by" in desc:
+            return {"phase": "defense", "category": "takeaway", "concept_key": "turnover_interception", "concept_name": "Takeaways & Interceptions"}
+        if int(p.get("sack", 0)) == 1 or "sacked" in desc:
+            return {"phase": "defense", "category": "pass_rush", "concept_key": "pass_rush_sack", "concept_name": "Pass Rush & Sacks"}
+        return {"phase": "defense", "category": "run_stop", "concept_key": "tfl_run_stop", "concept_name": "Run Stops & Tackles for Loss"}
+
+    # Offense
+    if pt == "run":
+        if "scramble" in desc or p.get("qb_name") == p.get("rusher_player_name"):
+            return {"phase": "offense", "category": "run", "concept_key": "qb_scramble", "concept_name": "QB Keep & Scramble"}
+        if conc == "rush_outside" or any(w in desc for w in ("outside", "end", "sweep", "pitch")):
+            return {"phase": "offense", "category": "run", "concept_key": "rush_outside", "concept_name": "Outside Zone & Stretch"}
+        if any(w in desc for w in ("power", "counter", "guard", "pull")):
+            return {"phase": "offense", "category": "run", "concept_key": "power_gap", "concept_name": "Power & Counter Gap"}
+        return {"phase": "offense", "category": "run", "concept_key": "rush_inside", "concept_name": "Inside Zone & Dive"}
+
+    # Pass
+    if int(p.get("is_screen", 0)) == 1 or "screen" in desc or conc == "screen":
+        return {"phase": "offense", "category": "pass", "concept_key": "screen", "concept_name": "Screen Pass"}
+    if int(p.get("play_action", 0)) == 1 or "play_action" in conc or "deep" in desc or float(p.get("air_yards", 0.0)) >= 20.0:
+        return {"phase": "offense", "category": "pass", "concept_key": "play_action_deep", "concept_name": "Play-Action Deep Shot"}
+    if float(p.get("air_yards", 0.0)) <= 6.0 or any(w in desc for w in ("short", "slant", "flat", "hitch")):
+        return {"phase": "offense", "category": "pass", "concept_key": "quick_slant", "concept_name": "Quick Game & Slant"}
+    return {"phase": "offense", "category": "pass", "concept_key": "intermediate_cross", "concept_name": "Intermediate Crosser & Mesh"}
+
+
+def filter_plays_by_concept_key(plays: List[Dict[str, Any]], concept_key: str) -> List[Dict[str, Any]]:
+    """Filter plays down to those matching the given tactical concept key."""
+    ck = concept_key.lower().strip()
+    return [p for p in plays if classify_play_concept_hierarchy(p)["concept_key"] == ck]
+
+
 def get_play_key_players(play: Dict[str, Any]) -> List[str]:
     """Extract names of key players involved in a play (passer, receiver, rusher, defensive stopper)."""
     names: List[str] = []
@@ -4192,6 +4610,477 @@ def render_team_drilldown_view(
     return "\n".join(out)
 
 
+def format_yardline_str(p: Dict[str, Any]) -> str:
+    y = p.get("yardline_100")
+    if y is None:
+        return "N/A"
+    try:
+        y_val = int(round(float(y)))
+    except (ValueError, TypeError):
+        return str(y)
+    if y_val == 50:
+        return "MID 50"
+    if y_val < 50:
+        return f"{p.get('defteam') or 'OPP'} {y_val}"
+    return f"{p.get('posteam') or 'OWN'} {100 - y_val}"
+
+
+def extract_games_summary(plays: List[Dict[str, Any]], season: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    Summarize games from plays for a given season.
+    Returns list of game dicts with:
+      game_id, season, week, home_team, away_team,
+      home_score, away_score, total_plays, quarters (sorted list), has_ot, plays
+    """
+    target_plays = [p for p in plays if season is None or int(p.get("season", 0)) == int(season)]
+    games_map: Dict[str, List[Dict[str, Any]]] = {}
+    for p in target_plays:
+        gid = p.get("game_id")
+        if not gid:
+            continue
+        games_map.setdefault(gid, []).append(p)
+
+    summaries: List[Dict[str, Any]] = []
+    for gid, pls in games_map.items():
+        parts = gid.split("_")
+        away = parts[2] if len(parts) >= 4 else (pls[0].get("defteam") or "AWAY")
+        home = parts[3] if len(parts) >= 4 else (pls[0].get("posteam") or "HOME")
+        week = int(pls[0].get("week", 1))
+        pls_sorted = sorted(pls, key=lambda x: (int(x.get("qtr", 1)), int(x.get("play_id", 0))))
+        last_p = pls_sorted[-1]
+        h_score = int(last_p.get("home_score", 0))
+        a_score = int(last_p.get("away_score", 0))
+        qtrs = sorted({int(p.get("qtr", 1)) for p in pls})
+        has_ot = any(
+            int(p.get("qtr", 0)) >= 5
+            or "ot" in str(p.get("desc", "")).lower()
+            or "overtime" in str(p.get("desc", "")).lower()
+            for p in pls
+        )
+        summaries.append({
+            "game_id": gid,
+            "season": int(pls[0].get("season", season or CURRENT_SEASON)),
+            "week": week,
+            "away_team": away,
+            "home_team": home,
+            "away_score": a_score,
+            "home_score": h_score,
+            "has_ot": has_ot,
+            "quarters": qtrs,
+            "total_plays": len(pls),
+            "plays": pls_sorted,
+        })
+    summaries.sort(key=lambda g: (g["week"], g["game_id"]))
+    return summaries
+
+
+def render_game_plays_table(
+    game_plays: List[Dict[str, Any]],
+    title: str = "GAME PLAYS",
+    highlight_play_id: Optional[int] = None,
+) -> str:
+    """
+    Renders an ASCII table of plays for a game / quarter with:
+    # | Play | Qtr | Team | Dn&Dist | Yardline | Concept / Scheme | Gain | EPA | Score | Key Description
+    """
+    clean_title = title.upper()
+    lines = [
+        f"{C.BOLD}{C.CYAN}┌─ {clean_title} " + "─" * max(0, 108 - len(clean_title)) + f"┐{C.RESET}",
+        f"{C.BOLD}│ #  │ Play │ Qtr │ Team │ Dn&Dist  │ Yardline │ Concept / Scheme │ Gain       │ EPA    │ Score      │ Key Description            │{C.RESET}",
+        f"{C.BOLD}├────┼──────┼─────┼──────┼──────────┼──────────┼──────────────────┼────────────┼────────┼────────────┼────────────────────────────┤{C.RESET}",
+    ]
+    for idx, p in enumerate(game_plays, 1):
+        pid_num = p.get("play_id", 0)
+        pid_str = f"#{pid_num}"
+        q = "OT" if int(p.get("qtr", 1)) >= 5 else f"Q{p.get('qtr', 1)}"
+        tm = str(p.get("posteam") or "")[:4]
+        d = p.get("down", 1)
+        dist = p.get("ydstogo", 10)
+        suffix = "st" if d == 1 else ("nd" if d == 2 else ("rd" if d == 3 else "th"))
+        dnd = f"{d}{suffix} & {dist}"
+        ydl = format_yardline_str(p)[:8]
+        conc = str(p.get("play_concept") or p.get("play_type") or "play")[:16]
+        g = float(p.get("yards_gained", 0.0))
+        td = " (TD)" if p.get("touchdown") else ""
+        gain = f"{g:+.1f}{td}"[:10]
+        epa = f"{float(p.get('epa', 0.0)):+5.2f}"
+        sc = f"{p.get('away_score', 0)}-{p.get('home_score', 0)}"[:10]
+        desc = p.get("desc", "")
+        if "(" in desc and ")" in desc:
+            desc = desc.split(")", 1)[1].strip()
+        desc = desc[:26]
+
+        hl_on = f"{C.BOLD}{C.GOLD}" if highlight_play_id and pid_num == highlight_play_id else ""
+        hl_off = C.RESET if hl_on else ""
+        lines.append(
+            f"│{hl_on}{idx:3d} │ {pid_str:<4} │ {q:<3} │ {tm:<4} │ {dnd:<8} │ {ydl:<8} │ {conc:<16} │ {gain:<10} │ {epa:<6} │ {sc:<10} │ {desc:<26}{hl_off} │"
+        )
+    lines.append(f"{C.BOLD}{C.CYAN}└────┴──────┴─────┴──────┴──────────┴──────────┴──────────────────┴────────────┴────────┴────────────┴────────────────────────────┘{C.RESET}")
+    return "\n".join(lines)
+
+
+def _play_navigation_loop(
+    chosen_play: Dict[str, Any],
+    game_plays: List[Dict[str, Any]],
+    chosen_game: Dict[str, Any],
+    engine: StatEngine,
+    bridge: NFLDataBridge,
+    all_plays: List[Dict[str, Any]],
+    active_season: int,
+    default_camera: str,
+) -> str:
+    """
+    Sub-loop for stepping through plays in a game or jumping to chalkboard/explorer.
+    Returns: 'exit', 'change_game', or 'change_quarter'.
+    """
+    current_cam = default_camera
+    while True:
+        pid = chosen_play.get("play_id", "N/A")
+        qtr = chosen_play.get("qtr", 1)
+        q_label = "OT" if qtr >= 5 else f"Q{qtr}"
+        play_title = f"GAME VIEW: PLAY #{pid} — {q_label} ({chosen_play.get('posteam')} vs {chosen_play.get('defteam')})"
+        print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=play_title, camera=current_cam))
+
+        # Determine index in game_plays
+        curr_idx = -1
+        for i, p in enumerate(game_plays):
+            if p.get("play_id") == chosen_play.get("play_id"):
+                curr_idx = i
+                break
+
+        has_prev = curr_idx > 0
+        has_next = curr_idx >= 0 and curr_idx + 1 < len(game_plays)
+
+        print(f"\n  {C.BOLD}{C.GOLD}Play Action & Game Navigation Menu (Play #{pid} • {q_label}):{C.RESET}")
+        print(f"    [N] {C.BOLD}Next Play in Game{C.RESET}     {'[▶ Next snap]' if has_next else '[End of Game]'}")
+        print(f"    [P] {C.BOLD}Previous Play in Game{C.RESET} {'[◀ Prev snap]' if has_prev else '[Start of Game]'}")
+        print(f"    [C] {C.BOLD}Concept Chalkboard{C.RESET}    (View generic playbook chalkboard diagram for this scheme)")
+        print(f"    [S] {C.BOLD}Play Stats{C.RESET}            (In-depth analytics: EPA, WPA, Air Yards, YAC)")
+        print(f"    [T] {C.BOLD}Drill Down Team{C.RESET}       (Team efficiency, rankings & roster leaders)")
+        print(f"    [L] {C.BOLD}Drill Down Player{C.RESET}     (Player profile, stats breakdown & signature plays)")
+        print(f"    [E] {C.BOLD}Play Explorer (/play){C.RESET} (Open interactive playbook concept explorer)")
+        print(f"    [V] {C.BOLD}Switch Camera{C.RESET}         (Change view: behind-offense / behind-defense / sideline)")
+        print(f"    [Q] {C.BOLD}Change Quarter{C.RESET}        (Return to quarter play table)")
+        print(f"    [G] {C.BOLD}Change Game{C.RESET}           (Return to matchup browser)")
+        print(f"    [X] {C.BOLD}Exit Game View{C.RESET}        (Return to main prompt)")
+
+        try:
+            act_in = prompt_input("  Choice [N/P/C/S/T/L/E/V/Q/G/X] (default: N): ").strip().lower() or "n"
+        except (EOFError, KeyboardInterrupt):
+            return "exit"
+
+        if act_in in ("x", "exit", "close"):
+            return "exit"
+        if act_in in ("g", "change game", "games"):
+            return "change_game"
+        if act_in in ("q", "quarter", "change quarter"):
+            return "change_quarter"
+
+        if act_in in ("n", "next", "next play", "1"):
+            if has_next:
+                chosen_play = game_plays[curr_idx + 1]
+                nxt_q = "OT" if chosen_play.get("qtr", 1) >= 5 else f"Q{chosen_play.get('qtr', 1)}"
+                print(f"\n  {C.GREEN}▶ Stepping to Next Play #{chosen_play['play_id']} ({nxt_q} {chosen_play.get('down', 1)}&{chosen_play.get('ydstogo', 10)}){C.RESET}")
+            else:
+                print(f"\n  {C.YELLOW}⚠ Already at the final play of this game ({chosen_game['away_team']} @ {chosen_game['home_team']}).{C.RESET}")
+        elif act_in in ("p", "prev", "previous", "previous play", "2"):
+            if has_prev:
+                chosen_play = game_plays[curr_idx - 1]
+                prv_q = "OT" if chosen_play.get("qtr", 1) >= 5 else f"Q{chosen_play.get('qtr', 1)}"
+                print(f"\n  {C.CYAN}◀ Stepping to Previous Play #{chosen_play['play_id']} ({prv_q} {chosen_play.get('down', 1)}&{chosen_play.get('ydstogo', 10)}){C.RESET}")
+            else:
+                print(f"\n  {C.YELLOW}⚠ Already at the opening play of this game.{C.RESET}")
+        elif act_in in ("c", "concept", "chalkboard"):
+            h = classify_play_concept_hierarchy(chosen_play)
+            print("\n" + AsciiArtRenderer.render_generic_play_concept_diagram(h["concept_key"]))
+        elif act_in in ("s", "stats", "play stats"):
+            print("\n" + render_single_play_deep_dive(chosen_play))
+        elif act_in in ("t", "team", "drill down team"):
+            p_tm = str(chosen_play.get("posteam", ""))
+            d_tm = str(chosen_play.get("defteam", ""))
+            target_t = p_tm or d_tm or chosen_game["home_team"]
+            print("\n" + render_team_drilldown_view(engine, all_plays, season=active_season, team=target_t))
+        elif act_in in ("l", "player", "drill down player"):
+            players_here = get_play_key_players(chosen_play)
+            target_p = players_here[0] if players_here else "Mahomes"
+            print("\n" + render_player_drilldown_view(engine, all_plays, season=active_season, player_name=target_p, interactive=False))
+        elif act_in in ("e", "explorer", "play", "/play"):
+            interactive_play_explorer(engine, bridge, all_plays, active_season=active_season, default_camera=current_cam)
+        elif act_in in ("v", "camera", "switch camera"):
+            try:
+                c_in = prompt_input("  Camera perspective [1] behind-offense  [2] behind-defense  [3] sideline  [4] all (default: 1): ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                c_in = "1"
+            c_map = {"1": "behind-offense", "2": "behind-defense", "3": "sideline", "4": "all"}
+            current_cam = c_map.get(c_in, c_in)
+
+
+def interactive_game_browser(
+    engine: StatEngine,
+    bridge: NFLDataBridge,
+    plays: List[Dict[str, Any]],
+    active_season: int = CURRENT_SEASON,
+    default_camera: str = "behind-offense",
+    initial_game_id: Optional[str] = None,
+    initial_play_id: Optional[int] = None,
+    initial_team: Optional[str] = None,
+    initial_week: Optional[int] = None,
+    initial_qtr: Optional[int] = None,
+) -> None:
+    """
+    Interactive NFL Game Center & Play-by-Play Browser:
+    - First category: Browse by Team (Teams -> Week/Matchup) or Browse by Week (Week -> Matchup) or All Games.
+    - Matchup selection -> Quarter selection (including Overtime/OT if applicable).
+    - Renders ASCII table of plays in that quarter.
+    - Selecting a play diagrams it on the field with Next Play / Prev Play navigation and Concept Chalkboard cross-linking.
+    """
+    s_plays = plays_for_season(plays, active_season)
+    if not s_plays:
+        print(f"\n{C.YELLOW}⚠ No play-by-play data loaded for season {active_season}. Use `/season` to switch seasons.{C.RESET}")
+        return
+
+    all_games = extract_games_summary(plays, active_season)
+    if not all_games:
+        print(f"\n{C.YELLOW}⚠ No games recorded in dataset for season {active_season}.{C.RESET}")
+        return
+
+    chosen_game: Optional[Dict[str, Any]] = None
+    if initial_game_id:
+        chosen_game = next((g for g in all_games if g["game_id"] == initial_game_id), None)
+    elif initial_play_id:
+        target_p = next((p for p in s_plays if p.get("play_id") == initial_play_id), None)
+        if target_p and target_p.get("game_id"):
+            chosen_game = next((g for g in all_games if g["game_id"] == target_p["game_id"]), None)
+
+    jump_play_id = initial_play_id
+
+    while True:
+        if not chosen_game:
+            print(f"\n{C.BOLD}{C.GREEN}=== 🏟️ NFL GAME CENTER & PLAY-BY-PLAY BROWSER ==={C.RESET}")
+            print(f"  Active Season: {C.BOLD}{active_season}{C.RESET} • Total Games: {C.BOLD}{len(all_games)}{C.RESET}")
+            print("  Select Game Browsing Mode:")
+            print(f"    [1] {C.BOLD}Browse by Team{C.RESET}  (Teams -> Weekly Schedule & Matchups)")
+            print(f"    [2] {C.BOLD}Browse by Week{C.RESET}  (Week -> All Matchups in that Week)")
+            print(f"    [3] {C.BOLD}All Games{C.RESET}       (Direct Matchup List)")
+
+            if initial_team:
+                mode_choice = "1"
+            elif initial_week:
+                mode_choice = "2"
+            else:
+                try:
+                    mode_choice = prompt_input("  Choose mode [1-3] (or 'q' to exit, default: 1): ").strip().lower() or "1"
+                except (EOFError, KeyboardInterrupt):
+                    break
+
+            if mode_choice in ("q", "quit", "exit"):
+                break
+
+            if mode_choice in ("1", "team", "by team"):
+                all_teams = sorted({g["away_team"] for g in all_games} | {g["home_team"] for g in all_games})
+                if initial_team and initial_team in all_teams:
+                    sel_team = initial_team
+                    initial_team = None
+                else:
+                    print(f"\n  {C.BOLD}{C.CYAN}Available Teams in {active_season} Games ({len(all_teams)} teams):{C.RESET}")
+                    for t_i, tm in enumerate(all_teams, 1):
+                        g_count = sum(1 for g in all_games if g["away_team"] == tm or g["home_team"] == tm)
+                        print(f"    [{t_i:2d}] {C.BOLD}{tm:<4}{C.RESET} ({g_count} game{'s' if g_count != 1 else ''})")
+                    try:
+                        tm_in = prompt_input(f"  Select team number or abbreviation [1-{len(all_teams)}] (or 'b' for back, default: 1): ").strip() or "1"
+                    except (EOFError, KeyboardInterrupt):
+                        break
+                    if tm_in.lower() in ("b", "back"):
+                        continue
+                    if tm_in.lower() in ("q", "quit", "exit"):
+                        break
+                    if tm_in.isdigit() and 1 <= int(tm_in) <= len(all_teams):
+                        sel_team = all_teams[int(tm_in) - 1]
+                    else:
+                        resolved = resolve_team_abbr(tm_in) or tm_in.upper()
+                        sel_team = resolved if resolved in all_teams else all_teams[0]
+
+                team_games = [g for g in all_games if g["away_team"] == sel_team or g["home_team"] == sel_team]
+                print(f"\n  {C.BOLD}{C.GOLD}Schedule & Games for {sel_team} ({active_season} • {len(team_games)} matchups):{C.RESET}")
+                for tg_i, tg in enumerate(team_games, 1):
+                    ot_badge = f" {C.YELLOW}(OT){C.RESET}" if tg["has_ot"] else ""
+                    print(f"    [{tg_i:2d}] Week {tg['week']:2d}: {C.BOLD}{tg['away_team']:<3} @ {tg['home_team']:<3}{C.RESET} ({tg['away_team']} {tg['away_score']} - {tg['home_team']} {tg['home_score']}{ot_badge}) [{tg['total_plays']} plays]")
+                try:
+                    match_in = prompt_input(f"  Select matchup [1-{len(team_games)}] (or 'b' for teams, default: 1): ").strip() or "1"
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if match_in.lower() in ("b", "back"):
+                    continue
+                if match_in.lower() in ("q", "quit", "exit"):
+                    break
+                tg_idx = int(match_in) - 1 if match_in.isdigit() and 1 <= int(match_in) <= len(team_games) else 0
+                chosen_game = team_games[tg_idx]
+
+            elif mode_choice in ("2", "week", "by week"):
+                avail_weeks = sorted({g["week"] for g in all_games})
+                if initial_week and initial_week in avail_weeks:
+                    sel_week = initial_week
+                    initial_week = None
+                else:
+                    print(f"\n  {C.BOLD}{C.CYAN}Available Weeks in {active_season} ({len(avail_weeks)} weeks):{C.RESET}")
+                    for w_i, wk in enumerate(avail_weeks, 1):
+                        w_count = sum(1 for g in all_games if g["week"] == wk)
+                        print(f"    [{w_i:2d}] Week {wk:2d} ({w_count} matchup{'s' if w_count != 1 else ''})")
+                    try:
+                        wk_in = prompt_input(f"  Select week [1-{len(avail_weeks)}] (or 'b' for back, default: 1): ").strip() or "1"
+                    except (EOFError, KeyboardInterrupt):
+                        break
+                    if wk_in.lower() in ("b", "back"):
+                        continue
+                    if wk_in.lower() in ("q", "quit", "exit"):
+                        break
+                    if wk_in.isdigit() and int(wk_in) in avail_weeks:
+                        sel_week = int(wk_in)
+                    elif wk_in.isdigit() and 1 <= int(wk_in) <= len(avail_weeks):
+                        sel_week = avail_weeks[int(wk_in) - 1]
+                    else:
+                        sel_week = avail_weeks[0]
+
+                week_games = [g for g in all_games if g["week"] == sel_week]
+                print(f"\n  {C.BOLD}{C.GOLD}Week {sel_week} Matchups ({len(week_games)} games):{C.RESET}")
+                for wg_i, wg in enumerate(week_games, 1):
+                    ot_badge = f" {C.YELLOW}(OT){C.RESET}" if wg["has_ot"] else ""
+                    print(f"    [{wg_i:2d}] {C.BOLD}{wg['away_team']:<3} @ {wg['home_team']:<3}{C.RESET} ({wg['away_team']} {wg['away_score']} - {wg['home_team']} {wg['home_score']}{ot_badge}) [{wg['total_plays']} plays]")
+                try:
+                    match_in = prompt_input(f"  Select matchup [1-{len(week_games)}] (or 'b' for weeks, default: 1): ").strip() or "1"
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if match_in.lower() in ("b", "back"):
+                    continue
+                if match_in.lower() in ("q", "quit", "exit"):
+                    break
+                wg_idx = int(match_in) - 1 if match_in.isdigit() and 1 <= int(match_in) <= len(week_games) else 0
+                chosen_game = week_games[wg_idx]
+
+            else:  # All Games
+                print(f"\n  {C.BOLD}{C.GOLD}All {active_season} Matchups ({len(all_games)} games):{C.RESET}")
+                for ag_i, ag in enumerate(all_games, 1):
+                    ot_badge = f" {C.YELLOW}(OT){C.RESET}" if ag["has_ot"] else ""
+                    print(f"    [{ag_i:2d}] Week {ag['week']:2d}: {C.BOLD}{ag['away_team']:<3} @ {ag['home_team']:<3}{C.RESET} ({ag['away_team']} {ag['away_score']} - {ag['home_team']} {ag['home_score']}{ot_badge}) [{ag['total_plays']} plays]")
+                try:
+                    match_in = prompt_input(f"  Select matchup [1-{len(all_games)}] (or 'b' for menu, default: 1): ").strip() or "1"
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if match_in.lower() in ("b", "back"):
+                    continue
+                if match_in.lower() in ("q", "quit", "exit"):
+                    break
+                ag_idx = int(match_in) - 1 if match_in.isdigit() and 1 <= int(match_in) <= len(all_games) else 0
+                chosen_game = all_games[ag_idx]
+
+        # Game is chosen
+        game_plays: List[Dict[str, Any]] = chosen_game["plays"]
+        has_ot = chosen_game["has_ot"]
+        ot_badge = f" {C.YELLOW}(Overtime / OT){C.RESET}" if has_ot else ""
+
+        print(f"\n{C.BOLD}{C.CYAN}╔═══════════════════════════════════════════════════════════════════════════════════════╗{C.RESET}")
+        print(f"{C.BOLD}{C.CYAN}║  🏈 GAME CENTER: {chosen_game['away_team']} @ {chosen_game['home_team']} (Week {chosen_game['week']} • {chosen_game['season']}){' ' * max(0, 48 - len(chosen_game['away_team']) - len(chosen_game['home_team']))}║{C.RESET}")
+        print(f"{C.BOLD}{C.CYAN}║  Final Score: {chosen_game['away_team']} {chosen_game['away_score']} - {chosen_game['home_team']} {chosen_game['home_score']}{ot_badge}{C.RESET}")
+        print(f"{C.BOLD}{C.CYAN}╚═══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}")
+
+        if jump_play_id:
+            target_play = next((p for p in game_plays if p.get("play_id") == jump_play_id), None)
+            if target_play:
+                jump_play_id = None
+                chosen_play = target_play
+                ret = _play_navigation_loop(
+                    chosen_play=chosen_play,
+                    game_plays=game_plays,
+                    chosen_game=chosen_game,
+                    engine=engine,
+                    bridge=bridge,
+                    all_plays=plays,
+                    active_season=active_season,
+                    default_camera=default_camera,
+                )
+                if ret == "exit":
+                    return
+                elif ret == "change_game":
+                    chosen_game = None
+                    continue
+
+        q_options = [
+            ("1", "Quarter 1 (Q1)", 1),
+            ("2", "Quarter 2 (Q2)", 2),
+            ("3", "Quarter 3 (Q3)", 3),
+            ("4", "Quarter 4 (Q4)", 4),
+        ]
+        if has_ot:
+            q_options.append(("5", "Overtime (OT)", 5))
+        q_options.append(("a", "All Quarters (Full Game)", None))
+
+        print(f"\n  {C.BOLD}{C.GOLD}Select Quarter to View Plays:{C.RESET}")
+        for q_key, q_lbl, q_val in q_options:
+            cnt = len([p for p in game_plays if q_val is None or int(p.get("qtr", 1)) == q_val])
+            print(f"    [{q_key.upper()}] {C.BOLD}{q_lbl:<26}{C.RESET} ({cnt} play{'s' if cnt != 1 else ''})")
+
+        try:
+            q_in = prompt_input("  Choose quarter [1-4" + (",5" if has_ot else "") + ",A] (or 'g' to change game, 'q' to exit, default: A): ").strip().lower() or "a"
+        except (EOFError, KeyboardInterrupt):
+            break
+        if q_in in ("q", "quit", "exit"):
+            break
+        if q_in in ("g", "game", "games", "b", "back"):
+            chosen_game = None
+            continue
+
+        selected_qtr_val = None
+        for q_key, q_lbl, q_val in q_options:
+            if q_in == q_key or q_in in q_lbl.lower():
+                selected_qtr_val = q_val
+                break
+
+        if selected_qtr_val is not None:
+            quarter_plays = [p for p in game_plays if int(p.get("qtr", 1)) == selected_qtr_val]
+            q_header = f"Q{selected_qtr_val}" if selected_qtr_val <= 4 else "OT"
+        else:
+            quarter_plays = list(game_plays)
+            q_header = "FULL GAME"
+
+        if not quarter_plays:
+            print(f"\n  {C.YELLOW}⚠ No play records found in this dataset for {q_header}.{C.RESET}")
+            continue
+
+        tbl_title = f"{chosen_game['away_team']} @ {chosen_game['home_team']} • {q_header} ({len(quarter_plays)} Plays)"
+        print("\n" + render_game_plays_table(quarter_plays, title=tbl_title))
+
+        try:
+            p_sel_in = prompt_input(f"  Select play [1-{len(quarter_plays)}] to diagram (or 'b' for quarters, 'g' for games, default: 1): ").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            break
+        if p_sel_in.lower() in ("b", "back"):
+            continue
+        if p_sel_in.lower() in ("g", "game"):
+            chosen_game = None
+            continue
+        if p_sel_in.lower() in ("q", "quit", "exit"):
+            break
+
+        sel_p_idx = int(p_sel_in) - 1 if p_sel_in.isdigit() and 1 <= int(p_sel_in) <= len(quarter_plays) else 0
+        chosen_play = quarter_plays[sel_p_idx]
+
+        ret = _play_navigation_loop(
+            chosen_play=chosen_play,
+            game_plays=game_plays,
+            chosen_game=chosen_game,
+            engine=engine,
+            bridge=bridge,
+            all_plays=plays,
+            active_season=active_season,
+            default_camera=default_camera,
+        )
+        if ret == "exit":
+            return
+        elif ret == "change_game":
+            chosen_game = None
+            continue
+
+
 def interactive_play_explorer(
     engine: StatEngine,
     bridge: NFLDataBridge,
@@ -4200,11 +5089,14 @@ def interactive_play_explorer(
     default_camera: str = "behind-offense",
 ) -> None:
     """
-    Interactive play explorer:
-    1. Asks user to select Phase: Offense, Defense, or Special Teams.
-    2. Lists all known plays for that phase.
-    3. Diagrams the selected play on the ASCII football field.
-    4. Offers play analytics, or drill-down into team and player stats.
+    Interactive Play Explorer:
+    1. Select Phase: Offense, Defense, Special Teams.
+    2. Select Sub-Category: Pass, Run, Pass Rush, Takeaways, Run Stops, Field Goals, Punts.
+    3. Select Sub-Type / Scheme Concept: Quick Slant, Intermediate Crosser, Deep Shot, Screen, Inside Zone, Outside Zone, Power, QB Keep, etc.
+    4. Shows generic play concept diagram (tactical chalkboard breakdown).
+    5. Lists teams or weeks to drill down to a game it was used in (only shows options where it was played in).
+    6. Select play to diagram on field.
+    7. Play Action Menu: Stats, Team, Player, Go to Game View, Next Play, Prev Play, Concept Chalkboard, Camera.
     """
     s_plays = plays_for_season(plays, active_season)
     if not s_plays:
@@ -4231,31 +5123,201 @@ def interactive_play_explorer(
             "3": "special_teams", "special": "special_teams", "special teams": "special_teams", "st": "special_teams"
         }
         phase = ph_map.get(ph_in, "offense")
-        phase_plays = filter_plays_by_phase(s_plays, phase)
-        if not phase_plays:
-            print(f"  {C.YELLOW}⚠ No plays found for phase '{phase}' in {active_season}.{C.RESET}")
+
+        chosen_concept_key = None
+        chosen_concept_title = ""
+
+        if phase == "offense":
+            print(f"\n  {C.BOLD}{C.CYAN}Select Offensive Play Category:{C.RESET}")
+            print(f"    [1] {C.BOLD}Pass{C.RESET} (Quick Slant, Intermediate Crosser, Deep Shot, Screen)")
+            print(f"    [2] {C.BOLD}Run{C.RESET}  (Inside Zone, Outside Zone, Power/Counter, QB Keep)")
+            try:
+                cat_in = prompt_input("  Choose category [1-2] (or 'b' for back, default: 1): ").strip().lower() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if cat_in in ("b", "back"):
+                continue
+            if cat_in in ("q", "quit", "exit"):
+                break
+
+            if cat_in in ("1", "pass", "p"):
+                print(f"\n  {C.BOLD}{C.GOLD}Select Pass Scheme / Sub-Type:{C.RESET}")
+                print(f"    [1] {C.BOLD}Quick Game & Slant{C.RESET}         (quick_slant)        — 3-step timing, slants, flats, quick hot-read")
+                print(f"    [2] {C.BOLD}Intermediate Crosser & Mesh{C.RESET} (intermediate_cross) — 10-18 yd crossing routes, rubs, layered zones")
+                print(f"    [3] {C.BOLD}Play-Action Deep Shot{C.RESET}      (play_action_deep)   — Heavy run fake, max protect, deep post/go")
+                print(f"    [4] {C.BOLD}Screen Pass{C.RESET}                (screen)             — Slip screen behind convoy of pulling linemen")
+                try:
+                    sub_in = prompt_input("  Choose scheme [1-4] (or 'b' for back, default: 1): ").strip().lower() or "1"
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if sub_in in ("b", "back"):
+                    continue
+                if sub_in in ("q", "quit", "exit"):
+                    break
+                sub_map = {
+                    "1": ("quick_slant", "Quick Game & Slant"),
+                    "2": ("intermediate_cross", "Intermediate Crosser & Mesh"),
+                    "3": ("play_action_deep", "Play-Action Deep Shot"),
+                    "4": ("screen", "Screen Pass"),
+                }
+                chosen_concept_key, chosen_concept_title = sub_map.get(sub_in, ("quick_slant", "Quick Game & Slant"))
+
+            else:  # Run
+                print(f"\n  {C.BOLD}{C.GOLD}Select Run Scheme / Sub-Type:{C.RESET}")
+                print(f"    [1] {C.BOLD}Inside Zone & Dive{C.RESET}     (rush_inside)   — Double-team interior, cutback lane, north-south plunge")
+                print(f"    [2] {C.BOLD}Outside Zone & Stretch{C.RESET} (rush_outside)  — Lateral stretch, reach blocks, perimeter crease")
+                print(f"    [3] {C.BOLD}Power & Counter Gap{C.RESET}    (power_gap)     — Pulling guard/tackle, kick-out block & lead wrap")
+                print(f"    [4] {C.BOLD}QB Keep & Scramble{C.RESET}     (qb_scramble)   — Read option, bootleg rollout, broken pocket scramble")
+                try:
+                    sub_in = prompt_input("  Choose scheme [1-4] (or 'b' for back, default: 1): ").strip().lower() or "1"
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if sub_in in ("b", "back"):
+                    continue
+                if sub_in in ("q", "quit", "exit"):
+                    break
+                sub_map = {
+                    "1": ("rush_inside", "Inside Zone & Dive"),
+                    "2": ("rush_outside", "Outside Zone & Stretch"),
+                    "3": ("power_gap", "Power & Counter Gap"),
+                    "4": ("qb_scramble", "QB Keep & Scramble"),
+                }
+                chosen_concept_key, chosen_concept_title = sub_map.get(sub_in, ("rush_inside", "Inside Zone & Dive"))
+
+        elif phase == "defense":
+            print(f"\n  {C.BOLD}{C.CYAN}Select Defensive Category / Sub-Type:{C.RESET}")
+            print(f"    [1] {C.BOLD}Pass Rush & Sacks{C.RESET}            (pass_rush_sack)       — Edge collapse, interior push, stunts & sacks")
+            print(f"    [2] {C.BOLD}Takeaways & Interceptions{C.RESET}    (turnover_interception)— Zone jumps, tipped passes, takeaway coverage")
+            print(f"    [3] {C.BOLD}Run Stops & Tackles for Loss{C.RESET} (tfl_run_stop)        — Backfield penetration, gang tackle for loss")
+            try:
+                sub_in = prompt_input("  Choose category [1-3] (or 'b' for back, default: 1): ").strip().lower() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if sub_in in ("b", "back"):
+                continue
+            if sub_in in ("q", "quit", "exit"):
+                break
+            sub_map = {
+                "1": ("pass_rush_sack", "Pass Rush & Sacks"),
+                "2": ("turnover_interception", "Takeaways & Interceptions"),
+                "3": ("tfl_run_stop", "Run Stops & Tackles for Loss"),
+            }
+            chosen_concept_key, chosen_concept_title = sub_map.get(sub_in, ("pass_rush_sack", "Pass Rush & Sacks"))
+
+        else:  # Special Teams
+            print(f"\n  {C.BOLD}{C.CYAN}Select Special Teams Unit / Sub-Type:{C.RESET}")
+            print(f"    [1] {C.BOLD}Field Goal & Extra Point{C.RESET} (field_goal) — Snap-to-kick 1.3s tempo & line protection wall")
+            print(f"    [2] {C.BOLD}Punt & Coverage{C.RESET}          (punt)       — Spiral punt hangtime, gunners & coverage contain")
+            try:
+                sub_in = prompt_input("  Choose unit [1-2] (or 'b' for back, default: 1): ").strip().lower() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if sub_in in ("b", "back"):
+                continue
+            if sub_in in ("q", "quit", "exit"):
+                break
+            sub_map = {
+                "1": ("field_goal", "Field Goal & Extra Point"),
+                "2": ("punt", "Punt & Coverage"),
+            }
+            chosen_concept_key, chosen_concept_title = sub_map.get(sub_in, ("field_goal", "Field Goal & Extra Point"))
+
+        # Step 4: Show Generic Play Diagram
+        print("\n" + AsciiArtRenderer.render_generic_play_concept_diagram(chosen_concept_key))
+
+        # Step 5: Filter plays by concept and offer drilldown by Team or Week
+        matching_plays = filter_plays_by_concept_key(s_plays, chosen_concept_key)
+        if not matching_plays:
+            matching_plays = filter_plays_by_concept_key(plays, chosen_concept_key)
+
+        if not matching_plays:
+            print(f"\n  {C.YELLOW}⚠ No individual game plays found matching concept `{chosen_concept_key}` in loaded data.{C.RESET}")
+            try:
+                prompt_input("  Press Enter to return to play menu...")
+            except (EOFError, KeyboardInterrupt):
+                break
             continue
 
-        print(f"\n  {C.BOLD}{C.CYAN}Known Plays ({active_season} • {phase.replace('_', ' ').title()} • {len(phase_plays)} plays):{C.RESET}")
-        print("  " + "─" * 92)
-        for idx, p in enumerate(phase_plays, 1):
+        if phase == "offense":
+            avail_teams = sorted({p.get("posteam") for p in matching_plays if p.get("posteam")})
+        elif phase == "defense":
+            avail_teams = sorted({(p.get("defteam") or p.get("posteam")) for p in matching_plays if (p.get("defteam") or p.get("posteam"))})
+        else:
+            avail_teams = sorted({(p.get("posteam") or p.get("defteam")) for p in matching_plays if (p.get("posteam") or p.get("defteam"))})
+
+        avail_weeks = sorted({int(p.get("week", 1)) for p in matching_plays})
+
+        print(f"\n  {C.BOLD}{C.CYAN}Drill Down to Games using {chosen_concept_title} ({len(matching_plays)} plays available):{C.RESET}")
+        print(f"    [1] {C.BOLD}Drill Down by Team{C.RESET} (Only teams executing this concept: {', '.join(avail_teams)})")
+        print(f"    [2] {C.BOLD}Drill Down by Week{C.RESET} (Only weeks executed: {', '.join(map(str, avail_weeks))})")
+        print(f"    [3] {C.BOLD}View All Plays for this Concept{C.RESET}")
+
+        try:
+            dd_in = prompt_input("  Choose drilldown [1-3] (or 'b' to change scheme, default: 3): ").strip().lower() or "3"
+        except (EOFError, KeyboardInterrupt):
+            break
+        if dd_in in ("b", "back"):
+            continue
+        if dd_in in ("q", "quit", "exit"):
+            break
+
+        if dd_in in ("1", "team", "by team"):
+            print(f"\n  {C.BOLD}{C.GOLD}Teams that ran {chosen_concept_title}:{C.RESET}")
+            for t_idx, tm in enumerate(avail_teams, 1):
+                t_count = sum(1 for p in matching_plays if p.get("posteam") == tm or p.get("defteam") == tm)
+                print(f"    [{t_idx}] {C.BOLD}{tm:<4}{C.RESET} ({t_count} play{'s' if t_count != 1 else ''})")
+            try:
+                tm_sel = prompt_input(f"  Select team [1-{len(avail_teams)}] (default: 1): ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if tm_sel.isdigit() and 1 <= int(tm_sel) <= len(avail_teams):
+                sel_tm = avail_teams[int(tm_sel) - 1]
+            else:
+                res_tm = resolve_team_abbr(tm_sel) or tm_sel.upper()
+                sel_tm = res_tm if res_tm in avail_teams else avail_teams[0]
+            display_plays = [p for p in matching_plays if p.get("posteam") == sel_tm or p.get("defteam") == sel_tm]
+
+        elif dd_in in ("2", "week", "by week"):
+            print(f"\n  {C.BOLD}{C.GOLD}Weeks where {chosen_concept_title} was executed:{C.RESET}")
+            for w_idx, wk in enumerate(avail_weeks, 1):
+                w_count = sum(1 for p in matching_plays if int(p.get("week", 1)) == wk)
+                print(f"    [{w_idx}] Week {wk:2d} ({w_count} play{'s' if w_count != 1 else ''})")
+            try:
+                wk_sel = prompt_input(f"  Select week [1-{len(avail_weeks)}] (default: 1): ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                break
+            if wk_sel.isdigit() and int(wk_sel) in avail_weeks:
+                sel_wk = int(wk_sel)
+            elif wk_sel.isdigit() and 1 <= int(wk_sel) <= len(avail_weeks):
+                sel_wk = avail_weeks[int(wk_sel) - 1]
+            else:
+                sel_wk = avail_weeks[0]
+            display_plays = [p for p in matching_plays if int(p.get("week", 1)) == sel_wk]
+
+        else:
+            display_plays = matching_plays
+
+        # Step 6: Show matching plays
+        print(f"\n  {C.BOLD}{C.CYAN}Executed Plays ({chosen_concept_title} • {len(display_plays)} plays):{C.RESET}")
+        print("  " + "─" * 94)
+        for idx, p in enumerate(display_plays, 1):
             post = p.get("posteam", "OFF")
             defe = p.get("defteam", "DEF")
             qtr = p.get("qtr", 1)
+            q_str = "OT" if qtr >= 5 else f"Q{qtr}"
             down = p.get("down", 1)
             ydstogo = p.get("ydstogo", 10)
             yds = float(p.get("yards_gained", 0.0))
             epa = float(p.get("epa", 0.0))
-            concept = p.get("play_concept", p.get("play_type", "play"))
             qb = p.get("qb_name") or p.get("player_name") or ""
             target = p.get("receiver_player_name") or p.get("rusher_player_name") or p.get("kicker_player_name") or p.get("punter_player_name") or ""
-            action_desc = f"{qb} -> {target}" if (qb and target and qb != target) else (qb or target or concept)
+            action_desc = f"{qb} -> {target}" if (qb and target and qb != target) else (qb or target or chosen_concept_key)
             td_tag = " (TD)" if p.get("touchdown") else ""
-            print(f"    [{idx:2d}] {post} vs {defe:<3} | Q{qtr} {down}&{ydstogo:<2} | {action_desc:<30} ({concept:<14}) | {yds:+5.1f} yds{td_tag} | {epa:+5.2f} EPA")
-        print("  " + "─" * 92)
+            print(f"    [{idx:2d}] {post} vs {defe:<3} | {q_str} {down}&{ydstogo:<2} | {action_desc:<30} | {yds:+5.1f} yds{td_tag} | {epa:+5.2f} EPA")
+        print("  " + "─" * 94)
 
         try:
-            sel_in = prompt_input(f"  Select play number to diagram [1-{len(phase_plays)}] (or 'b' to change phase, default: 1): ").strip()
+            sel_in = prompt_input(f"  Select play number to diagram [1-{len(display_plays)}] (or 'b' to change drilldown, default: 1): ").strip()
         except (EOFError, KeyboardInterrupt):
             break
         if sel_in.lower() in ("b", "back"):
@@ -4263,26 +5325,45 @@ def interactive_play_explorer(
         if sel_in.lower() in ("q", "quit", "exit"):
             break
 
-        play_idx = int(sel_in) - 1 if sel_in.isdigit() and 1 <= int(sel_in) <= len(phase_plays) else 0
-        chosen_play = phase_plays[play_idx]
+        play_idx = int(sel_in) - 1 if sel_in.isdigit() and 1 <= int(sel_in) <= len(display_plays) else 0
+        chosen_play = display_plays[play_idx]
         current_cam = "behind-defense" if phase == "defense" and default_camera == "behind-offense" else default_camera
 
+        # Step 7: Field Diagram
         play_title = f"PLAY #{chosen_play['play_id']} DIAGRAM — {chosen_play.get('qb_name') or chosen_play.get('player_name') or 'Play'} ({chosen_play.get('posteam')} vs {chosen_play.get('defteam')})"
         print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=play_title, camera=current_cam))
 
-        # Follow-up menu
+        # Step 8: Play Action Menu
         while True:
-            print(f"\n  {C.BOLD}{C.GOLD}Play Action Menu for Play #{chosen_play['play_id']}:{C.RESET}")
-            print(f"    [1] {C.BOLD}Play Stats{C.RESET}        (In-depth analytics: EPA, WPA, Air Yards, YAC, Situation)")
-            print(f"    [2] {C.BOLD}Drill Down Team{C.RESET}   (Offense/Defense team efficiency, rankings & roster leaders)")
-            print(f"    [3] {C.BOLD}Drill Down Player{C.RESET} (Player season profile, stats breakdown & signature plays)")
-            print(f"    [4] {C.BOLD}Switch Camera{C.RESET}     (Change view: behind-offense / behind-defense / sideline)")
-            print(f"    [5] {C.BOLD}Another Play{C.RESET}      (Return to play list)")
-            print(f"    [6] {C.BOLD}Exit Explorer{C.RESET}     (Return to main prompt)")
+            game_plays_here = sorted(
+                [p for p in plays if p.get("game_id") == chosen_play.get("game_id")],
+                key=lambda x: (int(x.get("qtr", 1)), int(x.get("play_id", 0)))
+            )
+            curr_g_idx = -1
+            for gi, gp in enumerate(game_plays_here):
+                if gp.get("play_id") == chosen_play.get("play_id"):
+                    curr_g_idx = gi
+                    break
+            has_next = curr_g_idx >= 0 and curr_g_idx + 1 < len(game_plays_here)
+            has_prev = curr_g_idx > 0
+
+            print(f"\n  {C.BOLD}{C.GOLD}Play Action Menu for Play #{chosen_play['play_id']} ({chosen_concept_title}):{C.RESET}")
+            print(f"    [1]  {C.BOLD}Play Stats{C.RESET}              (In-depth analytics: EPA, WPA, Air Yards, YAC, Situation)")
+            print(f"    [2]  {C.BOLD}Drill Down Team{C.RESET}         (Offense/Defense team efficiency, rankings & roster leaders)")
+            print(f"    [3]  {C.BOLD}Drill Down Player{C.RESET}       (Player season profile, stats breakdown & signature plays)")
+            print(f"    [4]  {C.BOLD}Go to Game View{C.RESET}         (Open in /games: match scoreboard, quarter play log & step plays)")
+            print(f"    [5]  {C.BOLD}Next Play in Game{C.RESET}       {'[▶ Next snap]' if has_next else '[End of Game]'}")
+            print(f"    [6]  {C.BOLD}Prev Play in Game{C.RESET}       {'[◀ Prev snap]' if has_prev else '[Start of Game]'}")
+            print(f"    [7]  {C.BOLD}View Concept Chalkboard{C.RESET} (Re-display tactical chalkboard schematic)")
+            print(f"    [8]  {C.BOLD}Switch Camera{C.RESET}           (Change view: behind-offense / behind-defense / sideline)")
+            print(f"    [9]  {C.BOLD}Another Play{C.RESET}            (Return to play selection)")
+            print(f"    [10] {C.BOLD}Exit Explorer{C.RESET}           (Return to main prompt)")
+
             try:
-                act = prompt_input("  Choice [1-6] (default: 1): ").strip() or "1"
+                act = prompt_input("  Choice [1-10] (default: 1): ").strip().lower() or "1"
             except (EOFError, KeyboardInterrupt):
                 return
+
             if act in ("1", "stats", "play stats"):
                 print(render_single_play_deep_dive(chosen_play))
             elif act in ("2", "team", "drill down team"):
@@ -4318,17 +5399,49 @@ def interactive_play_explorer(
                     except (EOFError, KeyboardInterrupt):
                         target_p = players_here[0]
                 print(render_player_drilldown_view(engine, plays, season=active_season, player_name=target_p, interactive=True))
-            elif act in ("4", "camera"):
+            elif act in ("4", "game", "game view", "go to game view", "g"):
+                interactive_game_browser(
+                    engine,
+                    bridge,
+                    plays,
+                    active_season=active_season,
+                    default_camera=current_cam,
+                    initial_game_id=chosen_play.get("game_id"),
+                    initial_play_id=chosen_play.get("play_id"),
+                )
+            elif act in ("5", "next", "next play", "n"):
+                if has_next:
+                    chosen_play = game_plays_here[curr_g_idx + 1]
+                    q_n = "OT" if chosen_play.get("qtr", 1) >= 5 else f"Q{chosen_play.get('qtr', 1)}"
+                    print(f"\n  {C.GREEN}▶ Stepping to Next Play #{chosen_play['play_id']} ({q_n} {chosen_play.get('down', 1)}&{chosen_play.get('ydstogo', 10)}){C.RESET}")
+                    pt = f"PLAY #{chosen_play['play_id']} DIAGRAM — {chosen_play.get('qb_name') or chosen_play.get('player_name') or 'Play'} ({chosen_play.get('posteam')} vs {chosen_play.get('defteam')})"
+                    print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=pt, camera=current_cam))
+                else:
+                    print(f"\n  {C.YELLOW}⚠ Already at the final play of this game.{C.RESET}")
+            elif act in ("6", "prev", "previous", "previous play", "p"):
+                if has_prev:
+                    chosen_play = game_plays_here[curr_g_idx - 1]
+                    q_p = "OT" if chosen_play.get("qtr", 1) >= 5 else f"Q{chosen_play.get('qtr', 1)}"
+                    print(f"\n  {C.CYAN}◀ Stepping to Previous Play #{chosen_play['play_id']} ({q_p} {chosen_play.get('down', 1)}&{chosen_play.get('ydstogo', 10)}){C.RESET}")
+                    pt = f"PLAY #{chosen_play['play_id']} DIAGRAM — {chosen_play.get('qb_name') or chosen_play.get('player_name') or 'Play'} ({chosen_play.get('posteam')} vs {chosen_play.get('defteam')})"
+                    print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=pt, camera=current_cam))
+                else:
+                    print(f"\n  {C.YELLOW}⚠ Already at the opening play of this game.{C.RESET}")
+            elif act in ("7", "chalkboard", "concept", "c"):
+                h_c = classify_play_concept_hierarchy(chosen_play)
+                print("\n" + AsciiArtRenderer.render_generic_play_concept_diagram(h_c["concept_key"]))
+            elif act in ("8", "camera"):
                 try:
                     c_in = prompt_input("  Camera perspective [1] behind-offense  [2] behind-defense  [3] sideline  [4] all (default: 1): ").strip() or "1"
                 except (EOFError, KeyboardInterrupt):
                     c_in = "1"
                 c_map = {"1": "behind-offense", "2": "behind-defense", "3": "sideline", "4": "all"}
                 current_cam = c_map.get(c_in, c_in)
-                print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=play_title, camera=current_cam))
-            elif act in ("5", "another", "back"):
+                pt = f"PLAY #{chosen_play['play_id']} DIAGRAM — {chosen_play.get('qb_name') or chosen_play.get('player_name') or 'Play'} ({chosen_play.get('posteam')} vs {chosen_play.get('defteam')})"
+                print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=pt, camera=current_cam))
+            elif act in ("9", "another", "back", "b"):
                 break
-            elif act in ("6", "exit", "q", "quit"):
+            elif act in ("10", "exit", "q", "quit"):
                 return
 
 
@@ -4504,7 +5617,8 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/player{C.RESET} [name]                  Drill down into player passing, rushing, and receiving stats
     {C.BOLD}{C.CYAN}/stat{C.RESET} [stat_id]                 Evaluate any Traditional or Custom Stat leaderboard (Table only)
     {C.BOLD}{C.CYAN}/create{C.RESET}                         Launch the Composable Custom Stat Builder (Season / Game / Play scope)
-    {C.BOLD}{C.CYAN}/play{C.RESET} [phase/query]             Interactive play explorer (Offense, Defense, Special Teams) & diagrammer
+    {C.BOLD}{C.CYAN}/play{C.RESET} [phase/query]             Interactive play explorer (pass/run concepts, generic chalkboards & drilldowns)
+    {C.BOLD}{C.CYAN}/games{C.RESET} [week/team]             Browse games by team/week, view quarter play tables & step plays
     {C.BOLD}{C.CYAN}/camera{C.RESET} <offense|defense|side>  Set default camera angle for play diagrams
     {C.BOLD}{C.CYAN}/season{C.RESET} <year>                  Set active season year (default: current NFL season)
     {C.BOLD}{C.CYAN}/query{C.RESET}                          Run an ad-hoc season filter & group query
@@ -4655,6 +5769,23 @@ def interactive_tui(
                         print(handle_nl_query_result(parsed, engine, plays))
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
+                elif cmd_token in ("/games", "/game", "/matchup", "/matchups", "/boxscore", "/pbp"):
+                    init_team = None
+                    init_week = None
+                    if cmd_args:
+                        if cmd_args[0].isdigit():
+                            init_week = int(cmd_args[0])
+                        else:
+                            init_team = resolve_team_abbr(cmd_args[0]) or cmd_args[0].upper()
+                    interactive_game_browser(
+                        engine,
+                        bridge,
+                        plays,
+                        active_season=active_season,
+                        default_camera=default_camera,
+                        initial_team=init_team,
+                        initial_week=init_week,
+                    )
                 elif cmd_token in ("/camera", "/perspective"):
                     if cmd_args:
                         cam_in = cmd_args[0].lower()
@@ -4835,6 +5966,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ask_p = sub.add_parser("ask", parents=[common], help="Ask a natural-language NFL stat or play question (Local SLM + deterministic parser)")
     ask_p.add_argument("query", help="Natural language question")
 
+    games_p = sub.add_parser("games", parents=[common], help="Browse NFL games by week or team, view quarter play logs, and step through plays")
+    games_p.add_argument("--game-id", help="Direct game ID (e.g. 2025_01_BAL_KC or 2025_01_LA_DET)")
+    games_p.add_argument("--week", type=int, help="Filter or jump to week (e.g. 1)")
+    games_p.add_argument("--qtr", type=int, help="Filter or jump to quarter (1-4 or 5 for OT)")
+    games_p.add_argument("--play-id", type=int, help="Jump directly to play ID")
+
     sub.add_parser("example", parents=[common], help="Walkthrough on how to build a custom stat (featuring QB Meaningful Wins)")
 
     # Backwards-compatible aliases for example workflows
@@ -4945,6 +6082,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 game_id=getattr(args, "game_id", None),
                 camera=cam,
             ))
+        elif cmd == "games":
+            interactive_game_browser(
+                engine,
+                bridge,
+                all_plays,
+                active_season=args.season,
+                default_camera=resolved_camera,
+                initial_game_id=args.game_id,
+                initial_play_id=args.play_id,
+                initial_team=args.team,
+                initial_week=args.week,
+                initial_qtr=args.qtr,
+            )
         elif cmd in ("example", "qb-wins"):
             print(render_custom_stat_example_walkthrough(engine, season_plays, args.season, conf=args.conf, team=args.team))
         elif cmd == "screen-pass":
