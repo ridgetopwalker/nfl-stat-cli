@@ -1410,14 +1410,14 @@ class AsciiArtRenderer:
     @staticmethod
     def banner() -> str:
         lines = [
-            f"{C.BOLD}{C.GOLD}╔══════════════════════════════════════════════════════════════════════════════════════╗{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.CYAN}███╗   ██╗███████╗██╗         ███████╗████████╗ █████╗ ████████╗   ██████╗██╗     ██╗{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.CYAN}████╗  ██║██╔════╝██║         ██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝  ██╔════╝██║     ██║{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.WHITE}██╔██╗ ██║█████╗  ██║   █████╗███████╗   ██║   ███████║   ██║     ██║     ██║     ██║{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}██║╚██╗██║██╔══╝  ██║   ╚════╝╚════██║   ██║   ██╔══██║   ██║     ██║     ██║     ██║{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}██║ ╚████║██║     ███████╗    ███████║   ██║   ██║  ██║   ██║     ╚██████╗███████╗██║{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.DIM}{C.WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer{C.RESET}   {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}╚══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}",
+            f"{C.BOLD}{C.GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.CYAN}███╗   ██╗███████╗██╗         ███████╗████████╗ █████╗ ████████╗   ██████╗██╗     ██╗{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.CYAN}████╗  ██║██╔════╝██║         ██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝  ██╔════╝██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.WHITE}██╔██╗ ██║█████╗  ██║   █████╗███████╗   ██║   ███████║   ██║     ██║     ██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.GREEN}██║╚██╗██║██╔══╝  ██║   ╚════╝╚════██║   ██║   ██╔══██║   ██║     ██║     ██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.GREEN}██║ ╚████║██║     ███████╗    ███████║   ██║   ██║  ██║   ██║     ╚██████╗███████╗██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.DIM}{C.WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer    {C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}╚═══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}",
         ]
         return "\n".join(lines)
 
