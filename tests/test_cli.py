@@ -645,6 +645,52 @@ def test_interactive_tui_nl_dataset_and_passing_yards_with_why():
         assert "qb" not in parsed
 
 
+def test_downcast_dataframe_floats():
+    class DummyDF:
+        def __init__(self):
+            self.dtypes = {"epa": "float64", "wpa": "float64", "yards": "int64"}
+        def select_dtypes(self, include):
+            class ColIdx:
+                def __init__(self, cols):
+                    self.columns = cols
+            return ColIdx(["epa", "wpa"])
+        def __setitem__(self, key, val):
+            self.set_cols = key
+            self.val = val
+
+    df = DummyDF()
+    res = cli._downcast_dataframe_floats(df)
+    assert res is df
+    # Non-dataframe object should not throw
+    assert cli._downcast_dataframe_floats(None) is None
+    assert cli._downcast_dataframe_floats("string") == "string"
+
+
+def test_console_spinner_lifecycle(capsys):
+    with cli.ConsoleSpinner("Context test", enabled=False) as sp:
+        sp.update("Updated context test")
+
+    sp2 = cli.ConsoleSpinner("Manual test", enabled=True)
+    sp2.enabled = True
+    sp2.start()
+    sp2.update("Updated manual")
+    sp2.stop(final_message="✔ Done manual", clear=True)
+    out = capsys.readouterr().out
+    assert "✔ Done manual" in out
+
+
+def test_show_startup_loading_includes_years_and_downcast(capsys, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cli.os, "system", lambda cmd: None)
+    cli.show_startup_loading(is_interactive=True, seasons=[2024, 2025])
+    out = capsys.readouterr().out
+    assert "Loading..." in out
+    assert "2024, 2025" in out
+    assert "Downcasting floats" in out
+    assert "Ready! Launching NFL-STAT-CLI..." in out
+
+
+
 
 
 

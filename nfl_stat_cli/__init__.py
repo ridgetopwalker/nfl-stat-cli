@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -561,6 +562,17 @@ def require_season_plays(plays: List[Dict[str, Any]], season: int) -> List[Dict[
     )
 
 
+def _downcast_dataframe_floats(df: Any) -> Any:
+    """Downcast float64 columns to float32 to reduce memory consumption and speed up processing."""
+    try:
+        float_cols = df.select_dtypes(include=["float64"]).columns
+        if len(float_cols) > 0:
+            df[float_cols] = df[float_cols].astype("float32")
+    except Exception:
+        pass
+    return df
+
+
 class NFLDataBridge:
     """
     Loads NFL Play-by-Play and Roster/Team data from:
@@ -576,30 +588,42 @@ class NFLDataBridge:
         self.last_source_used = "built-in-nflverse-sample"
         self.last_error: Optional[str] = None
 
-    def load_pbp(self, seasons: List[int]) -> List[Dict[str, Any]]:
+    def load_pbp(self, seasons: List[int], spinner: Optional[Any] = None) -> List[Dict[str, Any]]:
         """Load play-by-play rows for the requested seasons using the selected engine."""
+        seasons_label = ", ".join(map(str, seasons))
+        if spinner:
+            spinner.update(f"Loading NFL play-by-play data for years [{seasons_label}]...")
+
         if self.engine in ("auto", "python", "sdv"):
-            rows = self._try_sportsdataverse_py(seasons)
+            rows = self._try_sportsdataverse_py(seasons, spinner=spinner)
             if rows:
                 self.last_source_used = "nflreadpy / nfl_data_py (Python)"
                 return rows
 
         if self.engine in ("auto", "r", "nflverse"):
-            rows = self._try_nflverse_r(seasons)
+            rows = self._try_nflverse_r(seasons, spinner=spinner)
             if rows:
                 self.last_source_used = "nflverse / nflreadr (R)"
                 return rows
+
+        if spinner:
+            spinner.update("Downcasting floats & preparing offline dataset...")
 
         self.last_source_used = "built-in nflverse/sdv offline dataset"
         norm_sample = [self._normalize_row(r, idx) for idx, r in enumerate(SAMPLE_PBP_PLAYS, 1)]
         # Never substitute another season's rows for the requested ones
         return [r for r in norm_sample if int(r.get("season", 0)) in seasons]
 
-    def _try_sportsdataverse_py(self, seasons: List[int]) -> Optional[List[Dict[str, Any]]]:
+    def _try_sportsdataverse_py(self, seasons: List[int], spinner: Optional[Any] = None) -> Optional[List[Dict[str, Any]]]:
         errors: List[str] = []
         try:
             import nflreadpy as nfl  # type: ignore[import]
+            if spinner:
+                spinner.update(f"Fetching nflreadpy pbp for years [{', '.join(map(str, seasons))}]...")
             df = nfl.load_pbp(seasons=seasons).to_pandas()
+            if spinner:
+                spinner.update("Downcasting floats & optimizing dataframe memory...")
+            df = _downcast_dataframe_floats(df)
             rows = self._normalize_dataframe(df)
             if rows:
                 return rows
@@ -607,7 +631,12 @@ class NFLDataBridge:
             errors.append(f"nflreadpy: {exc}")
         try:
             import nfl_data_py as nfl_data  # type: ignore[import]
-            df = nfl_data.import_pbp_data(seasons)
+            if spinner:
+                spinner.update(f"Importing nfl_data_py for years [{', '.join(map(str, seasons))}]...")
+            df = nfl_data.import_pbp_data(seasons, downcast=True)
+            if spinner:
+                spinner.update("Downcasting floats & optimizing dataframe memory...")
+            df = _downcast_dataframe_floats(df)
             rows = self._normalize_dataframe(df)
             if rows:
                 return rows
@@ -615,7 +644,12 @@ class NFLDataBridge:
             errors.append(f"nfl_data_py: {exc}")
         try:
             import sportsdataverse.nfl as sdv_nfl  # type: ignore[import]
+            if spinner:
+                spinner.update(f"Loading sportsdataverse pbp for years [{', '.join(map(str, seasons))}]...")
             df = sdv_nfl.load_nfl_pbp(seasons=seasons, return_as_pandas=True)
+            if spinner:
+                spinner.update("Downcasting floats & optimizing dataframe memory...")
+            df = _downcast_dataframe_floats(df)
             rows = self._normalize_dataframe(df)
             if rows:
                 return rows
@@ -625,7 +659,7 @@ class NFLDataBridge:
             self.last_error = "; ".join(errors)
         return None
 
-    def _try_nflverse_r(self, seasons: List[int]) -> Optional[List[Dict[str, Any]]]:
+    def _try_nflverse_r(self, seasons: List[int], spinner: Optional[Any] = None) -> Optional[List[Dict[str, Any]]]:
         rscript_bin = shutil.which("Rscript")
         if not rscript_bin:
             return None
@@ -678,6 +712,7 @@ class NFLDataBridge:
         return None
 
     def _normalize_dataframe(self, df: Any) -> List[Dict[str, Any]]:
+        df = _downcast_dataframe_floats(df)
         records = df.to_dict(orient="records")
         out: List[Dict[str, Any]] = []
         for idx, r in enumerate(records, 1):
@@ -6548,24 +6583,101 @@ def _split_cmd_args(raw_in: str) -> List[str]:
         return raw_in.split()
 
 
-def show_startup_loading(is_interactive: bool = True) -> None:
+class ConsoleSpinner:
     """
-    Display a smooth loading progress bar during interactive startup,
-    then clear the screen and display just the logo and input prompt (like /clear).
+    Animated console spinner for long-running operations (fetching seasons, downcasting floats, etc.).
+    Supports context manager (`with ConsoleSpinner(...): ...`) and manual start/update/stop.
+    """
+    SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    ASCII_FRAMES = ("|", "/", "-", "\\")
+
+    def __init__(self, message: str = "Loading...", enabled: bool = True, speed: float = 0.08) -> None:
+        self.message = message
+        self.speed = speed
+        self.enabled = bool(enabled and hasattr(sys.stdout, "isatty") and sys.stdout.isatty())
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        try:
+            enc = getattr(sys.stdout, "encoding", "") or "utf-8"
+            "⠋".encode(enc)
+            self.frames = self.SPINNER_FRAMES
+        except (UnicodeEncodeError, LookupError, TypeError):
+            self.frames = self.ASCII_FRAMES
+
+    def start(self) -> "ConsoleSpinner":
+        if not self.enabled:
+            return self
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def _spin(self) -> None:
+        idx = 0
+        while not self._stop_event.is_set():
+            frame = self.frames[idx % len(self.frames)]
+            idx += 1
+            sys.stdout.write(f"\r  {C.BOLD}{C.GOLD}{frame}{C.RESET} {self.message:<60}")
+            sys.stdout.flush()
+            time.sleep(self.speed)
+
+    def update(self, new_message: str) -> None:
+        self.message = new_message
+
+    def stop(self, final_message: Optional[str] = None, clear: bool = True) -> None:
+        if not self.enabled:
+            if final_message:
+                print(final_message)
+            return
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=0.4)
+        if clear:
+            sys.stdout.write("\r" + " " * 80 + "\r")
+            sys.stdout.flush()
+        if final_message:
+            sys.stdout.write(f"\r  {final_message}\n")
+            sys.stdout.flush()
+
+    def __enter__(self) -> "ConsoleSpinner":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.stop(clear=True)
+
+
+def show_startup_loading(is_interactive: bool = True, seasons: Optional[List[int]] = None) -> None:
+    """
+    Display a smooth loading progress bar with a cycling console spinner during interactive startup,
+    displaying progress across initializing the engine, loading years, downcasting floats,
+    and visualizers before clearing to the clean prompt.
     """
     if not is_interactive:
         return
+    seasons_str = ", ".join(map(str, seasons)) if seasons else f"{CURRENT_SEASON - 1}, {CURRENT_SEASON}"
     steps = [
-        ("Initializing stat calculation engine...", 25),
-        ("Loading NFL play-by-play datasets & models...", 60),
-        ("Calibrating chalkboard & multi-angle visualizers...", 85),
+        ("Initializing stat calculation engine...", 20),
+        (f"Loading NFL play-by-play data for years [{seasons_str}]...", 45),
+        ("Downcasting floats & optimizing memory...", 70),
+        ("Calibrating chalkboard & multi-angle visualizers...", 90),
         ("Ready! Launching NFL-STAT-CLI...", 100),
     ]
     bar_width = 30
+    frames = ConsoleSpinner.SPINNER_FRAMES
+    try:
+        enc = getattr(sys.stdout, "encoding", "") or "utf-8"
+        "⠋".encode(enc)
+    except (UnicodeEncodeError, LookupError, TypeError):
+        frames = ConsoleSpinner.ASCII_FRAMES
+
+    frame_idx = 0
     for label, pct in steps:
         filled = int(bar_width * pct / 100)
         bar = "█" * filled + "░" * (bar_width - filled)
-        sys.stdout.write(f"\r  {C.BOLD}{C.GOLD}Loading... [{bar}] {pct:3d}%{C.RESET} {C.DIM}{label:<52}{C.RESET}")
+        frame = frames[frame_idx % len(frames)]
+        frame_idx += 1
+        sys.stdout.write(f"\r  {C.BOLD}{C.GOLD}{frame}{C.RESET} Loading... [{bar}] {pct:3d}% {C.DIM}{label:<52}{C.RESET}")
         sys.stdout.flush()
         time.sleep(0.06)
     time.sleep(0.08)
@@ -6587,11 +6699,16 @@ def interactive_tui(
     readline-safe prompt wrapping so multi-line inputs can backspace across line wraps.
     """
     is_interactive = hasattr(sys.stdout, "isatty") and sys.stdout.isatty() and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
-    show_startup_loading(is_interactive=is_interactive)
-    print(AsciiArtRenderer.banner())
     active_season = default_season
     seasons_to_load = sorted({active_season - 1, active_season})
-    plays = initial_plays if initial_plays is not None else bridge.load_pbp(seasons_to_load)
+    show_startup_loading(is_interactive=is_interactive, seasons=seasons_to_load)
+    print(AsciiArtRenderer.banner())
+    if initial_plays is not None:
+        plays = initial_plays
+    else:
+        seasons_label = ", ".join(map(str, seasons_to_load))
+        with ConsoleSpinner(f"Loading years [{seasons_label}] & downcasting floats...", enabled=is_interactive) as sp:
+            plays = bridge.load_pbp(seasons_to_load, spinner=sp)
     detected_slm = NaturalLanguageStatAssistant.detect_ollama_model(slm_model)
     slm_status = f"Ollama SLM ({detected_slm})" if detected_slm else "Built-in Deterministic AST Parser (Offline)"
     if not is_interactive:
@@ -6775,7 +6892,8 @@ def interactive_tui(
                     if cmd_args and cmd_args[0].isdigit():
                         active_season = int(cmd_args[0])
                         if not plays_for_season(plays, active_season):
-                            more = bridge.load_pbp([active_season])
+                            with ConsoleSpinner(f"Loading year {active_season} & downcasting floats...", enabled=is_interactive) as sp:
+                                more = bridge.load_pbp([active_season], spinner=sp)
                             if more:
                                 plays.extend(more)
                         print(f"  {C.GREEN}✔ Active season set to: {active_season}{C.RESET}")
