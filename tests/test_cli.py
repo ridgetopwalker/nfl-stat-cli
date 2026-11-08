@@ -38,7 +38,7 @@ def test_ambiguous_query_needs_no_season_data(engine):
 @pytest.mark.parametrize("query,intent,stat", [
     ("epa per play", "stat_query", "epa_per_play"),
     ("yards per play", "stat_query", "yards_per_play"),
-    ("screen yac", "stat_query", "screen_yards_after_catch"),
+    ("screen yac", "stat_query", "yards_after_catch"),
     ("passer rating", "stat_query", "passer_rating"),
     ("show Mahomes touchdown play", "specific_play", None),
     ("diagram Goff screen play", "specific_play", None),
@@ -97,7 +97,7 @@ def test_stats_catalog_layout(engine):
     assert "REGISTERED STATS & ANALYTICS CATALOG" in plain
     assert "Quarterback & Passing Analytics" in plain
     assert "Team & Offensive Efficiency" in plain
-    assert "Screen Pass & YAC Analytics" in plain
+    assert "Receiving & Yards After Catch (YAC) Analytics" in plain
     assert "epa_per_play" in plain
     assert "passer_rating" in plain
     assert "Formula:" in plain
@@ -1024,9 +1024,25 @@ def test_general_yac_stat_and_down_filter():
     assert "Screen Pass" not in out
     assert "A.St. Brown" in out
 
-    # 3. Explicit "screen yac" continues mapping to screen_yards_after_catch
+    # 3. Special screen stats removed; screen is an attribute filter (is_screen == 1)
+    assert "screen_yards_after_catch" not in engine.stats
+    assert "screen_effectiveness_index" not in engine.stats
+
     p_screen = cli.NaturalLanguageStatAssistant.interpret_query("screen yac", engine, slm_model="off")
-    assert p_screen["stat_name"] == "screen_yards_after_catch"
+    assert p_screen["stat_name"] == "yards_after_catch"
+    assert p_screen["filter_expr"] == "is_screen == 1"
+
+    # 4. Any stat can be filtered by screen as a standard play concept
+    p_epa_screen = cli.NaturalLanguageStatAssistant.interpret_query("epa per play on screen passes", engine, slm_model="off")
+    assert p_epa_screen["stat_name"] == "epa_per_play"
+    assert p_epa_screen["filter_expr"] == "is_screen == 1"
+
+    # 5. Play volume / counts on screens
+    p_vol = cli.NaturalLanguageStatAssistant.interpret_query("which team has the most screen passes?", engine, slm_model="off")
+    assert p_vol["stat_name"] == "plays"
+    assert p_vol["filter_expr"] == "is_screen == 1"
+    assert p_vol["group_by"] == "team"
+    assert p_vol["limit"] == 5
 
 
 
