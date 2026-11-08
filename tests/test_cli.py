@@ -356,3 +356,37 @@ def test_show_startup_loading(capsys, monkeypatch):
     assert "Ready! Launching NFL-STAT-CLI..." in out
 
 
+def test_stat_page_loading_and_render(engine, capsys):
+    out_table = cli.render_stat_page(engine, cli.SAMPLE_PBP_PLAYS, show_progress=True)
+    captured = capsys.readouterr().out
+    assert "Loading..." in captured
+    assert "Evaluating Saved Stat Page tracking" in captured
+    assert "SAVED STAT PAGE" in out_table
+    assert "Saved Stat Catalog" in out_table
+
+
+def test_tui_page_command():
+    input_text = "\n".join([
+        "/page",
+        "quit",
+    ]) + "\n"
+    res = subprocess.run(
+        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "Loading..." in res.stdout
+    assert "SAVED STAT PAGE" in res.stdout
+    assert "Saved Stat Catalog" in res.stdout
+
+
+def test_nl_query_stat_page(engine):
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query("show stat page", engine, slm_model="off")
+    assert parsed["intent"] == "stat_page"
+    parsed_plain = cli.NaturalLanguageStatAssistant.interpret_query("stat page", engine, slm_model="off")
+    assert parsed_plain["intent"] == "stat_page"
+
+
+

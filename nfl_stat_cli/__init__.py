@@ -2040,14 +2040,20 @@ class StatEngine:
         res.sort(key=lambda p: (float(p.get(s_col, 0.0)), float(p.get("epa", 0.0))), reverse=True)
         return res
 
-    def update_stat_page_tracking(self, all_plays: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def update_stat_page_tracking(
+        self,
+        all_plays: List[Dict[str, Any]],
+        on_progress: Optional[Callable[[str, int, int], None]] = None,
+    ) -> Dict[str, Any]:
         """Update lookback & forward season snapshots for all pinned stats on the Stat Page."""
         seasons = available_seasons(all_plays)
         history = self.stat_page.setdefault("lookback_history", {})
+        pinned = [s for s in self.stat_page.get("pinned_stats", []) if s in self.stats]
+        total_pinned = len(pinned)
 
-        for stat_name in self.stat_page.get("pinned_stats", []):
-            if stat_name not in self.stats:
-                continue
+        for idx, stat_name in enumerate(pinned, 1):
+            if on_progress:
+                on_progress(stat_name, idx, total_pinned)
             stat_hist = history.setdefault(stat_name, {})
             for s in seasons:
                 s_plays = plays_for_season(all_plays, s)
@@ -3274,6 +3280,19 @@ class NaturalLanguageStatAssistant:
                 if cand_low not in ignore_words and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
 
+        # Check if user is asking for Stat Page
+        if any(ql == p or ql.startswith(p + " ") for p in ("stat page", "show stat page", "view stat page", "my stat page", "saved stat page", "stat tracking", "saved stats", "stat-page")):
+            return {
+                "intent": "stat_page",
+                "query": query,
+                "season": season,
+                "conf": None,
+                "team": None,
+                "player": None,
+                "show_field": False,
+                "explanation": "Display Saved Stat Page with historical lookback and forward tracking.",
+            }
+
         # 1. Check if user is asking to CREATE a custom stat
         if any(ql.startswith(prefix) for prefix in ("create stat", "create a stat", "make a stat", "make stat", "define stat", "build stat")):
             name_m = re.search(r"(?:called|named)\s+([a-zA-Z0-9_]+)", ql)
@@ -3844,11 +3863,48 @@ def render_play_efficiency_view(
     return "\n".join(out)
 
 
-def render_stat_page(engine: StatEngine, all_plays: List[Dict[str, Any]]) -> str:
-    page = engine.update_stat_page_tracking(all_plays)
+def render_stat_page(
+    engine: StatEngine,
+    all_plays: List[Dict[str, Any]],
+    show_progress: bool = True,
+) -> str:
+    is_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+    pinned = [s for s in engine.stat_page.get("pinned_stats", []) if s in engine.stats]
+    total_pinned = len(pinned)
     loaded = available_seasons(all_plays)
     cur_season = loaded[-1] if loaded else CURRENT_SEASON
     prev_season = cur_season - 1
+
+    if show_progress:
+        seasons_str = f"{prev_season} (lookback) and {cur_season} (current)" if len(loaded) >= 2 else f"season {cur_season}"
+        intro_msg = f"  {C.BOLD}{C.GOLD}Loading...{C.RESET} {C.DIM}Evaluating Saved Stat Page tracking across {seasons_str} for {total_pinned} pinned metrics...{C.RESET}"
+        if is_tty:
+            sys.stdout.write(f"\n{intro_msg}\n")
+            sys.stdout.flush()
+        else:
+            print(f"\n{intro_msg}", flush=True)
+
+    def _progress_cb(stat_name: str, cur_idx: int, total: int) -> None:
+        if not show_progress:
+            return
+        pct = int(cur_idx * 100 / max(total, 1))
+        bar_len = 24
+        filled = int(bar_len * cur_idx / max(total, 1))
+        bar = "█" * filled + "░" * (bar_len - filled)
+        stat_title = engine.stats[stat_name].title if stat_name in engine.stats else stat_name
+        msg = f"\r  {C.BOLD}{C.GOLD}Loading... [{bar}] {pct:3d}%{C.RESET} {C.DIM}Evaluating [{stat_name}] ({stat_title[:32]}) across seasons ({cur_idx}/{total})...{C.RESET}"
+        if is_tty:
+            sys.stdout.write(msg[:120].ljust(120))
+            sys.stdout.flush()
+
+    page = engine.update_stat_page_tracking(
+        all_plays,
+        on_progress=_progress_cb if show_progress else None,
+    )
+
+    if show_progress and is_tty:
+        sys.stdout.write("\r" + " " * 120 + "\r")
+        sys.stdout.flush()
     headers = ["Stat ID", "Title", "Type", "Scope", f"{prev_season} Lookback Leader", f"{cur_season} Current Leader", "YoY Avg Trend", "Formula / Basis"]
     rows = []
     for sname in page.get("pinned_stats", []):
@@ -3924,6 +3980,9 @@ def handle_nl_query_result(
     header = f"\n{C.BOLD}{C.CYAN}🤖 Query Interpretation{slm_tag}:{C.RESET} {parsed.get('explanation', '')}"
 
     intent = parsed.get("intent", "stat_query")
+    if intent in ("stat_page", "page"):
+        return header + "\n" + render_stat_page(engine, all_plays)
+
     if intent == "team_drilldown":
         resolved_t = resolve_team_abbr(team) or team or "KC"
         return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t)
