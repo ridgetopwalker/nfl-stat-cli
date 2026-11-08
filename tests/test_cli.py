@@ -797,7 +797,7 @@ def test_penalties_data_and_nlp_queries():
     assert q_ben["stat_name"] == "penalties_drawn"
     assert q_ben["group_by"] == "team"
 
-    # 7. NLP Query: "which team has the most penalty yards?"
+    # 7. NLP Query: "which team has the most penalty yards?" and "teams with the most total yards in penalties?"
     q2 = cli.NaturalLanguageStatAssistant.interpret_query("which team has the most penalty yards?", engine, slm_model="off")
     assert q2["intent"] == "stat_query"
     assert q2["stat_name"] == "penalty_yards"
@@ -805,6 +805,20 @@ def test_penalties_data_and_nlp_queries():
     assert q2["limit"] == 5
     out2 = cli.strip_ansi(cli.handle_nl_query_result(q2, engine, plays))
     assert "Penalty Yards" in out2
+
+    q_total_yds = cli.NaturalLanguageStatAssistant.interpret_query("teams with the most total yards in penalties?", engine, slm_model="off")
+    assert q_total_yds["intent"] == "stat_query"
+    assert q_total_yds["stat_name"] == "penalty_yards"
+    assert q_total_yds["group_by"] == "team"
+    assert q_total_yds["limit"] == 5
+    out_total_yds = cli.strip_ansi(cli.handle_nl_query_result(q_total_yds, engine, plays))
+    assert "Penalty Yards" in out_total_yds
+
+    q_fav_yds = cli.NaturalLanguageStatAssistant.interpret_query("which team has had the most penalty yards in their favor?", engine, slm_model="off")
+    assert q_fav_yds["intent"] == "stat_query"
+    assert q_fav_yds["stat_name"] == "penalty_yards_drawn"
+    assert q_fav_yds["group_by"] == "team"
+    assert q_fav_yds["limit"] == 5
 
     # 8. Individual Player Penalty Attribution
     q_player = cli.NaturalLanguageStatAssistant.interpret_query("which player committed the most penalties?", engine, slm_model="off")
