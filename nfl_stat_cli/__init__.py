@@ -4100,15 +4100,15 @@ class NaturalLanguageStatAssistant:
 
         # 3. Quarter detection
         qtr: Optional[int] = None
-        if re.search(r"\b(?:1st|first)\s+(?:quarter|qtr)\b|\bq1\b", ql):
+        if re.search(r"\b(?:1st|first)\s+(?:quarter|qtr|qrt)\b|\bq1\b|\b(?:quarter|qtr|qrt)\s*1\b|\bin\s+the\s+1st\b", ql):
             qtr = 1
-        elif re.search(r"\b(?:2nd|second)\s+(?:quarter|qtr)\b|\bq2\b", ql):
+        elif re.search(r"\b(?:2nd|second)\s+(?:quarter|qtr|qrt)\b|\bq2\b|\b(?:quarter|qtr|qrt)\s*2\b|\bin\s+the\s+2nd\b", ql):
             qtr = 2
-        elif re.search(r"\b(?:3rd|third)\s+(?:quarter|qtr)\b|\bq3\b", ql):
+        elif re.search(r"\b(?:3rd|third)\s+(?:quarter|qtr|qrt)\b|\bq3\b|\b(?:quarter|qtr|qrt)\s*3\b|\bin\s+the\s+3rd\b", ql):
             qtr = 3
-        elif re.search(r"\b(?:4th|fourth)\s+(?:quarter|qtr)\b|\bq4\b", ql):
+        elif re.search(r"\b(?:4th|fourth)\s+(?:quarter|qtr|qrt)\b|\bq4\b|\b(?:quarter|qtr|qrt)\s*4\b|\bin\s+the\s+4th\b", ql):
             qtr = 4
-        elif re.search(r"\b(?:5th|fifth)\s+(?:quarter|qtr)\b|\b(?:overtime|ot)\b|\bq5\b", ql):
+        elif re.search(r"\b(?:5th|fifth)\s+(?:quarter|qtr|qrt)\b|\b(?:overtime|ot)\b|\bq5\b|\b(?:quarter|qtr|qrt)\s*5\b|\bin\s+(?:ot|overtime)\b", ql):
             qtr = 5
 
         # 4. Position detection
@@ -4203,7 +4203,7 @@ class NaturalLanguageStatAssistant:
                     "teams", "team", "screen", "pass", "run", "touchdown", "interception",
                     "sack", "longest", "best", "meaningful", "win", "loss", "impact", "score",
                     "passer", "rating", "cpoe", "epa", "wpa", "yac", "afc", "nfc", "auto",
-                    "season", "game", "quarter", "qtr", "down", "view", "sideline", "camera",
+                    "season", "game", "quarter", "qtr", "qrt", "down", "view", "sideline", "camera",
                     "week", "division", "most", "highest", "last", "latest", "data", "who", "what",
                     "which", "has", "had", "have", "is", "was", "are", "were", "with", "in", "at",
                     "to", "of", "from", "by", "on", "this", "that", "there", "leading", "leader",
