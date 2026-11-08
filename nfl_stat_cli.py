@@ -11,20 +11,25 @@ import argparse
 import ast
 import csv
 import datetime as dt
+import difflib
+import functools
 import json
 import math
 import operator
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 __version__ = "2.0.0"
 __author__ = "Sean McClain"
@@ -87,18 +92,24 @@ class C:
                 setattr(cls, attr, "")
 
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+    C.disable()
 
 try:
     import readline as _readline  # type: ignore[import]
     _HAS_READLINE = True
+    _IS_LIBEDIT = "libedit" in ((_readline.__doc__ or "").lower())
 except ImportError:
     _readline = None
     _HAS_READLINE = False
+    _IS_LIBEDIT = False
 
 
 def strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", str(text))
+    return _CTRL_RE.sub("", _ANSI_RE.sub("", str(text)))
 
 
 def prompt_input(prompt_text: str) -> str:
@@ -107,14 +118,31 @@ def prompt_input(prompt_text: str) -> str:
     Wraps non-printing ANSI escape sequences in \\x01...\\x02 so GNU readline
     calculates exact visible prompt width and allows backspacing across line wraps.
     """
+    if prompt_text.startswith("\n"):
+        print()
+        prompt_text = prompt_text.lstrip("\n")
+    if not sys.stdin.isatty() or _IS_LIBEDIT:
+        return input(strip_ansi(prompt_text))
     if _HAS_READLINE:
         rl_prompt = _ANSI_RE.sub(lambda m: f"\x01{m.group(0)}\x02", prompt_text)
         return input(rl_prompt)
     return input(prompt_text)
 
 
+def _char_display_width(ch: str) -> int:
+    cp = ord(ch)
+    if cp < 32 or (0x7F <= cp < 0xA0):
+        return 0
+    if unicodedata.combining(ch):
+        return 0
+    if unicodedata.east_asian_width(ch) in ("W", "F") or cp >= 0x1F300:
+        return 2
+    return 1
+
+
 def visible_len(text: str) -> int:
-    return len(strip_ansi(text))
+    s = strip_ansi(text)
+    return sum(_char_display_width(ch) for ch in s)
 
 
 def pad_ansi(text: str, width: int, align: str = "left") -> str:
@@ -337,10 +365,59 @@ def _infer_play_direction(row: Dict[str, Any], desc: str) -> str:
     return "middle"
 
 
+def _is_missing(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, float):
+        return math.isnan(v) or math.isinf(v)
+    if isinstance(v, str):
+        s = v.strip().lower()
+        return s in ("", "na", "nan", "null", "none", "<na>")
+    return False
+
+
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    if _is_missing(v):
+        return default
+    try:
+        f = float(v)
+        return default if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(v: Any, default: int = 0) -> int:
+    if _is_missing(v):
+        return default
+    if isinstance(v, bool):
+        return 1 if v else 0
+    if isinstance(v, str) and v.strip().lower() in ("true", "t", "yes"):
+        return 1
+    if isinstance(v, str) and v.strip().lower() in ("false", "f", "no"):
+        return 0
+    try:
+        f = float(v)
+        return default if (math.isnan(f) or math.isinf(f)) else int(round(f))
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_str(v: Any, default: str = "") -> str:
+    if _is_missing(v):
+        return default
+    return str(v).strip()
+
+
+def _safe_opt_flag(v: Any) -> Optional[int]:
+    if _is_missing(v):
+        return None
+    return 1 if _safe_int(v, 0) != 0 else 0
+
+
 class NFLDataBridge:
     """
     Loads NFL Play-by-Play and Roster/Team data from:
-    1. sportsdataverse-py (`sportsdataverse.nfl.load_nfl_pbp`) or `nflreadpy`
+    1. nflreadpy / nfl_data_py / sportsdataverse-py (Python)
     2. nflverse R (`nflreadr::load_pbp`, `nflfastR`) via Rscript bridge
     3. Local cache / built-in sample dataset for instant offline operation
     """
@@ -350,13 +427,14 @@ class NFLDataBridge:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.engine = engine.lower()
         self.last_source_used = "built-in-nflverse-sample"
+        self.last_error: Optional[str] = None
 
     def load_pbp(self, seasons: List[int]) -> List[Dict[str, Any]]:
         """Load play-by-play rows for the requested seasons using the selected engine."""
         if self.engine in ("auto", "python", "sdv"):
             rows = self._try_sportsdataverse_py(seasons)
             if rows:
-                self.last_source_used = "sportsdataverse-py / nflreadpy (Python)"
+                self.last_source_used = "nflreadpy / nfl_data_py (Python)"
                 return rows
 
         if self.engine in ("auto", "r", "nflverse"):
@@ -371,24 +449,34 @@ class NFLDataBridge:
         return filtered if filtered else norm_sample
 
     def _try_sportsdataverse_py(self, seasons: List[int]) -> Optional[List[Dict[str, Any]]]:
-        try:
-            import nfl_data_py as nfl_data  # type: ignore[import]
-            df = nfl_data.import_pbp_data(seasons)
-            return self._normalize_dataframe(df)
-        except Exception:
-            pass
-        try:
-            import sportsdataverse.nfl as sdv_nfl  # type: ignore[import]
-            df = sdv_nfl.load_nfl_pbp(seasons=seasons, return_as_pandas=True)
-            return self._normalize_dataframe(df)
-        except Exception:
-            pass
+        errors: List[str] = []
         try:
             import nflreadpy as nfl  # type: ignore[import]
             df = nfl.load_pbp(seasons=seasons).to_pandas()
-            return self._normalize_dataframe(df)
-        except Exception:
-            return None
+            rows = self._normalize_dataframe(df)
+            if rows:
+                return rows
+        except Exception as exc:
+            errors.append(f"nflreadpy: {exc}")
+        try:
+            import nfl_data_py as nfl_data  # type: ignore[import]
+            df = nfl_data.import_pbp_data(seasons)
+            rows = self._normalize_dataframe(df)
+            if rows:
+                return rows
+        except Exception as exc:
+            errors.append(f"nfl_data_py: {exc}")
+        try:
+            import sportsdataverse.nfl as sdv_nfl  # type: ignore[import]
+            df = sdv_nfl.load_nfl_pbp(seasons=seasons, return_as_pandas=True)
+            rows = self._normalize_dataframe(df)
+            if rows:
+                return rows
+        except Exception as exc:
+            errors.append(f"sportsdataverse: {exc}")
+        if errors:
+            self.last_error = "; ".join(errors)
+        return None
 
     def _try_nflverse_r(self, seasons: List[int]) -> Optional[List[Dict[str, Any]]]:
         rscript_bin = shutil.which("Rscript")
@@ -398,45 +486,80 @@ class NFLDataBridge:
         out_csv = self.cache_dir / f"nflverse_pbp_{'_'.join(map(str, seasons))}.csv"
         seasons_arg = ",".join(map(str, seasons))
         try:
-            if bridge_script.exists():
-                cmd = [rscript_bin, str(bridge_script), "--seasons", seasons_arg, "--output", str(out_csv)]
-            else:
-                r_code = (
-                    f"suppressPackageStartupMessages(library(nflreadr)); "
-                    f"pbp <- load_pbp(c({seasons_arg})); "
-                    f"write.csv(pbp, '{out_csv.as_posix()}', row.names=FALSE)"
-                )
-                cmd = [rscript_bin, "-e", r_code]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
-            if res.returncode == 0 and out_csv.exists():
+            # Reuse cached CSV if younger than 12 hours
+            use_cached = False
+            if out_csv.exists():
+                age_sec = dt.datetime.now().timestamp() - out_csv.stat().st_mtime
+                if age_sec < 43200 and out_csv.stat().st_size > 256:
+                    use_cached = True
+            if not use_cached:
+                if bridge_script.exists():
+                    cmd = [rscript_bin, str(bridge_script), "--seasons", seasons_arg, "--output", str(out_csv)]
+                else:
+                    # Pass arguments via commandArgs(trailingOnly=TRUE) — never interpolate paths into R source
+                    r_code = (
+                        "args <- commandArgs(trailingOnly=TRUE); "
+                        "seasons <- as.integer(unlist(strsplit(args[1], ','))); "
+                        "out_csv <- args[2]; "
+                        "suppressPackageStartupMessages(library(nflreadr)); "
+                        "pbp <- load_pbp(seasons=seasons); "
+                        "pbp <- pbp[!is.na(pbp$posteam) & ((!is.na(pbp$pass_attempt) & pbp$pass_attempt == 1) | (!is.na(pbp$rush_attempt) & pbp$rush_attempt == 1)), ]; "
+                        "write.csv(pbp, file=out_csv, row.names=FALSE, na='')"
+                    )
+                    cmd = [rscript_bin, "-e", r_code, seasons_arg, str(out_csv)]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+                if res.returncode != 0:
+                    self.last_error = f"Rscript exit {res.returncode}: {res.stderr.strip()[:160]}"
+                    return None
+            if out_csv.exists():
                 with open(out_csv, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
-                    return [self._normalize_row(r, idx) for idx, r in enumerate(reader, 1)]
-        except Exception:
+                    rows = [self._normalize_row(r, idx) for idx, r in enumerate(reader, 1) if not _is_missing(r.get("posteam"))]
+                    if rows:
+                        return rows
+        except Exception as exc:
+            self.last_error = f"Rscript error: {exc}"
             return None
         return None
 
     def _normalize_dataframe(self, df: Any) -> List[Dict[str, Any]]:
         records = df.to_dict(orient="records")
-        return [self._normalize_row(r, idx) for idx, r in enumerate(records, 1) if r.get("posteam")]
+        out: List[Dict[str, Any]] = []
+        for idx, r in enumerate(records, 1):
+            if _is_missing(r.get("posteam")):
+                continue
+            pa = _safe_int(r.get("pass_attempt"), 0)
+            ra = _safe_int(r.get("rush_attempt"), 0)
+            pt = _safe_str(r.get("play_type"), "").lower()
+            if pa == 0 and ra == 0 and pt not in ("pass", "run"):
+                continue
+            out.append(self._normalize_row(r, idx))
+        return out
 
     def _normalize_row(self, r: Dict[str, Any], idx: int = 1) -> Dict[str, Any]:
-        posteam = str(r.get("posteam") or "")
-        conf = str(r.get("conf") or ("AFC" if posteam in AFC_TEAMS else ("NFC" if posteam in NFC_TEAMS else "NFL")))
-        division = str(r.get("division") or TEAM_DIVISIONS.get(posteam, f"{conf} Division"))
-        air_yards = float(r.get("air_yards") or 0.0)
-        desc = str(r.get("desc") or "")
-        pass_attempt = int(float(r.get("pass_attempt") or 0))
-        rush_attempt = int(float(r.get("rush_attempt") or 0))
-        complete_pass = int(float(r.get("complete_pass") or 0))
-        is_screen = int(
-            r.get("is_screen")
-            or ("screen" in desc.lower())
-            or (pass_attempt == 1 and air_yards <= 0.0 and complete_pass == 1)
+        posteam = _safe_str(r.get("posteam"), "")
+        defteam = _safe_str(r.get("defteam"), "")
+        conf = _safe_str(r.get("conf"), "") or ("AFC" if posteam in AFC_TEAMS else ("NFC" if posteam in NFC_TEAMS else "NFL"))
+        division = _safe_str(r.get("division"), "") or TEAM_DIVISIONS.get(posteam, f"{conf} Division")
+        air_yards = _safe_float(r.get("air_yards"), 0.0)
+        desc = _safe_str(r.get("desc"), "")
+        pass_attempt = _safe_int(r.get("pass_attempt"), 0)
+        rush_attempt = _safe_int(r.get("rush_attempt"), 0)
+        complete_pass = _safe_int(r.get("complete_pass"), 0)
+        sack = _safe_int(r.get("sack"), 0)
+        qb_scramble = _safe_int(r.get("qb_scramble"), 0)
+
+        raw_screen = _safe_opt_flag(r.get("is_screen"))
+        is_screen = raw_screen if raw_screen is not None else (
+            1 if ("screen" in desc.lower() or (pass_attempt == 1 and sack == 0 and air_yards <= 0.0 and complete_pass == 1)) else 0
         )
-        play_type = str(r.get("play_type") or ("pass" if pass_attempt else "run"))
-        play_action = int(float(r.get("play_action") or ("play-action" in desc.lower() or "play action" in desc.lower())))
-        play_concept = str(r.get("play_concept") or (
+
+        play_type = _safe_str(r.get("play_type"), "") or ("pass" if pass_attempt else "run")
+        raw_pa = _safe_opt_flag(r.get("play_action"))
+        play_action = raw_pa if raw_pa is not None else (
+            1 if ("play-action" in desc.lower() or "play action" in desc.lower()) else 0
+        )
+        play_concept = _safe_str(r.get("play_concept"), "") or (
             "screen" if is_screen else (
                 "play_action_deep" if (play_action or air_yards >= 18) and play_type == "pass" else (
                     "pass_intermediate" if air_yards >= 10 and play_type == "pass" else (
@@ -444,28 +567,70 @@ class NFLDataBridge:
                     )
                 )
             )
-        ))
+        )
         direction = _infer_play_direction(r, desc)
-        yards_gained = float(r.get("yards_gained") or 0.0)
-        ydstogo = int(float(r.get("ydstogo") or 10))
-        touchdown = int(float(r.get("touchdown") or 0))
-        yardline_100 = int(float(r.get("yardline_100") or 50))
-        first_down = int(float(r.get("first_down") if r.get("first_down") is not None else (1 if (yards_gained >= ydstogo or touchdown == 1) else 0)))
-        qb_name = str(r.get("qb_name") or r.get("passer_player_name") or r.get("rusher_player_name") or "Unknown QB")
-        receiver_name = str(r.get("receiver_player_name") or "")
-        rusher_name = str(r.get("rusher_player_name") or (qb_name if rush_attempt else ""))
+        yards_gained = _safe_float(r.get("yards_gained"), 0.0)
+        ydstogo = _safe_int(r.get("ydstogo"), 10)
+        touchdown = _safe_int(r.get("touchdown"), 0)
+        pass_td = _safe_int(r.get("pass_touchdown"), touchdown if (pass_attempt == 1 and sack == 0) else 0)
+        rush_td = _safe_int(r.get("rush_touchdown"), touchdown if rush_attempt == 1 else 0)
+        yardline_100 = _safe_int(r.get("yardline_100"), 50)
+        raw_fd = _safe_opt_flag(r.get("first_down"))
+        first_down = raw_fd if raw_fd is not None else (1 if (yards_gained >= ydstogo or touchdown == 1) else 0)
+
+        passer_name = _safe_str(r.get("passer_player_name"), "")
+        rusher_name = _safe_str(r.get("rusher_player_name"), "")
+        explicit_qb = _safe_str(r.get("qb_name"), "")
+        if explicit_qb:
+            qb_name = explicit_qb
+        elif passer_name:
+            qb_name = passer_name
+        elif qb_scramble == 1 and rusher_name:
+            qb_name = rusher_name
+        else:
+            qb_name = ""
+
+        receiver_name = _safe_str(r.get("receiver_player_name"), "")
+        if not rusher_name and rush_attempt and qb_name:
+            rusher_name = qb_name
         skill_player = receiver_name or rusher_name or qb_name
-        home_score = int(float(r.get("home_score") or 0))
-        away_score = int(float(r.get("away_score") or 0))
-        score_diff = float(r.get("score_differential") if r.get("score_differential") is not None else abs(home_score - away_score))
+        home_score = _safe_int(r.get("home_score"), 0)
+        away_score = _safe_int(r.get("away_score"), 0)
+        score_diff = _safe_float(r.get("score_differential"), float(abs(home_score - away_score)))
+
+        # Derive team_win accurately from explicit flag, result + home_team/away_team, or final scores
+        raw_tw = _safe_opt_flag(r.get("team_win"))
+        if raw_tw is not None:
+            team_win = raw_tw
+        else:
+            home_team = _safe_str(r.get("home_team"), "")
+            away_team = _safe_str(r.get("away_team"), "")
+            if not _is_missing(r.get("result")) and (home_team or away_team):
+                res_val = _safe_float(r.get("result"), 0.0)
+                if posteam == home_team:
+                    team_win = 1 if res_val > 0 else 0
+                elif posteam == away_team:
+                    team_win = 1 if res_val < 0 else 0
+                else:
+                    team_win = 0
+            elif home_team and away_team and (home_score != away_score):
+                team_win = 1 if ((posteam == home_team and home_score > away_score) or (posteam == away_team and away_score > home_score)) else 0
+            else:
+                team_win = 0
+
+        epa_val = _safe_float(r.get("epa"), 0.0)
+        raw_ss = _safe_opt_flag(r.get("success"))
+        if raw_ss is None:
+            raw_ss = _safe_opt_flag(r.get("series_success"))
+        series_success = raw_ss if raw_ss is not None else (1 if epa_val > 0.0 else 0)
 
         return {
-            "play_id": int(float(r.get("play_id") or idx)),
-            "season": int(float(r.get("season") or 2025)),
-            "week": int(float(r.get("week") or 1)),
-            "game_id": str(r.get("game_id") or "2025_01_UNK"),
+            "play_id": _safe_int(r.get("play_id"), idx),
+            "season": _safe_int(r.get("season"), 2025),
+            "week": _safe_int(r.get("week"), 1),
+            "game_id": _safe_str(r.get("game_id"), "2025_01_UNK"),
             "posteam": posteam,
-            "defteam": str(r.get("defteam") or ""),
+            "defteam": defteam,
             "conf": conf,
             "division": division,
             "qb_name": qb_name,
@@ -477,34 +642,36 @@ class NFLDataBridge:
             "play_direction": direction,
             "is_screen": is_screen,
             "play_action": play_action,
-            "shotgun": int(float(r.get("shotgun") or 0)),
-            "no_huddle": int(float(r.get("no_huddle") or 0)),
+            "shotgun": _safe_int(r.get("shotgun"), 0),
+            "no_huddle": _safe_int(r.get("no_huddle"), 0),
             "red_zone": 1 if yardline_100 <= 20 else 0,
             "air_yards": air_yards,
-            "yards_after_catch": float(r.get("yards_after_catch") or 0.0),
-            "xyac_mean_yardage": float(r.get("xyac_mean_yardage") or 0.0),
+            "yards_after_catch": _safe_float(r.get("yards_after_catch"), 0.0),
+            "xyac_mean_yardage": _safe_float(r.get("xyac_mean_yardage"), 0.0),
             "yards_gained": yards_gained,
-            "epa": float(r.get("epa") or 0.0),
-            "wpa": float(r.get("wpa") or 0.0),
-            "cpoe": float(r.get("cpoe") or 0.0),
+            "epa": epa_val,
+            "wpa": _safe_float(r.get("wpa"), 0.0),
+            "cpoe": _safe_float(r.get("cpoe"), 0.0),
             "complete_pass": complete_pass,
             "pass_attempt": pass_attempt,
             "rush_attempt": rush_attempt,
-            "down": int(float(r.get("down") or 1)),
+            "down": _safe_int(r.get("down"), 1),
             "ydstogo": ydstogo,
             "yardline_100": yardline_100,
-            "series_success": int(float(r.get("series_success") or 0)),
+            "series_success": series_success,
             "first_down": first_down,
             "explosive_play": 1 if yards_gained >= 20.0 else 0,
             "touchdown": touchdown,
-            "interception": int(float(r.get("interception") or 0)),
-            "fumble_lost": int(float(r.get("fumble_lost") or 0)),
-            "sack": int(float(r.get("sack") or 0)),
-            "team_win": int(float(r.get("team_win") if r.get("team_win") is not None else 1)),
+            "pass_touchdown": pass_td,
+            "rush_touchdown": rush_td,
+            "interception": _safe_int(r.get("interception"), 0),
+            "fumble_lost": _safe_int(r.get("fumble_lost"), 0),
+            "sack": sack,
+            "team_win": team_win,
             "home_score": home_score,
             "away_score": away_score,
             "score_differential": score_diff,
-            "qtr": int(float(r.get("qtr") or 1)),
+            "qtr": _safe_int(r.get("qtr"), 1),
             "desc": desc,
         }
 
@@ -513,36 +680,70 @@ class NFLDataBridge:
 # Safe Formula & Filter Evaluator (Supports Numbers, Strings, Booleans, AST)
 # ---------------------------------------------------------------------------
 
+def _safe_pow(a: Any, b: Any) -> float:
+    fa, fb = float(a), float(b)
+    if abs(fb) > 100.0:
+        raise ValueError(f"Exponent {fb} exceeds maximum allowed magnitude (100)")
+    res = math.pow(fa, fb)
+    if not math.isfinite(res):
+        return 0.0
+    return res
+
+
+def _safe_arith(op_fn: Callable[[float, float], float]) -> Callable[[Any, Any], float]:
+    def _wrapped(a: Any, b: Any) -> float:
+        if isinstance(a, str) or isinstance(b, str):
+            raise ValueError("String operands are not permitted in arithmetic operations")
+        res = op_fn(float(a), float(b))
+        return res if math.isfinite(res) else 0.0
+    return _wrapped
+
+
 ALLOWED_AST_OPS: Dict[Any, Callable[..., Any]] = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: lambda a, b: (float(a) / float(b)) if float(b) != 0.0 else 0.0,
-    ast.Mod: lambda a, b: (float(a) % float(b)) if float(b) != 0.0 else 0.0,
-    ast.Pow: operator.pow,
-    ast.USub: operator.neg,
-    ast.UAdd: operator.pos,
+    ast.Add: _safe_arith(operator.add),
+    ast.Sub: _safe_arith(operator.sub),
+    ast.Mult: _safe_arith(operator.mul),
+    ast.Div: _safe_arith(lambda a, b: (a / b) if b != 0.0 else 0.0),
+    ast.Mod: _safe_arith(lambda a, b: (a % b) if b != 0.0 else 0.0),
+    ast.Pow: _safe_pow,
+    ast.USub: lambda a: -float(a),
+    ast.UAdd: lambda a: +float(a),
     ast.BitAnd: lambda a, b: 1.0 if (bool(a) and bool(b)) else 0.0,
     ast.BitOr: lambda a, b: 1.0 if (bool(a) or bool(b)) else 0.0,
 }
 
 ALLOWED_FUNCS: Dict[str, Callable[..., Any]] = {
-    "min": min,
-    "max": max,
-    "abs": abs,
-    "round": round,
+    "min": lambda *args: float(min(float(x) for x in args)),
+    "max": lambda *args: float(max(float(x) for x in args)),
+    "abs": lambda x: abs(float(x)),
+    "round": lambda x, n=0: float(round(float(x), int(n))),
     "sqrt": lambda x: math.sqrt(max(0.0, float(x))),
     "log": lambda x: math.log(max(1e-9, float(x))),
-    "pow": math.pow,
+    "pow": _safe_pow,
     "clamp": lambda x, lo, hi: max(float(lo), min(float(hi), float(x))),
     "ifelse": lambda cond, t_val, f_val: t_val if bool(cond) else f_val,
-    "nz": lambda x, default=1.0: float(x) if float(x) != 0.0 else float(default),
+    "nz": lambda x, default=1.0: float(x) if (not _is_missing(x) and float(x) != 0.0) else float(default),
 }
+
+MAX_FORMULA_LENGTH = 500
+MAX_AST_NODES = 120
+
+
+@functools.lru_cache(maxsize=512)
+def _parse_and_validate_expr(expr: str) -> ast.Expression:
+    cleaned = expr.strip()
+    if len(cleaned) > MAX_FORMULA_LENGTH:
+        raise ValueError(f"Formula exceeds maximum length of {MAX_FORMULA_LENGTH} characters")
+    tree = ast.parse(cleaned, mode="eval")
+    node_count = sum(1 for _ in ast.walk(tree))
+    if node_count > MAX_AST_NODES:
+        raise ValueError(f"Formula exceeds maximum AST complexity ({node_count} > {MAX_AST_NODES} nodes)")
+    return tree
 
 
 def safe_eval_expr(expr: str, context: Dict[str, Any]) -> Any:
     """Safely evaluate a mathematical or boolean filter/stat expression using Python's AST."""
-    tree = ast.parse(expr.strip(), mode="eval")
+    tree = _parse_and_validate_expr(expr)
 
     def _eval(node: ast.AST) -> Any:
         if isinstance(node, ast.Expression):
@@ -605,6 +806,12 @@ def safe_eval_expr(expr: str, context: Dict[str, Any]) -> Any:
             return 1.0
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             fname = node.func.id
+            if node.keywords:
+                raise ValueError(f"Keyword arguments are not supported in function '{fname}()'")
+            if fname == "ifelse":
+                if len(node.args) != 3:
+                    raise ValueError("ifelse(condition, true_val, false_val) requires exactly 3 arguments")
+                return _eval(node.args[1]) if bool(_eval(node.args[0])) else _eval(node.args[2])
             if fname in ALLOWED_FUNCS:
                 args = [_eval(a) for a in node.args]
                 return ALLOWED_FUNCS[fname](*args)
@@ -614,8 +821,9 @@ def safe_eval_expr(expr: str, context: Dict[str, Any]) -> Any:
 
 
 def safe_eval_formula(expr: str, context: Dict[str, Any]) -> float:
-    """Evaluate a formula and return a float value."""
-    return float(safe_eval_expr(expr, context))
+    """Evaluate a formula and return a finite float value."""
+    val = float(safe_eval_expr(expr, context))
+    return val if math.isfinite(val) else 0.0
 
 
 def extract_formula_dependencies(expr: str) -> List[str]:
@@ -623,8 +831,8 @@ def extract_formula_dependencies(expr: str) -> List[str]:
     if not expr or not expr.strip():
         return []
     try:
-        tree = ast.parse(expr, mode="eval")
-    except SyntaxError:
+        tree = _parse_and_validate_expr(expr)
+    except Exception:
         return []
     deps: List[str] = []
     reserved = set(ALLOWED_FUNCS.keys()) | {"True", "False", "true", "false"}
@@ -904,6 +1112,51 @@ GROUP_BY_COLUMN_MAP: Dict[str, str] = {
 }
 
 
+BASE_METRIC_KEYS: Set[str] = {
+    "plays", "games_played", "games_won", "games_lost", "team_win", "win_rate",
+    "total_yards", "yards_per_play", "passing_yards", "yards_per_attempt",
+    "yards_per_completion", "rushing_yards", "yards_per_rush", "total_air_yards",
+    "air_yards_per_play", "air_yards_per_attempt", "total_yac", "yac_per_play",
+    "yac_per_completion", "total_xyac", "xyac_per_completion", "completions",
+    "incompletions", "completion_pct", "pass_attempts", "rush_attempts",
+    "screen_plays", "play_action_plays", "total_epa", "epa_per_play",
+    "pass_epa_per_play", "rush_epa_per_play", "total_wpa", "wpa_per_play",
+    "wpa_per_game", "avg_cpoe", "touchdowns", "pass_touchdowns", "rush_touchdowns",
+    "interceptions", "fumbles_lost", "turnovers", "sacks", "sack_yards_estimated",
+    "first_downs", "first_down_rate", "explosive_plays", "explosive_play_rate",
+    "turnover_rate", "sack_rate", "td_rate", "int_rate", "success_rate",
+    "nfl_passer_rating",
+}
+
+PLAY_ROW_KEYS: Set[str] = {
+    "play_id", "season", "week", "game_id", "posteam", "defteam", "conf", "division",
+    "qb_name", "receiver_player_name", "rusher_player_name", "player_name",
+    "play_type", "play_concept", "play_direction", "is_screen", "play_action",
+    "shotgun", "no_huddle", "red_zone", "air_yards", "yards_after_catch",
+    "xyac_mean_yardage", "yards_gained", "epa", "wpa", "cpoe", "complete_pass",
+    "pass_attempt", "rush_attempt", "down", "ydstogo", "yardline_100",
+    "series_success", "first_down", "explosive_play", "touchdown",
+    "pass_touchdown", "rush_touchdown", "interception", "fumble_lost", "sack",
+    "team_win", "home_score", "away_score", "score_differential", "qtr", "desc",
+}
+
+
+def _atomic_write_json(target: Path, payload: Any) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(payload, indent=2)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent), text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_name, target)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 class StatEngine:
     """Manages custom stats, evaluates multi-scope composable formulas, and tracks the user's Stat Page."""
 
@@ -932,47 +1185,127 @@ class StatEngine:
         if self.custom_stats_file.exists():
             try:
                 data = json.loads(self.custom_stats_file.read_text(encoding="utf-8"))
-                for name, item in data.get("stats", {}).items():
-                    if name in DEFAULT_STATS:
-                        # Keep updated default scope/agg if loading older schema
-                        item.setdefault("scope", DEFAULT_STATS[name].scope)
-                        item.setdefault("agg", DEFAULT_STATS[name].agg)
-                    self.stats[name] = StatDefinition(
-                        name=item.get("name", name),
-                        title=item.get("title", name),
-                        category=item.get("category", "custom"),
-                        group_by=item.get("group_by", "qb"),
-                        formula=item["formula"],
-                        description=item.get("description", ""),
-                        calculation_explained=item.get("calculation_explained", ""),
-                        unit=item.get("unit", ""),
-                        filter_expr=item.get("filter_expr", ""),
-                        scope=item.get("scope", "season"),
-                        agg=item.get("agg", "formula"),
-                        dependencies=item.get("dependencies") or extract_formula_dependencies(item["formula"]),
-                        created_at=item.get("created_at", ""),
-                    )
-                # Ensure core built-in game-scoped stats use their game scope if old state had legacy formula
+                stats_map = data.get("stats", {}) if isinstance(data, dict) else {}
+                for name, item in stats_map.items():
+                    try:
+                        if not isinstance(item, dict) or "formula" not in item:
+                            continue
+                        if name in DEFAULT_STATS:
+                            item.setdefault("scope", DEFAULT_STATS[name].scope)
+                            item.setdefault("agg", DEFAULT_STATS[name].agg)
+                        self.stats[name] = StatDefinition(
+                            name=item.get("name", name),
+                            title=strip_ansi(item.get("title", name)),
+                            category="traditional" if (name in DEFAULT_STATS and DEFAULT_STATS[name].category == "traditional") else "custom",
+                            group_by=item.get("group_by", "qb"),
+                            formula=item["formula"],
+                            description=strip_ansi(item.get("description", "")),
+                            calculation_explained=strip_ansi(item.get("calculation_explained", "")),
+                            unit=strip_ansi(item.get("unit", "")),
+                            filter_expr=item.get("filter_expr", ""),
+                            scope=item.get("scope", "season"),
+                            agg=item.get("agg", "formula"),
+                            dependencies=item.get("dependencies") or extract_formula_dependencies(item["formula"]),
+                            created_at=item.get("created_at", ""),
+                        )
+                    except Exception:
+                        continue
                 for core_game_stat in ("qb_meaningful_win", "qb_meaningful_loss"):
                     if core_game_stat in self.stats and "win_rate" in self.stats[core_game_stat].formula:
                         self.stats[core_game_stat] = DEFAULT_STATS[core_game_stat]
             except Exception:
-                pass
+                try:
+                    backup = self.custom_stats_file.with_suffix(".json.corrupt")
+                    shutil.copy2(self.custom_stats_file, backup)
+                except Exception:
+                    pass
         if self.stat_page_file.exists():
             try:
-                self.stat_page = json.loads(self.stat_page_file.read_text(encoding="utf-8"))
+                loaded_page = json.loads(self.stat_page_file.read_text(encoding="utf-8"))
+                if isinstance(loaded_page, dict):
+                    for k, v in loaded_page.items():
+                        self.stat_page[k] = v
+                    if not isinstance(self.stat_page.get("pinned_stats"), list):
+                        self.stat_page["pinned_stats"] = list(DEFAULT_STATS.keys())[:6]
             except Exception:
                 pass
 
     def save_state(self) -> None:
-        custom_only = {k: asdict(v) for k, v in self.stats.items() if v.category == "custom"}
+        custom_only = {
+            k: asdict(v)
+            for k, v in self.stats.items()
+            if v.category == "custom" and (k not in DEFAULT_STATS or v.formula != DEFAULT_STATS[k].formula or v.filter_expr != DEFAULT_STATS[k].filter_expr)
+        }
         payload = {
             "schema_version": "2.0",
             "exported_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "stats": custom_only,
         }
-        self.custom_stats_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        self.stat_page_file.write_text(json.dumps(self.stat_page, indent=2), encoding="utf-8")
+        _atomic_write_json(self.custom_stats_file, payload)
+        _atomic_write_json(self.stat_page_file, self.stat_page)
+
+    def _validate_stat_definition(
+        self,
+        clean_name: str,
+        group_by: str,
+        formula: str,
+        filter_expr: str,
+        scope: str,
+        agg: str,
+        extra_known_stats: Optional[Set[str]] = None,
+    ) -> List[str]:
+        if not clean_name or not clean_name.isidentifier():
+            raise ValueError(f"Invalid stat ID '{clean_name}': must be a valid identifier (letters, digits, underscores, not starting with a digit).")
+        if clean_name in BASE_METRIC_KEYS:
+            raise ValueError(f"Stat ID '{clean_name}' collides with a reserved base metric name.")
+        if clean_name in DEFAULT_STATS and DEFAULT_STATS[clean_name].category == "traditional":
+            raise ValueError(f"Cannot overwrite built-in traditional stat '{clean_name}'.")
+        if group_by not in GROUP_BY_COLUMN_MAP:
+            raise ValueError(f"Invalid group_by '{group_by}'. Allowed: {', '.join(GROUP_BY_COLUMN_MAP.keys())}")
+        if scope not in ("season", "game", "play"):
+            raise ValueError(f"Invalid scope '{scope}'. Allowed: season, game, play")
+        if agg.lower() not in ("formula", "sum", "avg", "mean", "count_true", "rate", "max", "min"):
+            raise ValueError(f"Invalid aggregation '{agg}'. Allowed: formula, sum, avg, count_true, rate, max, min")
+
+        deps = extract_formula_dependencies(formula)
+        allowed_vars = set(BASE_METRIC_KEYS) | set(self.stats.keys()) | (extra_known_stats or set())
+        if scope == "play":
+            allowed_vars |= PLAY_ROW_KEYS
+        unknown = [d for d in deps if d not in allowed_vars]
+        if unknown:
+            raise ValueError(
+                f"Unknown building block(s) in formula: {', '.join(unknown)}. "
+                f"Run `list-stats` or `/stats` to see valid building blocks."
+            )
+        if clean_name in deps:
+            raise ValueError(f"Self-referential dependency cycle detected in '{clean_name}'.")
+
+        # Detect multi-hop dependency cycles
+        visited: Set[str] = set()
+        stack = list(deps)
+        while stack:
+            cur = stack.pop()
+            if cur == clean_name:
+                raise ValueError(f"Circular dependency detected involving '{clean_name}'.")
+            if cur not in visited and cur in self.stats:
+                visited.add(cur)
+                stack.extend(self.stats[cur].dependencies)
+
+        dummy_ctx: Dict[str, Any] = {k: 1.0 for k in allowed_vars}
+        safe_eval_formula(formula, dummy_ctx)
+
+        if filter_expr and filter_expr.strip():
+            f_deps = extract_formula_dependencies(filter_expr)
+            allowed_f_vars = PLAY_ROW_KEYS | BASE_METRIC_KEYS | set(self.stats.keys())
+            unknown_f = [d for d in f_deps if d not in allowed_f_vars]
+            if unknown_f:
+                raise ValueError(f"Unknown play field(s) in filter_expr: {', '.join(unknown_f)}")
+            sample_play = dict(SAMPLE_PBP_PLAYS[0])
+            sample_play.setdefault("red_zone", 0)
+            sample_play.setdefault("explosive_play", 0)
+            safe_eval_formula(filter_expr, sample_play)
+
+        return deps
 
     def register_custom_stat(
         self,
@@ -988,24 +1321,24 @@ class StatEngine:
         agg: str = "formula",
         pin_to_page: bool = True,
     ) -> StatDefinition:
-        clean_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.strip().lower())
-        deps = extract_formula_dependencies(formula)
-        dummy_ctx: Dict[str, Any] = {d: 1.0 for d in deps}
-        safe_eval_formula(formula, dummy_ctx)
+        clean_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.strip().lower()).strip("_")
+        if clean_name and clean_name[0].isdigit():
+            clean_name = f"stat_{clean_name}"
+        deps = self._validate_stat_definition(clean_name, group_by, formula, filter_expr, scope, agg)
 
         if scope in ("game", "play") and agg == "formula":
             agg = "sum" if "ifelse" in formula else "avg"
 
         stat_def = StatDefinition(
             name=clean_name,
-            title=title,
+            title=strip_ansi(title),
             category="custom",
             group_by=group_by,
-            formula=formula,
-            description=description,
-            calculation_explained=calculation_explained,
-            unit=unit,
-            filter_expr=filter_expr,
+            formula=formula.strip(),
+            description=strip_ansi(description),
+            calculation_explained=strip_ansi(calculation_explained),
+            unit=strip_ansi(unit),
+            filter_expr=filter_expr.strip(),
             scope=scope,
             agg=agg,
             dependencies=deps,
@@ -1030,34 +1363,60 @@ class StatEngine:
             "stats": exported,
             "stat_page_pinned": self.stat_page.get("pinned_stats", []),
         }
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        _atomic_write_json(target_path, payload)
         return target_path
 
     def import_custom_stats_json(self, source_path: Path) -> List[str]:
         raw = json.loads(source_path.read_text(encoding="utf-8"))
-        stats_dict = raw.get("stats", raw)
-        imported_names: List[str] = []
+        stats_dict = raw.get("stats", raw) if isinstance(raw, dict) else {}
+        if not isinstance(stats_dict, dict):
+            raise ValueError("Invalid custom stats JSON: root or 'stats' must be a JSON object.")
+
+        # Validate all entries first (transactional import before mutating state)
+        batch_names = {
+            re.sub(r"[^a-zA-Z0-9_]", "_", str(item.get("name", name)).strip().lower()).strip("_")
+            for name, item in stats_dict.items()
+            if isinstance(item, dict) and "formula" in item
+        }
+        staged: List[StatDefinition] = []
         for name, item in stats_dict.items():
-            if isinstance(item, dict) and "formula" in item:
-                stat_def = StatDefinition(
-                    name=item.get("name", name),
-                    title=item.get("title", name),
-                    category=item.get("category", "custom"),
-                    group_by=item.get("group_by", "qb"),
-                    formula=item["formula"],
-                    description=item.get("description", "Imported custom NFL stat."),
-                    calculation_explained=item.get("calculation_explained", f"Calculated via formula: {item['formula']}"),
-                    unit=item.get("unit", ""),
-                    filter_expr=item.get("filter_expr", ""),
-                    scope=item.get("scope", "season"),
-                    agg=item.get("agg", "formula"),
-                    dependencies=item.get("dependencies") or extract_formula_dependencies(item["formula"]),
-                )
-                self.stats[stat_def.name] = stat_def
-                if stat_def.name not in self.stat_page["pinned_stats"]:
-                    self.stat_page["pinned_stats"].append(stat_def.name)
-                imported_names.append(stat_def.name)
+            if not isinstance(item, dict) or "formula" not in item:
+                continue
+            raw_name = str(item.get("name", name)).strip().lower()
+            clean_name = re.sub(r"[^a-zA-Z0-9_]", "_", raw_name).strip("_")
+            if clean_name and clean_name[0].isdigit():
+                clean_name = f"stat_{clean_name}"
+            if clean_name in DEFAULT_STATS and DEFAULT_STATS[clean_name].category == "traditional":
+                continue
+            group_by = str(item.get("group_by", "qb"))
+            formula = str(item["formula"]).strip()
+            filter_expr = str(item.get("filter_expr", "")).strip()
+            scope = str(item.get("scope", "season")).lower()
+            agg = str(item.get("agg", "formula")).lower()
+            deps = self._validate_stat_definition(
+                clean_name, group_by, formula, filter_expr, scope, agg, extra_known_stats=batch_names
+            )
+            staged.append(StatDefinition(
+                name=clean_name,
+                title=strip_ansi(item.get("title", clean_name)),
+                category="custom",
+                group_by=group_by,
+                formula=formula,
+                description=strip_ansi(item.get("description", "Imported custom NFL stat.")),
+                calculation_explained=strip_ansi(item.get("calculation_explained", f"Calculated via formula: {formula}")),
+                unit=strip_ansi(item.get("unit", "")),
+                filter_expr=filter_expr,
+                scope=scope,
+                agg=agg,
+                dependencies=deps,
+            ))
+
+        imported_names: List[str] = []
+        for stat_def in staged:
+            self.stats[stat_def.name] = stat_def
+            if stat_def.name not in self.stat_page["pinned_stats"]:
+                self.stat_page["pinned_stats"].append(stat_def.name)
+            imported_names.append(stat_def.name)
         self.save_state()
         return imported_names
 
@@ -1075,11 +1434,16 @@ class StatEngine:
             result = [p for p in result if str(p.get("posteam", "")).upper() == team.upper()]
         if not filter_expr or not filter_expr.strip():
             return result
+        # Validate syntax and identifiers once before filtering rows
+        _parse_and_validate_expr(filter_expr)
         filtered: List[Dict[str, Any]] = []
         for p in result:
             try:
                 if safe_eval_formula(filter_expr, p) > 0:
                     filtered.append(p)
+            except ValueError as exc:
+                if "Unknown variable" in str(exc) or "Unsupported" in str(exc) or "Exponent" in str(exc):
+                    raise
             except Exception:
                 pass
         return filtered
@@ -1099,9 +1463,18 @@ class StatEngine:
         rush_epa = sum(float(p.get("epa", 0.0)) for p in rush_plays)
         total_wpa = sum(float(p.get("wpa", 0.0)) for p in plays)
         completions = sum(int(p.get("complete_pass", 0)) for p in plays)
-        pass_attempts = sum(int(p.get("pass_attempt", 0)) for p in plays)
+        # Official pass attempts exclude sacks (in nflverse, pass_attempt == 1 on sacks)
+        pass_attempts = sum(1 for p in plays if int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0)
         rush_attempts = sum(int(p.get("rush_attempt", 0)) for p in plays)
         touchdowns = sum(int(p.get("touchdown", 0)) for p in plays)
+        pass_touchdowns = sum(
+            int(p.get("pass_touchdown", p.get("touchdown", 0) if (int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0) else 0))
+            for p in plays
+        )
+        rush_touchdowns = sum(
+            int(p.get("rush_touchdown", p.get("touchdown", 0) if int(p.get("rush_attempt", 0)) == 1 else 0))
+            for p in plays
+        )
         interceptions = sum(int(p.get("interception", 0)) for p in plays)
         fumbles_lost = sum(int(p.get("fumble_lost", 0)) for p in plays)
         turnovers = interceptions + fumbles_lost
@@ -1113,25 +1486,27 @@ class StatEngine:
         screen_plays = sum(1 for p in plays if int(p.get("is_screen", 0)) == 1)
         play_action_plays = sum(1 for p in plays if int(p.get("play_action", 0)) == 1)
 
-        games: Dict[str, int] = {}
+        # Key games by (game_id, posteam) so multi-team groups count team-game outcomes accurately
+        games: Dict[Tuple[str, str], int] = {}
         for p in plays:
             gid = str(p.get("game_id", "game"))
-            games[gid] = int(p.get("team_win", 0))
+            pteam = str(p.get("posteam", ""))
+            games[(gid, pteam)] = int(p.get("team_win", 0))
         games_played = max(1, len(games))
         games_won = sum(1 for w in games.values() if w == 1)
         games_lost = games_played - games_won
 
-        cpoe_vals = [float(p.get("cpoe", 0.0)) for p in pass_plays]
+        cpoe_vals = [float(p.get("cpoe", 0.0)) for p in pass_plays if int(p.get("sack", 0)) == 0]
         avg_cpoe = (sum(cpoe_vals) / len(cpoe_vals)) if cpoe_vals else 0.0
 
         att_nz = float(max(1, pass_attempts))
         comp_nz = float(max(1, completions))
         rush_nz = float(max(1, rush_attempts))
 
-        # Official NFL Passer Rating calculation
+        # Official NFL Passer Rating calculation (uses passing_yards and pass_touchdowns)
         pr_a = max(0.0, min(2.375, ((float(completions) / att_nz) - 0.3) * 5.0))
         pr_b = max(0.0, min(2.375, ((passing_yards / att_nz) - 3.0) * 0.25))
-        pr_c = max(0.0, min(2.375, (float(touchdowns) / att_nz) * 20.0))
+        pr_c = max(0.0, min(2.375, (float(pass_touchdowns) / att_nz) * 20.0))
         pr_d = max(0.0, min(2.375, 2.375 - ((float(interceptions) / att_nz) * 25.0)))
         nfl_passer_rating = ((pr_a + pr_b + pr_c + pr_d) / 6.0) * 100.0 if pass_attempts > 0 else 0.0
 
@@ -1173,6 +1548,8 @@ class StatEngine:
             "wpa_per_game": total_wpa / float(games_played),
             "avg_cpoe": avg_cpoe,
             "touchdowns": float(touchdowns),
+            "pass_touchdowns": float(pass_touchdowns),
+            "rush_touchdowns": float(rush_touchdowns),
             "interceptions": float(interceptions),
             "fumbles_lost": float(fumbles_lost),
             "turnovers": float(turnovers),
@@ -1193,30 +1570,46 @@ class StatEngine:
 
     @staticmethod
     def _aggregate_values(vals: List[float], agg: str) -> float:
-        if not vals:
+        finite_vals = [v for v in vals if math.isfinite(v)]
+        if not finite_vals:
             return 0.0
         agg_l = agg.lower()
         if agg_l == "sum":
-            return sum(vals)
+            return sum(finite_vals)
         if agg_l in ("avg", "mean", "formula"):
-            return sum(vals) / len(vals)
+            return sum(finite_vals) / len(finite_vals)
         if agg_l == "count_true":
-            return float(sum(1 for v in vals if v > 0.0))
+            return float(sum(1 for v in finite_vals if v > 0.0))
         if agg_l == "rate":
-            return (float(sum(1 for v in vals if v > 0.0)) / len(vals)) * 100.0
+            return (float(sum(1 for v in finite_vals if v > 0.0)) / len(finite_vals)) * 100.0
         if agg_l == "max":
-            return max(vals)
+            return max(finite_vals)
         if agg_l == "min":
-            return min(vals)
-        return sum(vals) / len(vals)
+            return min(finite_vals)
+        return sum(finite_vals) / len(finite_vals)
 
-    def _resolve_season_formulas(self, ctx: Dict[str, float], stat_defs: List[StatDefinition]) -> None:
+    def _resolve_season_formulas(
+        self,
+        ctx: Dict[str, float],
+        stat_defs: List[StatDefinition],
+        plays: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        filtered_ctx_cache: Dict[str, Dict[str, float]] = {}
         for _ in range(len(stat_defs) + 2):
             progressed = False
             for sdef in stat_defs:
                 if sdef.scope == "season":
                     try:
-                        val = safe_eval_formula(sdef.formula, ctx)
+                        eval_ctx = ctx
+                        if plays is not None and sdef.filter_expr:
+                            f_key = sdef.filter_expr.strip()
+                            if f_key not in filtered_ctx_cache:
+                                f_plays = self.apply_filter(plays, f_key)
+                                filtered_ctx_cache[f_key] = self._compute_base_metrics(f_plays) if f_plays else {k: 0.0 for k in BASE_METRIC_KEYS}
+                            # Merge already-resolved stats with filtered base metrics
+                            eval_ctx = dict(ctx)
+                            eval_ctx.update(filtered_ctx_cache[f_key])
+                        val = safe_eval_formula(sdef.formula, eval_ctx)
                         if ctx.get(sdef.name) != val:
                             ctx[sdef.name] = val
                             progressed = True
@@ -1230,7 +1623,7 @@ class StatEngine:
         Compute base traditional metrics AND resolve all composable custom stats across:
         1. Play-scoped custom stats (evaluated per play, aggregated via sdef.agg)
         2. Game-scoped custom stats (evaluated per game with full game-level custom stat context, aggregated via sdef.agg)
-        3. Season-scoped custom stats (evaluated on the entity's season context in dependency order)
+        3. Season-scoped custom stats (evaluated on the entity's season context in dependency order, honoring each stat's filter_expr)
         """
         ctx = self._compute_base_metrics(plays)
         all_defs = list(self.stats.values())
@@ -1248,25 +1641,40 @@ class StatEngine:
             ctx[sdef.name] = self._aggregate_values(p_vals, sdef.agg)
 
         # 2. First-pass season formulas so game-scoped stats or season stats have baseline values
-        self._resolve_season_formulas(ctx, all_defs)
+        self._resolve_season_formulas(ctx, all_defs, plays=plays)
 
-        # 3. Game-scoped custom stats (evaluated per game_id)
+        # 3. Game-scoped custom stats (evaluated per (game_id, posteam))
         game_defs = [s for s in all_defs if s.scope == "game"]
         if game_defs:
-            games_map: Dict[str, List[Dict[str, Any]]] = {}
+            games_map: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
             for p in plays:
                 gid = str(p.get("game_id", "game"))
-                games_map.setdefault(gid, []).append(p)
+                pteam = str(p.get("posteam", ""))
+                games_map.setdefault((gid, pteam), []).append(p)
 
             game_contexts: List[Dict[str, float]] = []
             for gplays in games_map.values():
                 g_ctx = self._compute_base_metrics(gplays)
-                self._resolve_season_formulas(g_ctx, all_defs)
+                for sdef in play_defs:
+                    gp_sub = self.apply_filter(gplays, sdef.filter_expr) if sdef.filter_expr else gplays
+                    gp_vals = []
+                    for p in gp_sub:
+                        try:
+                            gp_vals.append(safe_eval_formula(sdef.formula, p))
+                        except Exception:
+                            pass
+                    g_ctx[sdef.name] = self._aggregate_values(gp_vals, sdef.agg)
+                self._resolve_season_formulas(g_ctx, all_defs, plays=gplays)
                 # Resolve game-scoped stats inside each game context in dependency order
                 for _ in range(len(game_defs) + 2):
                     for gdef in game_defs:
                         try:
-                            g_ctx[gdef.name] = safe_eval_formula(gdef.formula, g_ctx)
+                            eval_g_ctx = g_ctx
+                            if gdef.filter_expr:
+                                gf_plays = self.apply_filter(gplays, gdef.filter_expr)
+                                eval_g_ctx = dict(g_ctx)
+                                eval_g_ctx.update(self._compute_base_metrics(gf_plays) if gf_plays else {k: 0.0 for k in BASE_METRIC_KEYS})
+                            g_ctx[gdef.name] = safe_eval_formula(gdef.formula, eval_g_ctx)
                         except Exception:
                             pass
                 game_contexts.append(g_ctx)
@@ -1276,7 +1684,7 @@ class StatEngine:
                 ctx[gdef.name] = self._aggregate_values(g_vals, gdef.agg)
 
         # 4. Final pass for season-scoped custom stats that depend on game-scoped or play-scoped custom stats
-        self._resolve_season_formulas(ctx, all_defs)
+        self._resolve_season_formulas(ctx, all_defs, plays=plays)
         return ctx
 
     def evaluate_stat_leaderboard(
@@ -1290,18 +1698,20 @@ class StatEngine:
     ) -> List[Dict[str, Any]]:
         """Evaluate a traditional or custom stat across entities and return a sorted leaderboard."""
         if stat_name not in self.stats:
-            raise KeyError(f"Stat '{stat_name}' is not registered.")
+            matches = difflib.get_close_matches(stat_name, list(self.stats.keys()), n=3, cutoff=0.5)
+            hint = f" Did you mean: {', '.join(matches)}?" if matches else " Run `list-stats` or `/stats` to see available stats."
+            raise KeyError(f"Stat '{stat_name}' is not registered.{hint}")
         sdef = self.stats[stat_name]
         filtered = self.apply_filter(plays, sdef.filter_expr, conf=conf, team=team)
         if extra_filter:
             filtered = self.apply_filter(filtered, extra_filter)
-        group_col = group_override or sdef.group_by
+        group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
         key_field = GROUP_BY_COLUMN_MAP.get(group_col, "posteam")
 
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for p in filtered:
             gval = str(p.get(key_field) or "").strip()
-            if not gval:
+            if not gval or gval.lower() == "unknown qb":
                 continue
             groups.setdefault(gval, []).append(p)
 
@@ -1312,11 +1722,14 @@ class StatEngine:
             mw = int(round(metrics.get("qb_meaningful_win", 0.0)))
             ml = int(round(metrics.get("qb_meaningful_loss", 0.0)))
             gp = int(metrics["games_played"])
+            val = float(metrics.get(stat_name, 0.0))
+            if not math.isfinite(val):
+                val = 0.0
             rows.append({
                 "entity": gval,
                 "team": str(gplays[0].get("posteam", "")),
                 "conf": str(gplays[0].get("conf", "")),
-                "value": round(float(metrics.get(stat_name, 0.0)), 2),
+                "value": round(val, 2),
                 "plays": int(metrics["plays"]),
                 "games_played": gp,
                 "yards_per_play": round(metrics["yards_per_play"], 2),
@@ -1350,17 +1763,19 @@ class StatEngine:
         filter_expr: str = "",
         sort_by: str = "yards_gained",
         play_id: Optional[int] = None,
+        game_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Filter and rank individual plays for play-level inspection and ASCII field visualization."""
         res = list(plays)
-        if play_id is not None:
-            exact = [p for p in res if int(p.get("play_id", -1)) == int(play_id)]
-            if exact:
-                return exact
         if season is not None:
             s_match = [p for p in res if int(p.get("season", 2025)) == int(season)]
             if s_match:
                 res = s_match
+        if game_id:
+            g_low = game_id.strip().lower()
+            res = [p for p in res if str(p.get("game_id", "")).lower() == g_low]
+        if play_id is not None:
+            return [p for p in res if int(p.get("play_id", -1)) == int(play_id)]
         if conf:
             res = [p for p in res if str(p.get("conf", "")).upper() == conf.upper()]
         if team:
@@ -1500,6 +1915,14 @@ class AsciiArtRenderer:
             )
         return cls.render_sideline(play, title=title)
 
+    @staticmethod
+    def _format_spot(yardline_100: int) -> str:
+        if yardline_100 > 50:
+            return f"Own {100 - yardline_100}"
+        if yardline_100 == 50:
+            return "50"
+        return f"Opp {yardline_100}"
+
     @classmethod
     def render_behind_offense(cls, play: Dict[str, Any], title: str = "BEHIND THE OFFENSE PLAY VIEW") -> str:
         """
@@ -1510,10 +1933,11 @@ class AsciiArtRenderer:
         posteam = str(play.get("posteam", "OFF"))
         defteam = str(play.get("defteam", "DEF"))
         conf = str(play.get("conf", "NFL"))
-        qb_name = str(play.get("qb_name", "QB"))
+        qb_name = str(play.get("qb_name") or "QB")
         target_name = str(play.get("receiver_player_name") or play.get("rusher_player_name") or "")
         yardline_100 = int(play.get("yardline_100", 50))
         los_yard = max(1, min(99, 100 - yardline_100))
+        spot_label = cls._format_spot(yardline_100)
         yards_gained = float(play.get("yards_gained", 0.0))
         air_yards = float(play.get("air_yards", 0.0))
         yac = float(play.get("yards_after_catch", 0.0))
@@ -1527,13 +1951,13 @@ class AsciiArtRenderer:
         is_td = int(play.get("touchdown", 0)) == 1
         is_int = int(play.get("interception", 0)) == 1
         is_sack = int(play.get("sack", 0)) == 1
+        is_complete = int(play.get("complete_pass", 0)) == 1
 
         width = 56
         total_rows = 15
         los_row = 11  # Row 11 is Line of Scrimmage; Rows 0..10 are upfield (+33y down to +3y); Rows 12..14 are backfield
 
         def depth_to_row(rel_yards: float) -> int:
-            # Each row above LOS is ~3 yards
             r = int(round(los_row - (rel_yards / 3.0)))
             return max(0, min(total_rows - 1, r))
 
@@ -1541,8 +1965,10 @@ class AsciiArtRenderer:
         target_col = dir_col_map.get(direction, 28)
         qb_row, qb_col = 13, 28
         catch_row = depth_to_row(air_yards) if play_type == "pass" else los_row
-        end_row = 0 if is_td else depth_to_row(yards_gained)
+        end_row = 0 if is_td else (catch_row if (play_type == "pass" and not is_complete and not is_sack) else depth_to_row(yards_gained))
         fd_row = depth_to_row(float(ydstogo))
+        if fd_row == los_row and ydstogo > 0:
+            fd_row = max(0, los_row - 1)
 
         ez_banner = f"{C.BOLD}{C.WHITE}╔══════╦{'═' * width}╦══════╗{C.RESET}"
         ez_title = pad_ansi(f"▲ OPPONENT END ZONE ({defteam}) • OFFENSE DRIVING UPFIELD ▲", width, "center")
@@ -1553,7 +1979,7 @@ class AsciiArtRenderer:
 
         out = [
             f"\n{C.BOLD}{C.GOLD}🏈 {title} — [CAMERA: BEHIND THE OFFENSE]{C.RESET}",
-            f"  {C.BOLD}{posteam}{C.RESET} vs {C.BOLD}{defteam}{C.RESET} ({conf}) │ Q{qtr} • {down}&{ydstogo} at Own {los_yard} │ Direction: {C.CYAN}{direction.upper()}{C.RESET}",
+            f"  {C.BOLD}{posteam}{C.RESET} vs {C.BOLD}{defteam}{C.RESET} ({conf}) │ Q{qtr} • {down}&{ydstogo} at {spot_label} │ Direction: {C.CYAN}{direction.upper()}{C.RESET}",
             side_hdr,
             ez_banner,
             ez_row,
@@ -1567,20 +1993,18 @@ class AsciiArtRenderer:
         if is_sack:
             end_row, target_col = qb_row, qb_col
         elif play_type == "pass":
-            # Line from (qb_row, qb_col) to (catch_row, target_col)
             steps = max(1, max(abs(catch_row - qb_row), abs(target_col - qb_col)))
             for s in range(1, steps):
                 r_p = int(round(qb_row + (catch_row - qb_row) * (s / steps)))
                 c_p = int(round(qb_col + (target_col - qb_col) * (s / steps)))
                 ch = "╱" if target_col > qb_col + 3 else ("╲" if target_col < qb_col - 3 else "⋮")
                 air_points[(r_p, c_p)] = ch
-            # YAC from (catch_row, target_col) to (end_row, target_col)
-            if not is_int and end_row != catch_row:
+            # YAC only when pass is completed
+            if is_complete and not is_int and end_row != catch_row:
                 step_r = -1 if end_row < catch_row else 1
                 for r_p in range(catch_row + step_r, end_row, step_r):
                     yac_points[(r_p, target_col)] = "║"
         else:
-            # Rush path from (qb_row, qb_col) to (end_row, target_col)
             steps = max(1, max(abs(end_row - qb_row), abs(target_col - qb_col)))
             for s in range(1, steps):
                 r_p = int(round(qb_row + (end_row - qb_row) * (s / steps)))
@@ -1590,14 +2014,12 @@ class AsciiArtRenderer:
         for r_idx in range(total_rows):
             rel_yds = (los_row - r_idx) * 3
             row_chars = [f"{C.TURF_GREEN}░{C.RESET}"] * width
-            # Hash marks at cols 20 and 35, numbers at cols 6 and 49
             row_chars[20] = f"{C.GRAY}:{C.RESET}"
             row_chars[35] = f"{C.GRAY}:{C.RESET}"
             if r_idx % 2 == 0:
                 row_chars[5] = f"{C.TURF_LIGHT}·{C.RESET}"
                 row_chars[50] = f"{C.TURF_LIGHT}·{C.RESET}"
 
-            # Line of Scrimmage (Blue) & First Down Line (Yellow)
             if r_idx == los_row:
                 row_chars = [f"{C.BOLD}{C.BLUE}━{C.RESET}"] * width
             elif r_idx == fd_row:
@@ -1627,13 +2049,11 @@ class AsciiArtRenderer:
                 cls._place_token(row_chars, qb_col, "QB", f"{C.BOLD}{C.CYAN}")
                 cls._place_token(row_chars, qb_col + 5, "RB", f"{C.CYAN}")
 
-            # Screen blockers
             if is_screen and r_idx == max(0, catch_row - 1):
                 for blk_c in (target_col - 2, target_col, target_col + 2):
                     if 0 <= blk_c < width:
                         row_chars[blk_c] = f"{C.BOLD}{C.ORANGE}▓{C.RESET}"
 
-            # Overlay Air Path & YAC Path
             for (pr, pc), ch in air_points.items():
                 if pr == r_idx and 0 <= pc < width:
                     row_chars[pc] = f"{C.BOLD}{C.CYAN}{ch}{C.RESET}"
@@ -1641,12 +2061,12 @@ class AsciiArtRenderer:
                 if pr == r_idx and 0 <= pc < width:
                     row_chars[pc] = f"{C.BOLD}{C.GREEN}{ch}{C.RESET}"
 
-            # Catch Point & End Spot
+            # Catch Point & End Spot (single-width glyphs so border never shifts)
             if play_type == "pass" and r_idx == catch_row and not is_sack:
-                marker = f"{C.BOLD}{C.RED}✖{C.RESET}" if is_int else f"{C.BOLD}{C.MAGENTA}◎{C.RESET}"
+                marker = f"{C.BOLD}{C.MAGENTA}◎{C.RESET}" if (is_complete and not is_int) else f"{C.BOLD}{C.RED}✖{C.RESET}"
                 row_chars[target_col] = marker
-            if r_idx == end_row:
-                end_marker = f"{C.BOLD}{C.RED}⚡{C.RESET}" if (is_sack or is_int) else f"{C.BOLD}{C.GOLD}★{C.RESET}"
+            if r_idx == end_row and (play_type != "pass" or is_complete or is_sack):
+                end_marker = f"{C.BOLD}{C.RED}✖{C.RESET}" if (is_sack or is_int) else f"{C.BOLD}{C.GOLD}★{C.RESET}"
                 row_chars[target_col] = end_marker
 
             if r_idx == los_row:
@@ -1659,7 +2079,7 @@ class AsciiArtRenderer:
             out.append(f"{C.BOLD}{C.WHITE}║{C.RESET}{lbl}{C.BOLD}{C.WHITE}║{C.RESET}{''.join(row_chars)}{C.BOLD}{C.WHITE}║{C.RESET}{lbl}{C.BOLD}{C.WHITE}║{C.RESET}")
 
         out.append(bot_border)
-        out.append(cls._play_legend_and_summary(play, qb_name, target_name, los_yard, down, ydstogo, air_yards, yac, yards_gained, concept, "BEHIND OFFENSE (Looking ▲ Upfield)"))
+        out.append(cls._play_legend_and_summary(play, qb_name, target_name, spot_label, down, ydstogo, air_yards, yac, yards_gained, concept, "BEHIND OFFENSE (Looking ▲ Upfield)"))
         return "\n".join(out)
 
     @classmethod
@@ -1672,10 +2092,11 @@ class AsciiArtRenderer:
         posteam = str(play.get("posteam", "OFF"))
         defteam = str(play.get("defteam", "DEF"))
         conf = str(play.get("conf", "NFL"))
-        qb_name = str(play.get("qb_name", "QB"))
+        qb_name = str(play.get("qb_name") or "QB")
         target_name = str(play.get("receiver_player_name") or play.get("rusher_player_name") or "")
         yardline_100 = int(play.get("yardline_100", 50))
         los_yard = max(1, min(99, 100 - yardline_100))
+        spot_label = cls._format_spot(yardline_100)
         yards_gained = float(play.get("yards_gained", 0.0))
         air_yards = float(play.get("air_yards", 0.0))
         yac = float(play.get("yards_after_catch", 0.0))
@@ -1689,6 +2110,7 @@ class AsciiArtRenderer:
         is_td = int(play.get("touchdown", 0)) == 1
         is_int = int(play.get("interception", 0)) == 1
         is_sack = int(play.get("sack", 0)) == 1
+        is_complete = int(play.get("complete_pass", 0)) == 1
 
         width = 56
         total_rows = 15
@@ -1703,21 +2125,23 @@ class AsciiArtRenderer:
         target_col = dir_col_map_mirrored.get(direction, 28)
         qb_row, qb_col = 1, 28
         catch_row = depth_to_row(air_yards) if play_type == "pass" else los_row
-        end_row = total_rows - 1 if is_td else depth_to_row(yards_gained)
+        end_row = total_rows - 1 if is_td else (catch_row if (play_type == "pass" and not is_complete and not is_sack) else depth_to_row(yards_gained))
         fd_row = depth_to_row(float(ydstogo))
+        if fd_row == los_row and ydstogo > 0:
+            fd_row = min(total_rows - 1, los_row + 1)
 
         top_banner = f"{C.BOLD}{C.WHITE}╔══════╦{'═' * width}╦══════╗{C.RESET}"
-        off_hdr = pad_ansi(f"▼ OFFENSE BACKFIELD ({posteam}) DRIVING DOWNWARD TOWARD DEFENSE ▼", width, "center")
+        off_hdr = pad_ansi(f"▼ OFFENSE BACKFIELD ({posteam}) DRIVING TOWARD DEFENSE ▼", width, "center")
         off_row = f"{C.BOLD}{C.WHITE}║{C.BG_ENDZONE_AFC}{C.WHITE} OFF  {C.RESET}{C.BOLD}{C.WHITE}║{C.BG_ENDZONE_AFC}{C.BOLD}{C.CYAN}{off_hdr}{C.RESET}{C.BOLD}{C.WHITE}║{C.BG_ENDZONE_AFC}{C.WHITE} OFF  {C.RESET}{C.BOLD}{C.WHITE}║{C.RESET}"
         mid_sep = f"{C.BOLD}{C.WHITE}╠══════╬{'═' * width}╬══════╣{C.RESET}"
-        def_hdr = pad_ansi(f"🛡 DEFENSE SECONDARY VIEW ({defteam} END ZONE BEHIND VIEWER) 🛡", width, "center")
+        def_hdr = pad_ansi(f"♦ DEFENSE SECONDARY VIEW ({defteam} END ZONE BEHIND VIEWER) ♦", width, "center")
         def_row = f"{C.BOLD}{C.WHITE}║{C.BG_ENDZONE_NFC}{C.WHITE} DEF  {C.RESET}{C.BOLD}{C.WHITE}║{C.BG_ENDZONE_NFC}{C.BOLD}{C.GOLD}{def_hdr}{C.RESET}{C.BOLD}{C.WHITE}║{C.BG_ENDZONE_NFC}{C.WHITE} DEF  {C.RESET}{C.BOLD}{C.WHITE}║{C.RESET}"
         bot_border = f"{C.BOLD}{C.WHITE}╚══════╩{'═' * width}╩══════╝{C.RESET}"
         side_hdr = f"        {C.DIM}◀ DEF LEFT (OFF RIGHT)   HASH :     : HASH   DEF RIGHT (OFF LEFT) ▶{C.RESET}"
 
         out = [
             f"\n{C.BOLD}{C.GOLD}🏈 {title} — [CAMERA: BEHIND THE DEFENSE]{C.RESET}",
-            f"  {C.BOLD}{defteam} Defense POV{C.RESET} vs {C.BOLD}{posteam} Offense{C.RESET} ({conf}) │ Q{qtr} • {down}&{ydstogo} │ Off Direction: {C.CYAN}{direction.upper()}{C.RESET}",
+            f"  {C.BOLD}{defteam} Defense POV{C.RESET} vs {C.BOLD}{posteam} Offense{C.RESET} ({conf}) │ Q{qtr} • {down}&{ydstogo} at {spot_label} │ Off Direction: {C.CYAN}{direction.upper()}{C.RESET}",
             side_hdr,
             top_banner,
             off_row,
@@ -1736,7 +2160,7 @@ class AsciiArtRenderer:
                 c_p = int(round(qb_col + (target_col - qb_col) * (s / steps)))
                 ch = "╲" if target_col > qb_col + 3 else ("╱" if target_col < qb_col - 3 else "⋮")
                 air_points[(r_p, c_p)] = ch
-            if not is_int and end_row != catch_row:
+            if is_complete and not is_int and end_row != catch_row:
                 step_r = 1 if end_row > catch_row else -1
                 for r_p in range(catch_row + step_r, end_row, step_r):
                     yac_points[(r_p, target_col)] = "║"
@@ -1798,10 +2222,10 @@ class AsciiArtRenderer:
                     row_chars[pc] = f"{C.BOLD}{C.GREEN}{ch}{C.RESET}"
 
             if play_type == "pass" and r_idx == catch_row and not is_sack:
-                marker = f"{C.BOLD}{C.RED}✖{C.RESET}" if is_int else f"{C.BOLD}{C.MAGENTA}◎{C.RESET}"
+                marker = f"{C.BOLD}{C.MAGENTA}◎{C.RESET}" if (is_complete and not is_int) else f"{C.BOLD}{C.RED}✖{C.RESET}"
                 row_chars[target_col] = marker
-            if r_idx == end_row:
-                end_marker = f"{C.BOLD}{C.RED}⚡{C.RESET}" if (is_sack or is_int) else f"{C.BOLD}{C.GOLD}★{C.RESET}"
+            if r_idx == end_row and (play_type != "pass" or is_complete or is_sack):
+                end_marker = f"{C.BOLD}{C.RED}✖{C.RESET}" if (is_sack or is_int) else f"{C.BOLD}{C.GOLD}★{C.RESET}"
                 row_chars[target_col] = end_marker
 
             if r_idx == los_row:
@@ -1814,7 +2238,7 @@ class AsciiArtRenderer:
             out.append(f"{C.BOLD}{C.WHITE}║{C.RESET}{lbl}{C.BOLD}{C.WHITE}║{C.RESET}{''.join(row_chars)}{C.BOLD}{C.WHITE}║{C.RESET}{lbl}{C.BOLD}{C.WHITE}║{C.RESET}")
 
         out.extend([mid_sep, def_row, bot_border])
-        out.append(cls._play_legend_and_summary(play, qb_name, target_name, los_yard, down, ydstogo, air_yards, yac, yards_gained, concept, "BEHIND DEFENSE (Offense Driving ▼ Toward Viewer)"))
+        out.append(cls._play_legend_and_summary(play, qb_name, target_name, spot_label, down, ydstogo, air_yards, yac, yards_gained, concept, "BEHIND DEFENSE (Offense Driving ▼ Toward Viewer)"))
         return "\n".join(out)
 
     @classmethod
@@ -1825,6 +2249,7 @@ class AsciiArtRenderer:
         conf = str(play.get("conf", "NFL"))
         yardline_100 = int(play.get("yardline_100", 60))
         los_yard = max(1, min(99, 100 - yardline_100))
+        spot_label = cls._format_spot(yardline_100)
         yards_gained = float(play.get("yards_gained", 15.0))
         air_yards = float(play.get("air_yards", 0.0))
         yac = float(play.get("yards_after_catch", 0.0))
@@ -1833,9 +2258,12 @@ class AsciiArtRenderer:
         is_screen = int(play.get("is_screen", 0)) == 1
         play_type = str(play.get("play_type", "pass"))
         concept = str(play.get("play_concept", "pass"))
-        qb_name = str(play.get("qb_name", "QB"))
+        qb_name = str(play.get("qb_name") or "QB")
         target_name = str(play.get("receiver_player_name") or play.get("rusher_player_name") or "")
         direction = _infer_play_direction(play, str(play.get("desc", "")))
+        is_int = int(play.get("interception", 0)) == 1
+        is_sack = int(play.get("sack", 0)) == 1
+        is_complete = int(play.get("complete_pass", 0)) == 1
 
         end_yard = max(0, min(100, int(round(los_yard + yards_gained))))
         catch_yard = max(0, min(100, int(round(los_yard + air_yards)))) if play_type == "pass" else los_yard
@@ -1860,7 +2288,7 @@ class AsciiArtRenderer:
             border,
         ]
 
-        ez_left = ["  " + posteam[:3].ljust(3) + " ", " OWN  ", " END  ", " ZONE ", "  🏈  ", "      ", "      "]
+        ez_left = ["  " + posteam[:3].ljust(3) + " ", " OWN  ", " END  ", " ZONE ", "  ♦♦  ", "      ", "      "]
         ez_right = ["  " + defteam[:3].ljust(3) + " ", " OPP  ", " END  ", " ZONE ", "  TD  ", "      ", "      "]
 
         for r_idx in range(7):
@@ -1882,20 +2310,26 @@ class AsciiArtRenderer:
                 row_chars[qb_col] = f"{C.BOLD}{C.CYAN}Q{C.RESET}"
 
             if r_idx == target_row:
-                if play_type == "pass":
+                if is_sack:
+                    row_chars[qb_col] = f"{C.BOLD}{C.RED}✖{C.RESET}"
+                elif play_type == "pass":
                     step = 1 if catch_col >= qb_col else -1
                     for c in range(qb_col + step, catch_col, step):
                         if 0 <= c < field_width:
                             row_chars[c] = f"{C.BOLD}{C.CYAN}~{C.RESET}"
-                    row_chars[catch_col] = f"{C.BOLD}{C.MAGENTA}◎{C.RESET}"
-                    for c in range(min(catch_col, end_col) + 1, max(catch_col, end_col)):
-                        if 0 <= c < field_width:
-                            row_chars[c] = f"{C.BOLD}{C.GREEN}═{C.RESET}"
+                    if is_complete and not is_int:
+                        row_chars[catch_col] = f"{C.BOLD}{C.MAGENTA}◎{C.RESET}"
+                        for c in range(min(catch_col, end_col) + 1, max(catch_col, end_col)):
+                            if 0 <= c < field_width:
+                                row_chars[c] = f"{C.BOLD}{C.GREEN}═{C.RESET}"
+                        row_chars[end_col] = f"{C.BOLD}{C.GOLD}★{C.RESET}"
+                    else:
+                        row_chars[catch_col] = f"{C.BOLD}{C.RED}✖{C.RESET}"
                 else:
                     for c in range(min(los_col, end_col) + 1, max(los_col, end_col)):
                         if 0 <= c < field_width:
                             row_chars[c] = f"{C.BOLD}{C.GREEN}═{C.RESET}"
-                row_chars[end_col] = f"{C.BOLD}{C.GOLD}★{C.RESET}"
+                    row_chars[end_col] = f"{C.BOLD}{C.GOLD}★{C.RESET}"
 
             if is_screen and abs(r_idx - target_row) == 1:
                 blk_col = min(field_width - 1, max(0, catch_col + 1))
@@ -1906,7 +2340,7 @@ class AsciiArtRenderer:
             rows_out.append(f"{left_box}{''.join(row_chars)}{right_box}")
 
         rows_out.append(border)
-        rows_out.append(cls._play_legend_and_summary(play, qb_name, target_name, los_yard, down, ydstogo, air_yards, yac, yards_gained, concept, "SIDELINE (Left ▶ Right)"))
+        rows_out.append(cls._play_legend_and_summary(play, qb_name, target_name, spot_label, down, ydstogo, air_yards, yac, yards_gained, concept, "SIDELINE (Left ▶ Right)"))
         return "\n".join(rows_out)
 
     @staticmethod
@@ -1914,7 +2348,7 @@ class AsciiArtRenderer:
         play: Dict[str, Any],
         qb_name: str,
         target_name: str,
-        los_yard: int,
+        spot_label: str,
         down: int,
         ydstogo: int,
         air_yards: float,
@@ -1926,10 +2360,11 @@ class AsciiArtRenderer:
         tgt_str = f" → {target_name}" if target_name and target_name != qb_name else ""
         legend = (
             f"  {C.BOLD}{C.CYAN}QB{C.RESET}={qb_name}{tgt_str}  "
-            f"{C.BOLD}{C.BLUE}━/┃{C.RESET}=LOS (Own {los_yard})  "
+            f"{C.BOLD}{C.BLUE}━/┃{C.RESET}=LOS ({spot_label})  "
             f"{C.BOLD}{C.YELLOW}┄/┇{C.RESET}=1st Down ({down}&{ydstogo})  "
             f"{C.BOLD}{C.CYAN}⋮/╱/╲{C.RESET}=Air ({air_yards:+.0f}y)  "
             f"{C.BOLD}{C.MAGENTA}◎{C.RESET}=Catch  "
+            f"{C.BOLD}{C.RED}✖{C.RESET}=Inc/Int/Sack  "
             f"{C.BOLD}{C.ORANGE}▓{C.RESET}=Blockers  "
             f"{C.BOLD}{C.GREEN}║/═{C.RESET}=YAC (+{yac:.0f}y)  "
             f"{C.BOLD}{C.GOLD}★{C.RESET}=End ({yards_gained:+.0f}y)"
@@ -1969,19 +2404,37 @@ class NaturalLanguageStatAssistant:
         "phi3:mini",
     ]
 
+    TEAM_NICKNAME_MAP: Dict[str, str] = {
+        "cardinals": "ARI", "falcons": "ATL", "ravens": "BAL", "bills": "BUF",
+        "panthers": "CAR", "bears": "CHI", "bengals": "CIN", "browns": "CLE",
+        "cowboys": "DAL", "broncos": "DEN", "lions": "DET", "packers": "GB",
+        "texans": "HOU", "colts": "IND", "jaguars": "JAX", "chiefs": "KC",
+        "raiders": "LV", "chargers": "LAC", "rams": "LA", "dolphins": "MIA",
+        "vikings": "MIN", "patriots": "NE", "saints": "NO", "giants": "NYG",
+        "jets": "NYJ", "eagles": "PHI", "steelers": "PIT", "49ers": "SF",
+        "niners": "SF", "seahawks": "SEA", "buccaneers": "TB", "bucs": "TB",
+        "titans": "TEN", "commanders": "WAS",
+    }
+
+    AMBIGUOUS_TEAM_ABBRS: Set[str] = {"NO", "MIN", "LA", "NE", "SEA", "TEN", "IND", "WAS", "BUF", "CAR"}
+
     @classmethod
     def detect_ollama_model(cls, requested_model: Optional[str] = None) -> Optional[str]:
-        if requested_model and requested_model.lower() not in ("auto", "none", "off"):
-            return requested_model
+        if requested_model and requested_model.strip().lower() in ("none", "off", "disable", "disabled"):
+            return None
+        if requested_model and requested_model.strip().lower() != "auto":
+            return requested_model.strip()
         env_model = os.environ.get("NFL_STAT_SLM_MODEL")
         if env_model:
-            return env_model
+            if env_model.strip().lower() in ("none", "off", "disable", "disabled"):
+                return None
+            return env_model.strip()
         base_url = os.environ.get("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:11434")
         try:
             req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
             with urllib.request.urlopen(req, timeout=0.8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                installed = [m.get("name", "") for m in data.get("models", [])]
+                installed = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
                 if not installed:
                     return None
                 for pref in cls.PREFERRED_SLM_MODELS:
@@ -1991,6 +2444,28 @@ class NaturalLanguageStatAssistant:
                 return installed[0]
         except Exception:
             return None
+
+    @classmethod
+    def _validate_slm_response(cls, parsed: Dict[str, Any], engine: Optional[StatEngine]) -> Optional[Dict[str, Any]]:
+        intent = str(parsed.get("intent") or "").strip().lower()
+        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report"):
+            return None
+        parsed["intent"] = intent
+        if "show_field" in parsed:
+            sf = parsed["show_field"]
+            parsed["show_field"] = (sf is True) or (isinstance(sf, str) and sf.strip().lower() == "true")
+        cam = str(parsed.get("camera") or "behind-offense").strip().lower()
+        if cam not in ("behind-offense", "behind-defense", "sideline", "offense", "defense", "side", "all"):
+            cam = "behind-offense"
+        parsed["camera"] = cam
+        grp = parsed.get("group_by")
+        if grp and str(grp).lower() not in GROUP_BY_COLUMN_MAP:
+            parsed["group_by"] = None
+        if engine and intent == "stat_query":
+            sname = str(parsed.get("stat_name") or "").strip().lower()
+            if sname not in engine.stats:
+                parsed["stat_name"] = None
+        return parsed
 
     @classmethod
     def query_local_slm(cls, query: str, engine: StatEngine, model_name: str) -> Optional[Dict[str, Any]]:
@@ -2027,12 +2502,14 @@ class NaturalLanguageStatAssistant:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=6.0) as resp:
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
                 parsed = json.loads(body.get("response", "{}"))
                 if isinstance(parsed, dict) and "intent" in parsed:
-                    parsed["slm_model_used"] = model_name
-                    return parsed
+                    validated = cls._validate_slm_response(parsed, engine)
+                    if validated:
+                        validated["slm_model_used"] = model_name
+                        return validated
         except Exception:
             return None
         return None
@@ -2043,24 +2520,27 @@ class NaturalLanguageStatAssistant:
         query: str,
         engine: Optional[StatEngine] = None,
         slm_model: Optional[str] = None,
+        pre_detected_model: Optional[str] = None,
+        default_season: int = 2025,
     ) -> Dict[str, Any]:
         """
         Interpret a user's natural language question using a local SLM (if available)
         or the deterministic rule/AST parser.
         Never forces an ASCII field when the user is asking for an average or leaderboard across the year!
         """
-        if engine is not None and (slm_model or "off").lower() not in ("none", "off", "disable"):
-            detected = cls.detect_ollama_model(slm_model)
+        effective_mode = (slm_model or "auto").strip().lower()
+        if engine is not None and effective_mode not in ("none", "off", "disable", "disabled"):
+            detected = pre_detected_model or cls.detect_ollama_model(slm_model)
             if detected:
                 slm_res = cls.query_local_slm(query, engine, detected)
-                if slm_res:
+                if slm_res and (slm_res.get("intent") != "stat_query" or slm_res.get("stat_name")):
                     return slm_res
 
         q = query.strip()
         ql = q.lower()
 
         season_match = re.search(r"\b(20\d{2})\b", ql)
-        season = int(season_match.group(1)) if season_match else 2025
+        season = int(season_match.group(1)) if season_match else default_season
         conf = "AFC" if re.search(r"\bafc\b", ql) else ("NFC" if re.search(r"\bnfc\b", ql) else None)
 
         # Detect camera perspective
@@ -2072,32 +2552,34 @@ class NaturalLanguageStatAssistant:
         elif any(p in ql for p in ("sideline", "broadcast view", "side view")):
             camera = "sideline"
 
-        # Detect team or QB filters
+        # Detect team filter deterministically without matching common lowercase English words like "no", "in", "min"
         team_filter: Optional[str] = None
-        for t_abbr in AFC_TEAMS | NFC_TEAMS:
-            if re.search(rf"\b{t_abbr.lower()}\b", ql):
-                team_filter = t_abbr
-                break
-        team_Aliases = {
-            "chiefs": "KC", "bills": "BUF", "ravens": "BAL", "texans": "HOU",
-            "browns": "CLE", "steelers": "PIT", "lions": "DET", "49ers": "SF", "niners": "SF",
-        }
-        for alias, abbr in team_Aliases.items():
-            if alias in ql:
+        for alias, abbr in sorted(cls.TEAM_NICKNAME_MAP.items()):
+            if re.search(rf"\b{re.escape(alias)}\b", ql):
                 team_filter = abbr
                 break
+        if not team_filter:
+            for t_abbr in sorted(AFC_TEAMS | NFC_TEAMS):
+                if t_abbr in cls.AMBIGUOUS_TEAM_ABBRS:
+                    if re.search(rf"\b{t_abbr}\b", q) or re.search(rf"\b(?:for|by|vs|team)\s+{t_abbr.lower()}\b", ql):
+                        team_filter = t_abbr
+                        break
+                else:
+                    if re.search(rf"\b{t_abbr.lower()}\b", ql):
+                        team_filter = t_abbr
+                        break
 
         qb_filter: Optional[str] = None
-        for qb_key in ("mahomes", "allen", "jackson", "stroud", "watson", "fields", "goff", "purdy", "worthy", "kelce", "gibbs", "cook"):
-            if qb_key in ql:
+        for qb_key in ("mahomes", "allen", "jackson", "stroud", "watson", "fields", "goff", "purdy", "worthy", "kelce", "gibbs", "cook", "burrow", "hurts", "herbert", "love", "prescott", "stafford", "tagovailoa", "daniels"):
+            if re.search(rf"\b{qb_key}\b", ql):
                 qb_filter = qb_key
                 break
 
         # 1. Check if user is asking to CREATE a custom stat
         if any(ql.startswith(prefix) for prefix in ("create stat", "create a stat", "make a stat", "make stat", "define stat", "build stat")):
             name_m = re.search(r"(?:called|named)\s+([a-zA-Z0-9_]+)", ql)
-            formula_m = re.search(r"formula\s+(.+?)(?:\s+where|\s+by|$)", q, flags=re.IGNORECASE)
-            where_m = re.search(r"where\s+(.+?)(?:\s+by|$)", q, flags=re.IGNORECASE)
+            formula_m = re.search(r"formula\s+(.+?)(?:\s+where\s+|\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|game)\b|$)", q, flags=re.IGNORECASE)
+            where_m = re.search(r"\bwhere\s+(.+?)(?:\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|game)\b|$)", q, flags=re.IGNORECASE)
             by_m = re.search(r"\bby\s+(qb|team|play_concept|conference|receiver|rusher|game)\b", ql)
             s_name = name_m.group(1) if name_m else "custom_user_stat"
             s_formula = formula_m.group(1).strip() if formula_m else "yards_per_play + (epa_per_play * 10)"
@@ -2119,10 +2601,16 @@ class NaturalLanguageStatAssistant:
             }
 
         # 2. Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
+        ql_without_stat_phrases = re.sub(
+            r"\b(?:per\s+play|play[\s_-]*action|explosive\s+play\s+rate|play\s+concept\s+efficiency)\b",
+            "",
+            ql,
+        )
         is_aggregate_request = any(w in ql for w in (
-            "average", "avg", "across the year", "across the season", "leaderboard",
+            "average", "avg", "per play", "across the year", "across the season", "leaderboard",
             "rankings", "rank teams", "rank qbs", "by team", "by qb", "by concept",
             "effectiveness", "meaningful win", "meaningful loss", "impact score",
+            "passer rating", "completion", "success rate", "explosive play rate", "cpoe",
         ))
         is_specific_play_request = (
             any(p in ql for p in (
@@ -2131,7 +2619,7 @@ class NaturalLanguageStatAssistant:
                 "behind the defense", "behind defense", "longest play", "best play", "top play",
                 "touchdown play", "interception play", "sack play",
             ))
-            or ("play" in ql and not is_aggregate_request and any(w in ql for w in ("show", "diagram", "longest", "best", "most efficient", "touchdown", "mahomes", "allen", "jackson", "goff", "stroud", "purdy")))
+            or (bool(re.search(r"\bplay\b", ql_without_stat_phrases)) and not is_aggregate_request and any(w in ql for w in ("show", "diagram", "longest", "best", "most efficient", "touchdown", "mahomes", "allen", "jackson", "goff", "stroud", "purdy")))
         )
 
         if is_specific_play_request and not ("average" in ql or "across the year" in ql):
@@ -2153,13 +2641,16 @@ class NaturalLanguageStatAssistant:
             }
 
         # 3. General Stat / Average / Leaderboard Query across the season (show_field = False!)
-        # Match any registered custom or traditional stat first
         matched_stat: Optional[str] = None
         if engine:
+            # Whole-word matching on stat ID, its spaced form, and title; prefer the longest (most specific) phrase
+            best_len = 0
             for sname, sdef in engine.stats.items():
-                if sname in ql or sdef.title.lower() in ql:
-                    matched_stat = sname
-                    break
+                for phrase in {sname.lower(), sname.lower().replace("_", " "), sdef.title.strip().lower()}:
+                    if len(phrase) < 3 or len(phrase) <= best_len:
+                        continue
+                    if re.search(rf"(?<![a-z0-9_]){re.escape(phrase)}(?![a-z0-9_])", ql):
+                        matched_stat, best_len = sname, len(phrase)
 
         if not matched_stat:
             if any(w in ql for w in ("meaningful win", "qb win", "pitcher", "meaningful loss", "impact score")):
@@ -2170,6 +2661,7 @@ class NaturalLanguageStatAssistant:
                     "season": season,
                     "conf": conf,
                     "team": team_filter,
+                    "qb": qb_filter,
                     "show_field": False,
                     "explanation": f"Evaluated per-game MLB-style QB Meaningful Wins (MW), Losses (ML), No-Decisions (ND), and 0-100 Impact Scores for {season}.",
                 }
@@ -2192,7 +2684,7 @@ class NaturalLanguageStatAssistant:
 
         # Determine group_by override from query
         group_override: Optional[str] = None
-        if any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")):
+        if any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")) or (qb_filter and not group_override):
             group_override = "qb"
         elif any(w in ql for w in ("by team", "teams", "each team", "team's", "per team")):
             group_override = "team"
@@ -2223,6 +2715,7 @@ class NaturalLanguageStatAssistant:
             "season": season,
             "conf": conf,
             "team": team_filter,
+            "qb": qb_filter,
             "show_field": False,
             "camera": camera,
             "explanation": f"Evaluated `{matched_stat}` across {season} (season aggregate/leaderboard — no ASCII field needed).",
@@ -2268,9 +2761,11 @@ def render_general_stat_view(
     camera: str = "behind-offense",
 ) -> str:
     if stat_name not in engine.stats:
-        raise KeyError(f"Unknown stat '{stat_name}'. Run `list-stats` to see available stats.")
+        matches = difflib.get_close_matches(stat_name, list(engine.stats.keys()), n=3, cutoff=0.5)
+        hint = f" Did you mean: {', '.join(matches)}?" if matches else " Run `list-stats` or `/stats` to see available stats."
+        raise KeyError(f"Unknown stat '{stat_name}'.{hint}")
     sdef = engine.stats[stat_name]
-    group_col = group_override or sdef.group_by
+    group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
     board = engine.evaluate_stat_leaderboard(
         stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter
     )
@@ -2338,6 +2833,7 @@ def render_specific_play_view(
     filter_expr: str = "",
     sort_by: str = "yards_gained",
     play_id: Optional[int] = None,
+    game_id: Optional[str] = None,
     camera: str = "behind-offense",
 ) -> str:
     matched = engine.query_plays(
@@ -2351,11 +2847,12 @@ def render_specific_play_view(
         filter_expr=filter_expr,
         sort_by=sort_by,
         play_id=play_id,
+        game_id=game_id,
     )
     if not matched:
         return f"\n{C.RED}No matching play found for the given criteria.{C.RESET}"
     chosen = matched[0]
-    title = f"SPECIFIC PLAY DIAGRAM — {chosen.get('qb_name', 'QB')} ({chosen.get('posteam', '')} vs {chosen.get('defteam', '')})"
+    title = f"SPECIFIC PLAY DIAGRAM — {chosen.get('qb_name') or chosen.get('player_name') or 'Play'} ({chosen.get('posteam', '')} vs {chosen.get('defteam', '')})"
     return AsciiArtRenderer.render_field_and_play(chosen, title=title, camera=camera)
 
 
@@ -2366,8 +2863,9 @@ def render_qb_meaningful_wins_view(
     conf: Optional[str],
     view_mode: str = "auto",
     camera: str = "behind-offense",
+    team: Optional[str] = None,
 ) -> str:
-    board = engine.evaluate_stat_leaderboard("qb_impact_score", plays, conf=conf, group_override="qb")
+    board = engine.evaluate_stat_leaderboard("qb_impact_score", plays, conf=conf, team=team, group_override="qb")
     sdef_win = engine.stats["qb_meaningful_win"]
     sdef_loss = engine.stats["qb_meaningful_loss"]
     sdef_imp = engine.stats["qb_impact_score"]
@@ -2429,9 +2927,10 @@ def render_screen_pass_view(
     conf: Optional[str],
     view_mode: str = "auto",
     camera: str = "behind-offense",
+    team: Optional[str] = None,
 ) -> str:
-    screen_plays = [p for p in plays if int(p.get("is_screen", 0)) == 1 and (not conf or p.get("conf") == conf)]
-    board = engine.evaluate_stat_leaderboard("screen_effectiveness_index", screen_plays, conf=conf, group_override="team")
+    screen_plays = [p for p in plays if int(p.get("is_screen", 0)) == 1 and (not conf or p.get("conf") == conf) and (not team or str(p.get("posteam", "")).upper() == team.upper())]
+    board = engine.evaluate_stat_leaderboard("screen_effectiveness_index", screen_plays, conf=conf, team=team, group_override="team")
     sdef_yac = engine.stats["screen_yards_after_catch"]
     sdef_idx = engine.stats["screen_effectiveness_index"]
 
@@ -2484,8 +2983,9 @@ def render_play_efficiency_view(
     conf: str,
     view_mode: str = "auto",
     camera: str = "behind-offense",
+    team: Optional[str] = None,
 ) -> str:
-    board = engine.evaluate_stat_leaderboard("yards_per_play", plays, conf=conf, group_override="play_concept")
+    board = engine.evaluate_stat_leaderboard("yards_per_play", plays, conf=conf, team=team, group_override="play_concept")
     sdef = engine.stats["yards_per_play"]
 
     out: List[str] = []
@@ -2588,6 +3088,7 @@ def handle_nl_query_result(
     s_plays = [p for p in all_plays if int(p.get("season", 2025)) == season] or all_plays
     conf = parsed.get("conf")
     team = parsed.get("team")
+    qb = parsed.get("qb")
     camera = camera_override or parsed.get("camera") or "behind-offense"
     slm_tag = f" [SLM: {parsed['slm_model_used']}]" if parsed.get("slm_model_used") else " [Local Rule/AST Parser]"
     header = f"\n{C.BOLD}{C.CYAN}🤖 Query Interpretation{slm_tag}:{C.RESET} {parsed.get('explanation', '')}"
@@ -2614,15 +3115,26 @@ def handle_nl_query_result(
             season=season,
             conf=conf,
             team=team,
-            qb=parsed.get("qb"),
+            qb=qb,
             concept=parsed.get("concept"),
             filter_expr=parsed.get("filter_expr", ""),
             sort_by=parsed.get("sort_by", "yards_gained"),
             camera=camera,
         )
 
+    if qb:
+        q_low = str(qb).lower()
+        qb_filtered = [
+            p for p in s_plays
+            if q_low in str(p.get("qb_name", "")).lower()
+            or q_low in str(p.get("player_name", "")).lower()
+            or q_low in str(p.get("desc", "")).lower()
+        ]
+        if qb_filtered:
+            s_plays = qb_filtered
+
     if intent == "qb_wins_report":
-        return header + "\n" + render_qb_meaningful_wins_view(engine, s_plays, season, conf, view_mode=view_override, camera=camera)
+        return header + "\n" + render_qb_meaningful_wins_view(engine, s_plays, season, conf, view_mode=view_override, camera=camera, team=team)
 
     stat_name = parsed.get("stat_name") or "yards_per_play"
     if stat_name not in engine.stats:
@@ -2660,13 +3172,7 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
             preset = dict(CUSTOM_STAT_TEMPLATES[0])
 
     print(f"\n  {C.CYAN}Available Building Blocks (Traditional + Existing Custom Stats):{C.RESET}")
-    building_blocks = sorted(list(engine.stats.keys()) + [
-        "total_yards", "passing_yards", "rushing_yards", "yards_per_attempt", "yards_per_rush",
-        "total_yac", "yac_per_play", "yac_per_completion", "total_xyac", "completion_pct",
-        "total_epa", "pass_epa_per_play", "rush_epa_per_play", "wpa_per_game", "avg_cpoe",
-        "success_rate", "first_down_rate", "turnover_rate", "sack_rate", "td_rate",
-        "touchdowns", "interceptions", "sacks", "games_played", "games_won", "games_lost", "team_win", "win_rate",
-    ])
+    building_blocks = sorted(set(engine.stats.keys()) | BASE_METRIC_KEYS)
     print("  " + ", ".join(building_blocks))
 
     default_name = preset.get("name", "custom_efficiency_score")
@@ -2731,6 +3237,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/create{C.RESET}                         Launch the Composable Custom Stat Builder (Season / Game / Play scope)
     {C.BOLD}{C.CYAN}/play{C.RESET} [qb/team/camera]          Diagram a specific play on the ASCII field (behind-offense / behind-defense / sideline)
     {C.BOLD}{C.CYAN}/camera{C.RESET} <offense|defense|side>  Set default camera angle for play diagrams
+    {C.BOLD}{C.CYAN}/season{C.RESET} <year>                  Set active season year (e.g. 2024 or 2025)
     {C.BOLD}{C.CYAN}/query{C.RESET}                          Run an ad-hoc season filter & group query
     {C.BOLD}{C.CYAN}/stats{C.RESET}                          List all registered traditional and custom stats & formulas
     {C.BOLD}{C.CYAN}/page{C.RESET}                           View Saved Stat Page (2024 historical lookback & 2025 tracking)
@@ -2739,24 +3246,46 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/play-efficiency{C.RESET} [AFC|NFC]      Rank most efficient offensive play concepts by yards gained
     {C.BOLD}{C.CYAN}/export{C.RESET} [file.json]             Export custom stats to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
+    {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
 
 
-def interactive_tui(engine: StatEngine, bridge: NFLDataBridge, slm_model: Optional[str] = None) -> None:
+def _split_cmd_args(raw_in: str) -> List[str]:
+    try:
+        return shlex.split(raw_in, posix=(os.name != "nt"))
+    except ValueError:
+        return raw_in.split()
+
+
+def interactive_tui(
+    engine: StatEngine,
+    bridge: NFLDataBridge,
+    slm_model: Optional[str] = None,
+    initial_plays: Optional[List[Dict[str, Any]]] = None,
+    default_season: int = 2025,
+    default_conf: Optional[str] = None,
+    default_team: Optional[str] = None,
+    default_camera: str = "behind-offense",
+) -> None:
     """
     Natural-Language-first interactive interface with /command support and
     readline-safe prompt wrapping so multi-line inputs can backspace across line wraps.
     """
     print(AsciiArtRenderer.banner())
-    plays = bridge.load_pbp([2024, 2025])
+    active_season = default_season
+    seasons_to_load = sorted({2024, 2025, active_season})
+    plays = initial_plays if initial_plays is not None else bridge.load_pbp(seasons_to_load)
     detected_slm = NaturalLanguageStatAssistant.detect_ollama_model(slm_model)
     slm_status = f"Ollama SLM ({detected_slm})" if detected_slm else "Built-in Deterministic AST Parser (Offline)"
-    default_camera = "behind-offense"
     print(f"  {C.GREEN}✔ Loaded {len(plays)} play-by-play records via [{bridge.last_source_used}]{C.RESET}")
-    print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}] • Default Play Camera: [{default_camera}]{C.RESET}")
+    if bridge.last_error and "offline" in bridge.last_source_used:
+        print(f"  {C.YELLOW}⚠ Live backend note ({bridge.last_error[:95]}) — using built-in offline dataset.{C.RESET}")
+    print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}] • Season: [{active_season}] • Camera: [{default_camera}]{C.RESET}")
     print(f"  {C.DIM}Ask any NFL stat or play question in plain English, or type {C.RESET}{C.BOLD}{C.GOLD}/help{C.RESET}{C.DIM} for commands ({C.RESET}{C.BOLD}/quit{C.RESET}{C.DIM} or {C.RESET}{C.BOLD}close{C.RESET}{C.DIM} to exit).{C.RESET}")
+
+    last_parsed_nl: Optional[Dict[str, Any]] = None
 
     while True:
         try:
@@ -2773,139 +3302,182 @@ def interactive_tui(engine: StatEngine, bridge: NFLDataBridge, slm_model: Option
             print("Exiting nfl-stat-cli.")
             break
 
-        # Slash commands (/command)
-        if raw_in.startswith("/"):
-            parts = raw_in.split()
-            cmd_token = parts[0].lower()
-            cmd_args = parts[1:]
+        try:
+            # Slash commands (/command)
+            if raw_in.startswith("/"):
+                parts = _split_cmd_args(raw_in)
+                cmd_token = parts[0].lower()
+                cmd_args = [a.strip("\"'") for a in parts[1:]]
 
-            if cmd_token in ("/help", "/h", "/?", "/commands", "/menu"):
-                print(render_slash_help())
-            elif cmd_token in ("/stats", "/list", "/list-stats", "/catalog"):
-                rows = [
-                    [s.name, s.title, s.category.upper(), s.group_by, f"{s.scope}/{s.agg}", s.filter_expr or "—", s.formula[:42]]
-                    for s in engine.stats.values()
-                ]
-                print(AsciiArtRenderer.render_table(
-                    "Registered Traditional & Custom Stats Catalog",
-                    ["Stat ID", "Title", "Type", "Group By", "Scope/Agg", "Filter", "Formula"],
-                    rows,
-                    alignments=["left", "left", "center", "center", "center", "left", "left"],
-                ))
-            elif cmd_token in ("/stat", "/leaderboard"):
-                if cmd_args and cmd_args[0] in engine.stats:
-                    chosen_stat = cmd_args[0]
-                    conf_arg = "AFC" if "afc" in [a.lower() for a in cmd_args] else ("NFC" if "nfc" in [a.lower() for a in cmd_args] else None)
-                    p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
-                    print(render_general_stat_view(engine, p25, chosen_stat, 2025, conf=conf_arg, view_mode="table"))
-                else:
-                    stat_names = list(engine.stats.keys())
-                    print(f"\n  {C.BOLD}{C.CYAN}Available Traditional & Custom Stats:{C.RESET}")
-                    for i, sname in enumerate(stat_names, 1):
-                        s = engine.stats[sname]
-                        print(f"    [{i:2d}] {C.BOLD}{s.name:<28}{C.RESET} — {s.title} [{s.category.upper()} • by {s.group_by}]")
-                    sel = prompt_input("  Pick stat number or name (default: 1): ").strip() or "1"
-                    chosen_stat = stat_names[0]
-                    if sel.isdigit() and 1 <= int(sel) <= len(stat_names):
-                        chosen_stat = stat_names[int(sel) - 1]
-                    elif sel in engine.stats:
-                        chosen_stat = sel
-                    season_str = prompt_input("  Season [2024/2025] (default: 2025): ").strip() or "2025"
-                    season_val = int(season_str) if season_str.isdigit() else 2025
-                    conf_val = prompt_input("  Conference filter [AFC/NFC/all] (default: all): ").strip().upper()
-                    conf_arg = conf_val if conf_val in ("AFC", "NFC") else None
-                    group_val = prompt_input(f"  Group by override [qb/team/play_concept/conference/receiver/game] (Enter for default `{engine.stats[chosen_stat].group_by}`): ").strip() or None
-                    s_plays = [p for p in plays if int(p.get("season", 2025)) == season_val] or plays
-                    if chosen_stat in ("qb_meaningful_win", "qb_meaningful_loss", "qb_impact_score") and not group_val:
-                        print(render_qb_meaningful_wins_view(engine, s_plays, season_val, conf_arg, view_mode="table"))
-                    else:
-                        print(render_general_stat_view(engine, s_plays, chosen_stat, season_val, conf=conf_arg, group_override=group_val, view_mode="table"))
-            elif cmd_token in ("/create", "/create-stat", "/new", "/build"):
-                interactive_custom_stat_wizard(engine, plays)
-            elif cmd_token in ("/play", "/diagram", "/field"):
-                if cmd_args:
-                    nl_play_q = "show play " + " ".join(cmd_args)
-                    parsed = NaturalLanguageStatAssistant.interpret_query(nl_play_q, engine=engine, slm_model=slm_model)
-                    parsed["intent"] = "specific_play"
-                    parsed["show_field"] = True
-                    if not any(k in nl_play_q.lower() for k in ("behind", "offense", "defense", "sideline")):
-                        parsed["camera"] = default_camera
-                    print(handle_nl_query_result(parsed, engine, plays))
-                else:
-                    print(f"\n{C.BOLD}{C.GREEN}=== 🏈 SPECIFIC PLAY EXPLORER & MULTI-ANGLE DIAGRAMMER ==={C.RESET}")
-                    qb_q = prompt_input("  Filter by QB/Player name (e.g. Mahomes, Allen, Goff, or Enter for any): ").strip() or None
-                    team_q = prompt_input("  Filter by Team (e.g. KC, BUF, DET, BAL, or Enter for any): ").strip() or None
-                    concept_q = prompt_input("  Filter by Concept (e.g. screen, play_action_deep, rush_outside, or Enter for any): ").strip() or None
-                    sort_q = prompt_input("  Pick top play by [yards_gained / epa / wpa / yac] (default: yards_gained): ").strip() or "yards_gained"
-                    cam_q = prompt_input(f"  Camera View [behind-offense / behind-defense / sideline / all] (default: {default_camera}): ").strip() or default_camera
-                    print(render_specific_play_view(
-                        engine, plays, season=2025, team=team_q, qb=qb_q, concept=concept_q, sort_by=sort_q, camera=cam_q
+                if cmd_token in ("/help", "/h", "/?", "/commands", "/menu"):
+                    print(render_slash_help())
+                elif cmd_token in ("/stats", "/list", "/list-stats", "/catalog"):
+                    rows = [
+                        [s.name, s.title, s.category.upper(), s.group_by, f"{s.scope}/{s.agg}", s.filter_expr or "—", s.formula[:42]]
+                        for s in engine.stats.values()
+                    ]
+                    print(AsciiArtRenderer.render_table(
+                        "Registered Traditional & Custom Stats Catalog",
+                        ["Stat ID", "Title", "Type", "Group By", "Scope/Agg", "Filter", "Formula"],
+                        rows,
+                        alignments=["left", "left", "center", "center", "center", "left", "left"],
                     ))
-            elif cmd_token in ("/camera", "/perspective"):
-                if cmd_args:
-                    cam_in = cmd_args[0].lower()
-                    if cam_in in ("offense", "behind-offense", "behind_offense"):
-                        default_camera = "behind-offense"
-                    elif cam_in in ("defense", "behind-defense", "behind_defense"):
-                        default_camera = "behind-defense"
-                    elif cam_in in ("side", "sideline", "broadcast"):
-                        default_camera = "sideline"
-                    elif cam_in == "all":
-                        default_camera = "all"
-                    print(f"  {C.GREEN}✔ Default play camera set to: {default_camera}{C.RESET}")
+                elif cmd_token in ("/stat", "/leaderboard"):
+                    if cmd_args:
+                        req_stat = cmd_args[0].lower()
+                        if req_stat not in engine.stats:
+                            matches = difflib.get_close_matches(req_stat, list(engine.stats.keys()), n=3, cutoff=0.5)
+                            hint = f" Did you mean: {', '.join(matches)}?" if matches else " Type `/stats` to list all stat IDs."
+                            print(f"  {C.RED}✖ Unknown stat `{req_stat}`.{hint}{C.RESET}")
+                            continue
+                        conf_arg = "AFC" if "afc" in [a.lower() for a in cmd_args] else ("NFC" if "nfc" in [a.lower() for a in cmd_args] else default_conf)
+                        s_plays = [p for p in plays if int(p.get("season", active_season)) == active_season] or plays
+                        print(render_general_stat_view(engine, s_plays, req_stat, active_season, conf=conf_arg, team=default_team, view_mode="table"))
+                    else:
+                        stat_names = list(engine.stats.keys())
+                        print(f"\n  {C.BOLD}{C.CYAN}Available Traditional & Custom Stats:{C.RESET}")
+                        for i, sname in enumerate(stat_names, 1):
+                            s = engine.stats[sname]
+                            print(f"    [{i:2d}] {C.BOLD}{s.name:<28}{C.RESET} — {s.title} [{s.category.upper()} • by {s.group_by}]")
+                        sel = prompt_input("  Pick stat number or name (default: 1): ").strip() or "1"
+                        chosen_stat = stat_names[0]
+                        if sel.isdigit() and 1 <= int(sel) <= len(stat_names):
+                            chosen_stat = stat_names[int(sel) - 1]
+                        elif sel in engine.stats:
+                            chosen_stat = sel
+                        else:
+                            matches = difflib.get_close_matches(sel, stat_names, n=3, cutoff=0.5)
+                            hint = f" Did you mean: {', '.join(matches)}?" if matches else ""
+                            print(f"  {C.RED}✖ Unknown stat `{sel}`.{hint}{C.RESET}")
+                            continue
+                        season_str = prompt_input(f"  Season [2024/2025] (default: {active_season}): ").strip() or str(active_season)
+                        season_val = int(season_str) if season_str.isdigit() else active_season
+                        conf_val = prompt_input("  Conference filter [AFC/NFC/all] (default: all): ").strip().upper()
+                        conf_arg = conf_val if conf_val in ("AFC", "NFC") else None
+                        group_val = prompt_input(f"  Group by override [qb/team/play_concept/conference/receiver/game] (Enter for default `{engine.stats[chosen_stat].group_by}`): ").strip() or None
+                        s_plays = [p for p in plays if int(p.get("season", season_val)) == season_val] or plays
+                        if chosen_stat in ("qb_meaningful_win", "qb_meaningful_loss", "qb_impact_score") and not group_val:
+                            print(render_qb_meaningful_wins_view(engine, s_plays, season_val, conf_arg, view_mode="table", team=default_team))
+                        else:
+                            print(render_general_stat_view(engine, s_plays, chosen_stat, season_val, conf=conf_arg, team=default_team, group_override=group_val, view_mode="table"))
+                elif cmd_token in ("/create", "/create-stat", "/new", "/build"):
+                    interactive_custom_stat_wizard(engine, plays)
+                elif cmd_token in ("/play", "/diagram", "/field"):
+                    if cmd_args:
+                        nl_play_q = "show play " + " ".join(cmd_args)
+                        parsed = NaturalLanguageStatAssistant.interpret_query(
+                            nl_play_q, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
+                        )
+                        parsed["intent"] = "specific_play"
+                        parsed["show_field"] = True
+                        if not any(k in nl_play_q.lower() for k in ("behind", "offense", "defense", "sideline")):
+                            parsed["camera"] = default_camera
+                        last_parsed_nl = parsed
+                        print(handle_nl_query_result(parsed, engine, plays))
+                    else:
+                        print(f"\n{C.BOLD}{C.GREEN}=== 🏈 SPECIFIC PLAY EXPLORER & MULTI-ANGLE DIAGRAMMER ==={C.RESET}")
+                        qb_q = prompt_input("  Filter by QB/Player name (e.g. Mahomes, Allen, Goff, or Enter for any): ").strip() or None
+                        team_q = prompt_input("  Filter by Team (e.g. KC, BUF, DET, BAL, or Enter for any): ").strip() or None
+                        concept_q = prompt_input("  Filter by Concept (e.g. screen, play_action_deep, rush_outside, or Enter for any): ").strip() or None
+                        sort_q = prompt_input("  Pick top play by [yards_gained / epa / wpa / yac] (default: yards_gained): ").strip() or "yards_gained"
+                        cam_q = prompt_input(f"  Camera View [behind-offense / behind-defense / sideline / all] (default: {default_camera}): ").strip() or default_camera
+                        print(render_specific_play_view(
+                            engine, plays, season=active_season, team=team_q, qb=qb_q, concept=concept_q, sort_by=sort_q, camera=cam_q
+                        ))
+                elif cmd_token in ("/camera", "/perspective"):
+                    if cmd_args:
+                        cam_in = cmd_args[0].lower()
+                        if cam_in in ("offense", "behind-offense", "behind_offense"):
+                            default_camera = "behind-offense"
+                            print(f"  {C.GREEN}✔ Default play camera set to: {default_camera}{C.RESET}")
+                        elif cam_in in ("defense", "behind-defense", "behind_defense"):
+                            default_camera = "behind-defense"
+                            print(f"  {C.GREEN}✔ Default play camera set to: {default_camera}{C.RESET}")
+                        elif cam_in in ("side", "sideline", "broadcast"):
+                            default_camera = "sideline"
+                            print(f"  {C.GREEN}✔ Default play camera set to: {default_camera}{C.RESET}")
+                        elif cam_in == "all":
+                            default_camera = "all"
+                            print(f"  {C.GREEN}✔ Default play camera set to: {default_camera}{C.RESET}")
+                        else:
+                            print(f"  {C.RED}✖ Invalid camera `{cam_in}`. Valid options: behind-offense, behind-defense, sideline, all{C.RESET}")
+                    else:
+                        print(f"  Current play camera: {C.BOLD}{default_camera}{C.RESET} (Usage: `/camera behind-offense`, `/camera behind-defense`, or `/camera sideline`)")
+                elif cmd_token == "/season":
+                    if cmd_args and cmd_args[0].isdigit():
+                        active_season = int(cmd_args[0])
+                        if not any(int(p.get("season", 0)) == active_season for p in plays):
+                            more = bridge.load_pbp([active_season])
+                            if more:
+                                plays.extend(more)
+                        print(f"  {C.GREEN}✔ Active season set to: {active_season}{C.RESET}")
+                    else:
+                        print(f"  Current active season: {C.BOLD}{active_season}{C.RESET} (Usage: `/season 2024` or `/season 2025`)")
+                elif cmd_token == "/why":
+                    if last_parsed_nl:
+                        print(f"\n{C.BOLD}{C.CYAN}🔍 Last Natural Language Query Parsed Intent:{C.RESET}")
+                        print(json.dumps(last_parsed_nl, indent=2))
+                    else:
+                        print(f"  {C.DIM}No natural-language query has been run in this session yet.{C.RESET}")
+                elif cmd_token in ("/query", "/filter"):
+                    print(f"\n{C.BOLD}{C.CYAN}=== 🔎 AD-HOC SEASON FILTER & GROUP QUERY ==={C.RESET}")
+                    stat_q = prompt_input("  Metric to evaluate (e.g. yards_per_play, epa_per_play, screen_yards_after_catch, passer_rating): ").strip() or "yards_per_play"
+                    if stat_q not in engine.stats:
+                        print(f"  {C.RED}✖ Unknown stat `{stat_q}`.{C.RESET}")
+                        continue
+                    grp_q = prompt_input("  Group by [qb / team / play_concept / conference / division / down / qtr / game] (default: play_concept): ").strip() or "play_concept"
+                    flt_q = prompt_input("  Filter expression (e.g. `conf == 'AFC'`, `is_screen == 1`, `down == 3`, or Enter for none): ").strip()
+                    s_plays = [p for p in plays if int(p.get("season", active_season)) == active_season] or plays
+                    print(render_general_stat_view(engine, s_plays, stat_q, active_season, group_override=grp_q, extra_filter=flt_q, view_mode="table"))
+                elif cmd_token in ("/page", "/stat-page"):
+                    print(render_stat_page(engine, plays))
+                elif cmd_token == "/qb-wins":
+                    s_plays = [p for p in plays if int(p.get("season", active_season)) == active_season] or plays
+                    print(render_qb_meaningful_wins_view(engine, s_plays, active_season, default_conf, view_mode="table", team=default_team))
+                elif cmd_token == "/screen-pass":
+                    s_plays = [p for p in plays if int(p.get("season", active_season)) == active_season] or plays
+                    print(render_screen_pass_view(engine, s_plays, active_season, default_conf, view_mode="table", team=default_team))
+                elif cmd_token == "/play-efficiency":
+                    conf_arg = cmd_args[0].upper() if (cmd_args and cmd_args[0].upper() in ("AFC", "NFC")) else (default_conf or "AFC")
+                    s_plays = [p for p in plays if int(p.get("season", active_season)) == active_season] or plays
+                    print(render_play_efficiency_view(engine, s_plays, active_season, conf_arg, view_mode="table", team=default_team))
+                elif cmd_token == "/export":
+                    path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename (default: custom_stats_export.json): ").strip() or "custom_stats_export.json")
+                    out_p = engine.export_custom_stats_json(Path(path_str))
+                    print(f"  {C.GREEN}✔ Exported custom stats to {out_p.resolve()}{C.RESET}")
+                elif cmd_token == "/import":
+                    path_str = cmd_args[0] if cmd_args else prompt_input("  Path to JSON file to import: ").strip()
+                    if path_str and Path(path_str).exists():
+                        names = engine.import_custom_stats_json(Path(path_str))
+                        print(f"  {C.GREEN}✔ Imported {len(names)} custom stats: {', '.join(names)}{C.RESET}")
+                    else:
+                        print(f"  {C.RED}✖ File not found: {path_str}{C.RESET}")
+                elif cmd_token in ("/clear", "/cls"):
+                    os.system("cls" if os.name == "nt" else "clear")
+                    print(AsciiArtRenderer.banner())
                 else:
-                    print(f"  Current play camera: {C.BOLD}{default_camera}{C.RESET} (Usage: `/camera behind-offense`, `/camera behind-defense`, or `/camera sideline`)")
-            elif cmd_token in ("/query", "/filter"):
-                print(f"\n{C.BOLD}{C.CYAN}=== 🔎 AD-HOC SEASON FILTER & GROUP QUERY ==={C.RESET}")
-                stat_q = prompt_input("  Metric to evaluate (e.g. yards_per_play, epa_per_play, screen_yards_after_catch, passer_rating): ").strip() or "yards_per_play"
-                if stat_q not in engine.stats:
-                    stat_q = "yards_per_play"
-                grp_q = prompt_input("  Group by [qb / team / play_concept / conference / division / down / qtr / game] (default: play_concept): ").strip() or "play_concept"
-                flt_q = prompt_input("  Filter expression (e.g. `conf == 'AFC'`, `is_screen == 1`, `down == 3`, or Enter for none): ").strip()
-                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
-                print(render_general_stat_view(engine, p25, stat_q, 2025, group_override=grp_q, extra_filter=flt_q, view_mode="table"))
-            elif cmd_token in ("/page", "/stat-page"):
-                print(render_stat_page(engine, plays))
-            elif cmd_token == "/qb-wins":
-                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
-                print(render_qb_meaningful_wins_view(engine, p25, 2025, None, view_mode="table"))
-            elif cmd_token == "/screen-pass":
-                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
-                print(render_screen_pass_view(engine, p25, 2025, None, view_mode="table"))
-            elif cmd_token == "/play-efficiency":
-                conf_arg = cmd_args[0].upper() if (cmd_args and cmd_args[0].upper() in ("AFC", "NFC")) else "AFC"
-                p25 = [p for p in plays if int(p.get("season", 2025)) == 2025] or plays
-                print(render_play_efficiency_view(engine, p25, 2025, conf_arg, view_mode="table"))
-            elif cmd_token == "/export":
-                path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename (default: custom_stats_export.json): ").strip() or "custom_stats_export.json")
-                out_p = engine.export_custom_stats_json(Path(path_str))
-                print(f"  {C.GREEN}✔ Exported custom stats to {out_p.resolve()}{C.RESET}")
-            elif cmd_token == "/import":
-                path_str = cmd_args[0] if cmd_args else prompt_input("  Path to JSON file to import: ").strip()
-                if path_str and Path(path_str).exists():
-                    names = engine.import_custom_stats_json(Path(path_str))
-                    print(f"  {C.GREEN}✔ Imported {len(names)} custom stats: {', '.join(names)}{C.RESET}")
-                else:
-                    print(f"  {C.RED}✖ File not found: {path_str}{C.RESET}")
-            elif cmd_token in ("/clear", "/cls"):
-                os.system("cls" if os.name == "nt" else "clear")
-                print(AsciiArtRenderer.banner())
-            else:
-                print(f"  {C.YELLOW}Unknown command `{cmd_token}`. Type `/help` to see all available slash commands.{C.RESET}")
-            continue
+                    print(f"  {C.YELLOW}Unknown command `{cmd_token}`. Type `/help` to see all available slash commands.{C.RESET}")
+                continue
 
-        # Default: Natural Language Query
-        parsed = NaturalLanguageStatAssistant.interpret_query(raw_in, engine=engine, slm_model=slm_model)
-        if parsed.get("intent") == "specific_play" and not any(k in low_in for k in ("behind", "offense", "defense", "sideline")):
-            parsed["camera"] = default_camera
-        print(handle_nl_query_result(parsed, engine, plays))
+            # Default: Natural Language Query
+            parsed = NaturalLanguageStatAssistant.interpret_query(
+                raw_in, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
+            )
+            if parsed.get("intent") == "specific_play" and not any(k in low_in for k in ("behind", "offense", "defense", "sideline")):
+                parsed["camera"] = default_camera
+            last_parsed_nl = parsed
+            print(handle_nl_query_result(parsed, engine, plays))
+        except KeyboardInterrupt:
+            print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
+        except Exception as exc:
+            print(f"  {C.RED}✖ Error: {exc}{C.RESET}")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--engine", choices=["auto", "python", "r", "offline"], default=argparse.SUPPRESS, help="Data backend preference")
     common.add_argument("--season", type=int, default=argparse.SUPPRESS, help="Season year to analyze (default: 2025)")
-    common.add_argument("--conf", choices=["AFC", "NFC"], default=argparse.SUPPRESS, help="Filter by conference (AFC or NFC)")
+    common.add_argument("--conf", type=str.upper, choices=["AFC", "NFC"], default=argparse.SUPPRESS, help="Filter by conference (AFC or NFC)")
     common.add_argument("--team", default=argparse.SUPPRESS, help="Filter by team abbreviation (e.g. KC, BUF, DET)")
     common.add_argument(
         "--view",
@@ -2934,7 +3506,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         conf=None,
         team=None,
         view="auto",
-        camera="behind-offense",
+        camera=None,
         slm_model=None,
         no_color=False,
     )
@@ -2950,6 +3522,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     play_p = sub.add_parser("play", parents=[common], help="Find and diagram a specific play on the ASCII gridiron (supports behind-offense, behind-defense, sideline)")
     play_p.add_argument("--play-id", type=int, default=None, help="Specific play_id to render")
+    play_p.add_argument("--game-id", default=None, help="Specific game_id to pair with --play-id (e.g. 2025_01_KC_BAL)")
     play_p.add_argument("--qb", default=None, help="Filter by QB or player name (e.g. Mahomes, Allen, Goff)")
     play_p.add_argument("--concept", default=None, help="Filter by play concept (e.g. screen, play_action_deep, rush_outside)")
     play_p.add_argument("--play-type", choices=["pass", "run"], default=None, help="Filter by pass or run")
@@ -2987,7 +3560,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     sub.add_parser("qb-wins", parents=[common], help="Run MLB-style QB Meaningful Wins (MW), Losses (ML) & 0-100 Impact Score report")
     sub.add_parser("screen-pass", parents=[common], help="Analyze screen pass effectiveness in yards gained, YAC, xYAC, and EPA")
     eff_p = sub.add_parser("play-efficiency", parents=[common], help="Rank most efficient offensive play concepts by yards gained")
-    eff_p.add_argument("--conference", choices=["AFC", "NFC"], default="AFC", help="Conference to rank (default: AFC)")
+    eff_p.add_argument("--conference", type=str.upper, choices=["AFC", "NFC"], default="AFC", help="Conference to rank (default: AFC)")
     sub.add_parser("demo-all", parents=[common], help="Run full showcase of custom stat engine, multi-angle play diagrams, and Stat Page")
 
     return parser
@@ -3002,106 +3575,130 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     bridge = NFLDataBridge(engine=args.engine)
     engine = StatEngine()
-    all_plays = bridge.load_pbp([2024, args.season])
-    season_plays = [p for p in all_plays if int(p.get("season", args.season)) == args.season] or all_plays
-
+    resolved_camera = args.camera or "behind-offense"
     cmd = args.command or "tui"
-    if cmd == "tui":
-        interactive_tui(engine, bridge, slm_model=args.slm_model)
+
+    try:
+        if cmd == "tui":
+            interactive_tui(
+                engine,
+                bridge,
+                slm_model=args.slm_model,
+                default_season=args.season,
+                default_conf=args.conf,
+                default_team=args.team,
+                default_camera=resolved_camera,
+            )
+            return 0
+
+        # Fast path for metadata / file commands that do not require downloading play-by-play data
+        if cmd == "list-stats":
+            print(AsciiArtRenderer.banner())
+            rows = [
+                [s.name, s.title, s.category.upper(), s.group_by, f"{s.scope}/{s.agg}", s.filter_expr or "—", s.formula[:42]]
+                for s in engine.stats.values()
+            ]
+            print(AsciiArtRenderer.render_table(
+                "Registered Traditional & Custom Stats Catalog",
+                ["Stat ID", "Title", "Type", "Group By", "Scope/Agg", "Filter", "Formula"],
+                rows,
+                alignments=["left", "left", "center", "center", "center", "left", "left"],
+            ))
+            return 0
+        if cmd == "export-stats":
+            print(AsciiArtRenderer.banner())
+            out_path = engine.export_custom_stats_json(Path(args.output), include_traditional=args.include_traditional)
+            print(f"\n{C.GREEN}✔ Exported custom stats JSON to: {out_path}{C.RESET}")
+            return 0
+        if cmd == "import-stats":
+            print(AsciiArtRenderer.banner())
+            names = engine.import_custom_stats_json(Path(args.input))
+            print(f"\n{C.GREEN}✔ Imported {len(names)} custom stats: {', '.join(names)}{C.RESET}")
+            return 0
+
+        all_plays = bridge.load_pbp(sorted({2024, args.season}))
+        season_plays = [p for p in all_plays if int(p.get("season", args.season)) == args.season] or all_plays
+
+        print(AsciiArtRenderer.banner())
+        print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
+
+        if cmd == "stat":
+            print(render_general_stat_view(
+                engine,
+                season_plays,
+                stat_name=args.stat_name,
+                season=args.season,
+                conf=args.conf,
+                team=args.team,
+                group_override=args.group_by,
+                extra_filter=args.filter,
+                view_mode=args.view,
+                camera=resolved_camera,
+            ))
+        elif cmd == "play":
+            cam = getattr(args, "perspective", None) or resolved_camera
+            print(render_specific_play_view(
+                engine,
+                season_plays,
+                season=args.season,
+                conf=args.conf,
+                team=args.team,
+                qb=args.qb,
+                concept=args.concept,
+                play_type=args.play_type,
+                filter_expr=args.filter,
+                sort_by=args.sort_by,
+                play_id=args.play_id,
+                game_id=getattr(args, "game_id", None),
+                camera=cam,
+            ))
+        elif cmd == "qb-wins":
+            print(render_qb_meaningful_wins_view(engine, season_plays, args.season, args.conf, args.view, camera=resolved_camera, team=args.team))
+        elif cmd == "screen-pass":
+            print(render_screen_pass_view(engine, season_plays, args.season, args.conf, args.view, camera=resolved_camera, team=args.team))
+        elif cmd == "play-efficiency":
+            conf = args.conf or getattr(args, "conference", "AFC")
+            print(render_play_efficiency_view(engine, season_plays, args.season, conf, args.view, camera=resolved_camera, team=args.team))
+        elif cmd == "create-stat":
+            sdef = engine.register_custom_stat(
+                name=args.name,
+                title=args.title,
+                group_by=args.group_by,
+                formula=args.formula,
+                description=args.description,
+                calculation_explained=args.explained,
+                unit=args.unit,
+                filter_expr=args.filter,
+                scope=args.scope,
+                agg=args.agg,
+            )
+            print(f"\n{C.GREEN}✔ Created & saved custom stat `{sdef.name}` ({sdef.title}) [Scope: {sdef.scope}/{sdef.agg}]{C.RESET}")
+            print(render_general_stat_view(engine, season_plays, sdef.name, args.season, conf=args.conf, team=args.team, view_mode=args.view, camera=resolved_camera))
+        elif cmd == "stat-page":
+            print(render_stat_page(engine, all_plays))
+        elif cmd == "ask":
+            parsed = NaturalLanguageStatAssistant.interpret_query(args.query, engine=engine, slm_model=args.slm_model, default_season=args.season)
+            print(handle_nl_query_result(parsed, engine, all_plays, view_override=args.view, camera_override=args.camera))
+        elif cmd == "demo-all":
+            print(render_qb_meaningful_wins_view(engine, season_plays, args.season, None, "table"))
+            print(render_screen_pass_view(engine, season_plays, args.season, None, "table"))
+            print(render_play_efficiency_view(engine, season_plays, args.season, "AFC", "table"))
+            print(render_specific_play_view(engine, season_plays, season=args.season, qb="Mahomes", camera="behind-offense"))
+            print(render_specific_play_view(engine, season_plays, season=args.season, qb="Goff", concept="screen", camera="behind-defense"))
+            engine.register_custom_stat(
+                name="qb_clutch_win_index",
+                title="QB Clutch Win Value Index",
+                group_by="qb",
+                formula="(qb_impact_score * 0.65) + (qb_meaningful_win * 12.0) - (qb_meaningful_loss * 15.0) + (yards_per_play * 1.5)",
+                description="Second-order custom stat built on top of custom `qb_impact_score`, `qb_meaningful_win`, `qb_meaningful_loss`, and traditional `yards_per_play`.",
+                calculation_explained="Multiplies custom `qb_impact_score` by 0.65, adds +12 per Meaningful Win (`qb_meaningful_win`), subtracts 15 per Meaningful Loss (`qb_meaningful_loss`), and adds 1.5x `yards_per_play`.",
+                unit="idx",
+            )
+            print(render_stat_page(engine, all_plays))
         return 0
-
-    print(AsciiArtRenderer.banner())
-    print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
-
-    if cmd == "stat":
-        print(render_general_stat_view(
-            engine,
-            season_plays,
-            stat_name=args.stat_name,
-            season=args.season,
-            conf=args.conf,
-            team=args.team,
-            group_override=args.group_by,
-            extra_filter=args.filter,
-            view_mode=args.view,
-            camera=args.camera,
-        ))
-    elif cmd == "play":
-        cam = getattr(args, "perspective", None) or args.camera
-        print(render_specific_play_view(
-            engine,
-            season_plays,
-            season=args.season,
-            conf=args.conf,
-            team=args.team,
-            qb=args.qb,
-            concept=args.concept,
-            play_type=args.play_type,
-            filter_expr=args.filter,
-            sort_by=args.sort_by,
-            play_id=args.play_id,
-            camera=cam,
-        ))
-    elif cmd == "list-stats":
-        rows = []
-        for s in engine.stats.values():
-            rows.append([s.name, s.title, s.category.upper(), s.group_by, f"{s.scope}/{s.agg}", s.filter_expr or "—", s.formula[:42]])
-        print(AsciiArtRenderer.render_table(
-            "Registered Traditional & Custom Stats Catalog",
-            ["Stat ID", "Title", "Type", "Group By", "Scope/Agg", "Filter", "Formula"],
-            rows,
-            alignments=["left", "left", "center", "center", "center", "left", "left"],
-        ))
-    elif cmd == "qb-wins":
-        print(render_qb_meaningful_wins_view(engine, season_plays, args.season, args.conf, args.view, camera=args.camera))
-    elif cmd == "screen-pass":
-        print(render_screen_pass_view(engine, season_plays, args.season, args.conf, args.view, camera=args.camera))
-    elif cmd == "play-efficiency":
-        conf = args.conf or getattr(args, "conference", "AFC")
-        print(render_play_efficiency_view(engine, season_plays, args.season, conf, args.view, camera=args.camera))
-    elif cmd == "create-stat":
-        sdef = engine.register_custom_stat(
-            name=args.name,
-            title=args.title,
-            group_by=args.group_by,
-            formula=args.formula,
-            description=args.description,
-            calculation_explained=args.explained,
-            unit=args.unit,
-            filter_expr=args.filter,
-            scope=args.scope,
-            agg=args.agg,
-        )
-        print(f"\n{C.GREEN}✔ Created & saved custom stat `{sdef.name}` ({sdef.title}) [Scope: {sdef.scope}/{sdef.agg}]{C.RESET}")
-        print(render_general_stat_view(engine, season_plays, sdef.name, args.season, conf=args.conf, team=args.team, view_mode=args.view, camera=args.camera))
-    elif cmd == "stat-page":
-        print(render_stat_page(engine, all_plays))
-    elif cmd == "export-stats":
-        out_path = engine.export_custom_stats_json(Path(args.output), include_traditional=args.include_traditional)
-        print(f"\n{C.GREEN}✔ Exported custom stats JSON to: {out_path}{C.RESET}")
-    elif cmd == "import-stats":
-        names = engine.import_custom_stats_json(Path(args.input))
-        print(f"\n{C.GREEN}✔ Imported {len(names)} custom stats: {', '.join(names)}{C.RESET}")
-    elif cmd == "ask":
-        parsed = NaturalLanguageStatAssistant.interpret_query(args.query, engine=engine, slm_model=args.slm_model)
-        print(handle_nl_query_result(parsed, engine, all_plays, view_override=args.view, camera_override=args.camera if args.camera != "behind-offense" else None))
-    elif cmd == "demo-all":
-        print(render_qb_meaningful_wins_view(engine, season_plays, args.season, None, "table"))
-        print(render_screen_pass_view(engine, season_plays, args.season, None, "table"))
-        print(render_play_efficiency_view(engine, season_plays, args.season, "AFC", "table"))
-        print(render_specific_play_view(engine, season_plays, season=args.season, qb="Mahomes", camera="behind-offense"))
-        print(render_specific_play_view(engine, season_plays, season=args.season, qb="Goff", concept="screen", camera="behind-defense"))
-        engine.register_custom_stat(
-            name="qb_clutch_win_index",
-            title="QB Clutch Win Value Index",
-            group_by="qb",
-            formula="(qb_impact_score * 0.65) + (qb_meaningful_win * 12.0) - (qb_meaningful_loss * 15.0) + (yards_per_play * 1.5)",
-            description="Second-order custom stat built on top of custom `qb_impact_score`, `qb_meaningful_win`, `qb_meaningful_loss`, and traditional `yards_per_play`.",
-            calculation_explained="Multiplies custom `qb_impact_score` by 0.65, adds +12 per Meaningful Win (`qb_meaningful_win`), subtracts 15 per Meaningful Loss (`qb_meaningful_loss`), and adds 1.5x `yards_per_play`.",
-            unit="idx",
-        )
-        print(render_stat_page(engine, all_plays))
-    return 0
+    except (KeyError, ValueError, SyntaxError, FileNotFoundError, json.JSONDecodeError) as exc:
+        print(f"\n{C.RED}✖ Error: {exc}{C.RESET}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -63,20 +63,24 @@ pbp$team_win <- ifelse(
   1L, 0L
 )
 
-pbp$qb_name <- ifelse(!is.na(pbp$passer_player_name), pbp$passer_player_name, pbp$rusher_player_name)
+pbp$qb_name <- ifelse(
+  !is.na(pbp$passer_player_name) & pbp$passer_player_name != "",
+  pbp$passer_player_name,
+  ifelse(!is.na(pbp$qb_scramble) & pbp$qb_scramble == 1 & !is.na(pbp$rusher_player_name), pbp$rusher_player_name, "")
+)
 
 keep_cols <- intersect(
-  c("play_id", "season", "week", "game_id", "posteam", "defteam", "conf", "division",
-    "qb_name", "passer_player_name", "receiver_player_name", "rusher_player_name",
-    "play_type", "play_direction", "is_screen", "shotgun", "no_huddle",
+  c("play_id", "season", "week", "game_id", "posteam", "defteam", "home_team", "away_team", "result",
+    "conf", "division", "qb_name", "passer_player_name", "receiver_player_name", "rusher_player_name",
+    "play_type", "play_direction", "is_screen", "shotgun", "no_huddle", "qb_scramble",
     "air_yards", "yards_after_catch", "xyac_mean_yardage",
     "yards_gained", "epa", "wpa", "cpoe", "complete_pass", "pass_attempt",
-    "rush_attempt", "down", "ydstogo", "yardline_100", "series_success", "first_down",
-    "touchdown", "interception", "fumble_lost", "sack", "team_win",
+    "rush_attempt", "down", "ydstogo", "yardline_100", "success", "series_success", "first_down",
+    "touchdown", "pass_touchdown", "rush_touchdown", "interception", "fumble_lost", "sack", "team_win",
     "home_score", "away_score", "score_differential", "qtr", "desc"),
   names(pbp)
 )
 
-out_df <- pbp[!is.na(pbp$posteam) & (pbp$pass_attempt == 1 | pbp$rush_attempt == 1), keep_cols]
-write.csv(out_df, file = output_csv, row.names = FALSE)
+out_df <- pbp[!is.na(pbp$posteam) & ((!is.na(pbp$pass_attempt) & pbp$pass_attempt == 1) | (!is.na(pbp$rush_attempt) & pbp$rush_attempt == 1)), keep_cols]
+write.csv(out_df, file = output_csv, row.names = FALSE, na = "")
 message(sprintf("[nflverse-bridge] Exported %d plays to %s", nrow(out_df), output_csv))
