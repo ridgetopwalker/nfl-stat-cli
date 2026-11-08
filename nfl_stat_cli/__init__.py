@@ -187,6 +187,51 @@ TEAM_DIVISIONS: Dict[str, str] = {
     "ARI": "NFC West", "LA": "NFC West", "LAR": "NFC West", "SF": "NFC West", "SEA": "NFC West",
 }
 
+TEAM_FULL_NAMES: Dict[str, str] = {
+    "ARI": "Arizona Cardinals", "ATL": "Atlanta Falcons", "BAL": "Baltimore Ravens", "BUF": "Buffalo Bills",
+    "CAR": "Carolina Panthers", "CHI": "Chicago Bears", "CIN": "Cincinnati Bengals", "CLE": "Cleveland Browns",
+    "DAL": "Dallas Cowboys", "DEN": "Denver Broncos", "DET": "Detroit Lions", "GB": "Green Bay Packers",
+    "HOU": "Houston Texans", "IND": "Indianapolis Colts", "JAX": "Jacksonville Jaguars", "KC": "Kansas City Chiefs",
+    "LV": "Las Vegas Raiders", "LAC": "Los Angeles Chargers", "LA": "Los Angeles Rams", "LAR": "Los Angeles Rams",
+    "MIA": "Miami Dolphins", "MIN": "Minnesota Vikings", "NE": "New England Patriots", "NO": "New Orleans Saints",
+    "NYG": "New York Giants", "NYJ": "New York Jets", "PHI": "Philadelphia Eagles", "PIT": "Pittsburgh Steelers",
+    "SF": "San Francisco 49ers", "SEA": "Seattle Seahawks", "TB": "Tampa Bay Buccaneers", "TEN": "Tennessee Titans",
+    "WAS": "Washington Commanders",
+}
+
+TEAM_NICKNAMES_TO_ABBR: Dict[str, str] = {
+    "cardinals": "ARI", "falcons": "ATL", "ravens": "BAL", "bills": "BUF",
+    "panthers": "CAR", "bears": "CHI", "bengals": "CIN", "browns": "CLE",
+    "cowboys": "DAL", "broncos": "DEN", "lions": "DET", "packers": "GB",
+    "texans": "HOU", "colts": "IND", "jaguars": "JAX", "chiefs": "KC",
+    "raiders": "LV", "chargers": "LAC", "rams": "LA", "dolphins": "MIA",
+    "vikings": "MIN", "patriots": "NE", "saints": "NO", "giants": "NYG",
+    "jets": "NYJ", "eagles": "PHI", "steelers": "PIT", "49ers": "SF",
+    "niners": "SF", "seahawks": "SEA", "buccaneers": "TB", "bucs": "TB",
+    "titans": "TEN", "commanders": "WAS",
+}
+
+
+def resolve_team_abbr(team_str: Optional[str]) -> Optional[str]:
+    """Resolve team abbreviation, city, nickname, or full name to a canonical 2-3 letter NFL team abbreviation."""
+    if not team_str:
+        return None
+    raw = team_str.strip()
+    up = raw.upper()
+    if up in TEAM_DIVISIONS or up in AFC_TEAMS or up in NFC_TEAMS:
+        return "LA" if up == "LAR" else up
+    low = raw.lower()
+    if low in TEAM_NICKNAMES_TO_ABBR:
+        return TEAM_NICKNAMES_TO_ABBR[low]
+    for abbr, name in TEAM_FULL_NAMES.items():
+        if low == name.lower() or low in name.lower():
+            return "LA" if abbr == "LAR" else abbr
+    all_teams = sorted((AFC_TEAMS | NFC_TEAMS) - {"LAR"})
+    matches = difflib.get_close_matches(up, all_teams, n=1, cutoff=0.7)
+    if matches:
+        return matches[0]
+    return None
+
 SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
     # KC (AFC) - Patrick Mahomes
     {"play_id": 101, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "KC", "defteam": "BAL", "conf": "AFC",
@@ -323,6 +368,42 @@ SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
      "down": 2, "ydstogo": 6, "yardline_100": 44, "series_success": 1, "touchdown": 0, "interception": 0, "sack": 0,
      "team_win": 1, "home_score": 32, "away_score": 19, "qtr": 2,
      "desc": "(04:22 Q2) B.Purdy pass short left to D.Samuel to NYJ 28 for 16 yards (screen)."},
+
+    # Special Teams Plays (2025)
+    {"play_id": 116, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "KC", "defteam": "BAL", "conf": "AFC",
+     "qb_name": "", "receiver_player_name": "", "rusher_player_name": "", "kicker_player_name": "H.Butker", "player_name": "H.Butker",
+     "play_type": "field_goal", "play_concept": "field_goal", "play_direction": "middle", "is_screen": 0, "play_action": 0, "shotgun": 0,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": 51.0,
+     "epa": 1.82, "wpa": 0.075, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 0, "rush_attempt": 0,
+     "down": 4, "ydstogo": 5, "yardline_100": 33, "series_success": 1, "touchdown": 0, "interception": 0, "sack": 0,
+     "team_win": 1, "home_score": 27, "away_score": 20, "qtr": 2,
+     "desc": "(00:03 Q2) H.Butker 51 yard field goal is GOOD, Center-J.Winchester, Holder-M.Araiza."},
+    {"play_id": 117, "season": 2025, "week": 1, "game_id": "2025_01_LA_DET", "posteam": "DET", "defteam": "LA", "conf": "NFC",
+     "qb_name": "", "receiver_player_name": "", "rusher_player_name": "", "punter_player_name": "J.Fox", "player_name": "J.Fox",
+     "play_type": "punt", "play_concept": "punt", "play_direction": "middle", "is_screen": 0, "play_action": 0, "shotgun": 0,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": 62.0,
+     "epa": 0.85, "wpa": 0.032, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 0, "rush_attempt": 0,
+     "down": 4, "ydstogo": 12, "yardline_100": 70, "series_success": 1, "touchdown": 0, "interception": 0, "sack": 0,
+     "team_win": 1, "home_score": 26, "away_score": 20, "qtr": 3,
+     "desc": "(07:15 Q3) J.Fox punts 62 yards to LA 8, fair catch by K.Fair."},
+
+    # Additional Defensive Highlights (2025)
+    {"play_id": 118, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "BAL", "defteam": "KC", "conf": "AFC",
+     "qb_name": "L.Jackson", "receiver_player_name": "", "rusher_player_name": "", "player_name": "C.Jones",
+     "play_type": "pass", "play_concept": "pass_short", "play_direction": "middle", "is_screen": 0, "play_action": 0, "shotgun": 1,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": -7.0,
+     "epa": -1.72, "wpa": -0.065, "cpoe": -5.0, "complete_pass": 0, "pass_attempt": 1, "rush_attempt": 0,
+     "down": 3, "ydstogo": 8, "yardline_100": 42, "series_success": 0, "touchdown": 0, "interception": 0, "sack": 1,
+     "team_win": 0, "home_score": 27, "away_score": 20, "qtr": 4,
+     "desc": "(01:50 Q4) L.Jackson sacked at BAL 49 for -7 yards (C.Jones)."},
+    {"play_id": 119, "season": 2025, "week": 1, "game_id": "2025_01_ARI_BUF", "posteam": "ARI", "defteam": "BUF", "conf": "NFC",
+     "qb_name": "K.Murray", "receiver_player_name": "", "rusher_player_name": "", "player_name": "G.Rousseau",
+     "play_type": "pass", "play_concept": "pass_short", "play_direction": "right", "is_screen": 0, "play_action": 0, "shotgun": 1,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": -9.0,
+     "epa": -2.15, "wpa": -0.088, "cpoe": -8.0, "complete_pass": 0, "pass_attempt": 1, "rush_attempt": 0,
+     "down": 2, "ydstogo": 9, "yardline_100": 38, "series_success": 0, "touchdown": 0, "interception": 0, "sack": 1,
+     "team_win": 0, "home_score": 34, "away_score": 28, "qtr": 4,
+     "desc": "(03:10 Q4) K.Murray sacked at ARI 29 for -9 yards (G.Rousseau), fumble RECOVERED by BUF-D.Williams."},
 
     # 2024 Historical Lookback plays for Stat Page trend tracking
     {"play_id": 201, "season": 2024, "week": 1, "game_id": "2024_01_DET_KC", "posteam": "KC", "defteam": "DET", "conf": "AFC",
@@ -636,9 +717,12 @@ class NFLDataBridge:
             qb_name = ""
 
         receiver_name = _safe_str(r.get("receiver_player_name"), "")
+        kicker_name = _safe_str(r.get("kicker_player_name"), "")
+        punter_name = _safe_str(r.get("punter_player_name"), "")
         if not rusher_name and rush_attempt and qb_name:
             rusher_name = qb_name
-        skill_player = receiver_name or rusher_name or qb_name
+        explicit_player = _safe_str(r.get("player_name"), "")
+        skill_player = explicit_player or receiver_name or rusher_name or qb_name or kicker_name or punter_name
         home_score = _safe_int(r.get("home_score"), 0)
         away_score = _safe_int(r.get("away_score"), 0)
         score_diff = _safe_float(r.get("score_differential"), float(abs(home_score - away_score)))
@@ -681,6 +765,8 @@ class NFLDataBridge:
             "qb_name": qb_name,
             "receiver_player_name": receiver_name,
             "rusher_player_name": rusher_name,
+            "kicker_player_name": kicker_name,
+            "punter_player_name": punter_name,
             "player_name": skill_player,
             "play_type": play_type,
             "play_concept": play_concept,
@@ -1236,6 +1322,24 @@ def _atomic_write_json(target: Path, payload: Any) -> None:
         raise
 
 
+def calculate_passer_rating(
+    attempts: int,
+    completions: int,
+    passing_yards: float,
+    touchdowns: int,
+    interceptions: int,
+) -> float:
+    """Calculate official NFL passer rating bounded to [0.0, 158.3]."""
+    if attempts <= 0:
+        return 0.0
+    att_nz = float(attempts)
+    pr_a = max(0.0, min(2.375, ((float(completions) / att_nz) - 0.3) * 5.0))
+    pr_b = max(0.0, min(2.375, ((float(passing_yards) / att_nz) - 3.0) * 0.25))
+    pr_c = max(0.0, min(2.375, (float(touchdowns) / att_nz) * 20.0))
+    pr_d = max(0.0, min(2.375, 2.375 - ((float(interceptions) / att_nz) * 25.0)))
+    return ((pr_a + pr_b + pr_c + pr_d) / 6.0) * 100.0
+
+
 class StatEngine:
     """Manages custom stats, evaluates multi-scope composable formulas, and tracks the user's Stat Page."""
 
@@ -1600,11 +1704,7 @@ class StatEngine:
         rush_nz = float(max(1, rush_attempts))
 
         # Official NFL Passer Rating calculation (uses passing_yards and pass_touchdowns)
-        pr_a = max(0.0, min(2.375, ((float(completions) / att_nz) - 0.3) * 5.0))
-        pr_b = max(0.0, min(2.375, ((passing_yards / att_nz) - 3.0) * 0.25))
-        pr_c = max(0.0, min(2.375, (float(pass_touchdowns) / att_nz) * 20.0))
-        pr_d = max(0.0, min(2.375, 2.375 - ((float(interceptions) / att_nz) * 25.0)))
-        nfl_passer_rating = ((pr_a + pr_b + pr_c + pr_d) / 6.0) * 100.0 if pass_attempts > 0 else 0.0
+        nfl_passer_rating = calculate_passer_rating(pass_attempts, completions, passing_yards, pass_touchdowns, interceptions)
 
         base: Dict[str, float] = {
             "plays": float(len(plays)),
@@ -2542,7 +2642,7 @@ class NaturalLanguageStatAssistant:
     @classmethod
     def _validate_slm_response(cls, parsed: Dict[str, Any], engine: Optional[StatEngine]) -> Optional[Dict[str, Any]]:
         intent = str(parsed.get("intent") or "").strip().lower()
-        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report"):
+        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report", "team_drilldown", "player_drilldown"):
             return None
         parsed["intent"] = intent
         if "show_field" in parsed:
@@ -2694,7 +2794,34 @@ class NaturalLanguageStatAssistant:
                 "explanation": f"Created custom stat `{s_name}` grouped by `{s_group}` using formula `{s_formula}`.",
             }
 
-        # 2. Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
+        # 2. Check if user is asking to DRILL DOWN into a team or player
+        is_drill_kw = any(w in ql for w in ("drill down", "drilldown", "team profile", "team breakdown", "player profile", "player breakdown"))
+        if is_drill_kw or (
+            team_filter and any(w in ql for w in ("team stats", "stats for the chiefs", "stats for the bills", "stats for the lions", "team overview"))
+        ) or (
+            qb_filter and any(w in ql for w in ("player stats", "stats for mahomes", "stats for allen", "stats for goff", "player overview"))
+        ):
+            if team_filter and not (qb_filter and any(p_term in ql for p_term in ("player", "qb", "quarterback"))):
+                return {
+                    "intent": "team_drilldown",
+                    "season": season,
+                    "team": team_filter,
+                    "conf": conf,
+                    "show_field": False,
+                    "explanation": f"Drill-down into team analytics, offense/defense profile, and roster leaders for {team_filter} ({season}).",
+                }
+            if qb_filter:
+                return {
+                    "intent": "player_drilldown",
+                    "season": season,
+                    "player": qb_filter,
+                    "qb": qb_filter,
+                    "conf": conf,
+                    "show_field": False,
+                    "explanation": f"Drill-down into player passing, rushing, receiving, and situational stats for {qb_filter.title()} ({season}).",
+                }
+
+        # 3. Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
         ql_without_stat_phrases = re.sub(
             r"\b(?:per\s+play|play[\s_-]*action|explosive\s+play\s+rate|play\s+concept\s+efficiency)\b",
             "",
@@ -3268,6 +3395,14 @@ def handle_nl_query_result(
     header = f"\n{C.BOLD}{C.CYAN}🤖 Query Interpretation{slm_tag}:{C.RESET} {parsed.get('explanation', '')}"
 
     intent = parsed.get("intent", "stat_query")
+    if intent == "team_drilldown":
+        resolved_t = resolve_team_abbr(team) or team or "KC"
+        return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t)
+
+    if intent == "player_drilldown":
+        target_player = qb or parsed.get("player") or "Mahomes"
+        return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=False)
+
     if intent == "create_stat":
         sdef = engine.register_custom_stat(
             name=parsed.get("stat_name", "custom_stat"),
@@ -3325,6 +3460,778 @@ def handle_nl_query_result(
         view_mode=view_override,
         camera=camera,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase Categorization, Play Deep Dive, and Team/Player Drill-Down Views
+# ---------------------------------------------------------------------------
+
+def classify_play_phase(p: Dict[str, Any]) -> str:
+    """Classify a play into 'offense', 'defense', or 'special_teams'."""
+    pt = str(p.get("play_type", "")).lower()
+    desc = str(p.get("desc", "")).lower()
+    if pt in ("field_goal", "extra_point", "punt", "kickoff") or any(k in desc for k in ("field goal", "punt", "punts", "kicks", "extra point", "touchback")):
+        return "special_teams"
+    if int(p.get("sack", 0)) == 1 or int(p.get("interception", 0)) == 1 or int(p.get("fumble_lost", 0)) == 1 or "sacked" in desc or "intercepted" in desc or pt == "defense":
+        return "defense"
+    return "offense"
+
+
+def filter_plays_by_phase(plays: List[Dict[str, Any]], phase: str) -> List[Dict[str, Any]]:
+    """Filter plays for a season down to the chosen unit/phase ('offense', 'defense', or 'special_teams')."""
+    ph = phase.strip().lower()
+    if ph in ("defense", "def", "d", "2"):
+        res = [p for p in plays if classify_play_phase(p) == "defense"]
+        return res if res else plays
+    elif ph in ("special_teams", "special", "st", "sp", "3"):
+        res = [p for p in plays if classify_play_phase(p) == "special_teams"]
+        return res
+    else:  # offense
+        res = [p for p in plays if classify_play_phase(p) == "offense"]
+        return res if res else plays
+
+
+def get_play_key_players(play: Dict[str, Any]) -> List[str]:
+    """Extract names of key players involved in a play (passer, receiver, rusher, defensive stopper)."""
+    names: List[str] = []
+    for k in ("qb_name", "receiver_player_name", "rusher_player_name", "kicker_player_name", "punter_player_name", "player_name"):
+        v = str(play.get(k) or "").strip()
+        if v and v not in names and v.lower() not in ("none", "null", "unknown", ""):
+            names.append(v)
+    desc = str(play.get("desc", ""))
+    m_int = re.search(r"INTERCEPTED by ([A-Z]\.[A-Za-z\-]+)", desc)
+    if m_int and m_int.group(1) not in names:
+        names.append(m_int.group(1))
+    m_sack = re.search(r"sacked.*?\(([A-Z]\.[A-Za-z\-]+)\)", desc)
+    if m_sack and m_sack.group(1) not in names:
+        names.append(m_sack.group(1))
+    return names
+
+
+def render_single_play_deep_dive(play: Dict[str, Any]) -> str:
+    """Render an in-depth analytics card for an individual play (EPA, WPA, Air Yards, YAC, Situation)."""
+    pid = play.get("play_id", "N/A")
+    gid = play.get("game_id", "N/A")
+    qtr = play.get("qtr", 1)
+    down = play.get("down", 1)
+    ydstogo = play.get("ydstogo", 10)
+    ydline = int(play.get("yardline_100", 50))
+    spot = AsciiArtRenderer._format_spot(ydline)
+    post = play.get("posteam", "OFF")
+    defe = play.get("defteam", "DEF")
+    h_score = play.get("home_score", 0)
+    a_score = play.get("away_score", 0)
+    ptype = str(play.get("play_type", "scrimmage")).upper()
+    concept = play.get("play_concept", "standard")
+    direction = play.get("play_direction", "middle")
+    yards = float(play.get("yards_gained", 0.0))
+    air = float(play.get("air_yards", 0.0))
+    yac = float(play.get("yards_after_catch", 0.0))
+    xyac = float(play.get("xyac_mean_yardage", 0.0))
+    epa = float(play.get("epa", 0.0))
+    wpa = float(play.get("wpa", 0.0))
+    cpoe = float(play.get("cpoe", 0.0))
+    is_td = int(play.get("touchdown", 0)) == 1
+    is_int = int(play.get("interception", 0)) == 1
+    is_sack = int(play.get("sack", 0)) == 1
+    is_screen = int(play.get("is_screen", 0)) == 1
+    is_pa = int(play.get("play_action", 0)) == 1
+    success = int(play.get("series_success", 0)) == 1
+    desc = play.get("desc", "No description available.")
+
+    lines = [
+        f"\n{C.BOLD}{C.CYAN}┌────────────────────────────────────────────────────────────────────────────────────────┐",
+        f"│                     🏈 IN-DEPTH PLAY ANALYTICS & SITUATION                             │",
+        f"├────────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}",
+        f"  Play ID: {C.BOLD}#{pid}{C.RESET}  |  Game: {gid}  |  Quarter: Q{qtr}  |  Matchup: {post} vs {defe} ({h_score}-{a_score})",
+        f"  Situation: {C.BOLD}{down} & {ydstogo}{C.RESET} at {spot} ({ydline} yds to endzone)  |  Red Zone: {'YES' if play.get('red_zone') else 'NO'}",
+        f"  Formation: Shotgun={'YES' if play.get('shotgun') else 'NO'} • No-Huddle={'YES' if play.get('no_huddle') else 'NO'}",
+        "",
+        f"  {C.BOLD}{C.GOLD}Concept & Execution:{C.RESET}",
+        f"    • Type: {C.BOLD}{ptype}{C.RESET} • Concept: `{concept}` • Direction: `{direction}`",
+        f"    • Play-Action: {'YES' if is_pa else 'NO'} • Screen Pass: {'YES' if is_screen else 'NO'}",
+        f"    • Passer: {play.get('qb_name') or 'N/A'}  |  Target/Rusher: {play.get('receiver_player_name') or play.get('rusher_player_name') or play.get('player_name') or 'N/A'}",
+        "",
+        f"  {C.BOLD}{C.GOLD}Outcome & Advanced Metrics:{C.RESET}",
+        f"    • Yards Gained: {C.BOLD}{yards:+.1f} yds{C.RESET}  |  Air Yards: {air:.1f} yds  |  YAC: {yac:.1f} yds (Expected: {xyac:.1f})",
+        f"    • Expected Points Added (EPA): {C.BOLD}{epa:+.3f} EPA{C.RESET}",
+        f"    • Win Probability Added (WPA): {C.BOLD}{wpa:+.3%}{C.RESET}",
+        f"    • CPOE (Pass Accuracy): {cpoe:+.1f}%  |  Series Success: {'SUCCESS' if success else 'FAILED'}",
+        f"    • Result Flags: {'TOUCHDOWN! ' if is_td else ''}{'INTERCEPTION ' if is_int else ''}{'SACK ' if is_sack else ''}{'First Down' if play.get('first_down') else ''}",
+        "",
+        f"  {C.BOLD}{C.GOLD}Official Play Call:{C.RESET}",
+        f"    {C.DIM}\"{desc}\"{C.RESET}",
+        f"{C.BOLD}{C.CYAN}└────────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+    ]
+    return "\n".join(lines)
+
+
+def find_player_plays(plays: List[Dict[str, Any]], player_name: str, season: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Locate all play records matching a player's name across passer, rusher, receiver, and kicking roles."""
+    p_low = player_name.strip().lower()
+    matching: List[Dict[str, Any]] = []
+    tokens = [t for t in p_low.replace(".", " ").split() if len(t) > 1]
+    for p in plays:
+        if season is not None and _safe_int(p.get("season"), -1) != int(season):
+            continue
+        qb_n = str(p.get("qb_name", "")).lower()
+        rec_n = str(p.get("receiver_player_name", "")).lower()
+        rush_n = str(p.get("rusher_player_name", "")).lower()
+        kick_n = str(p.get("kicker_player_name", "")).lower()
+        punt_n = str(p.get("punter_player_name", "")).lower()
+        gen_n = str(p.get("player_name", "")).lower()
+        desc = str(p.get("desc", "")).lower()
+
+        if (p_low in qb_n or p_low in rec_n or p_low in rush_n or p_low in gen_n
+            or p_low in kick_n or p_low in punt_n or p_low in desc):
+            matching.append(p)
+            continue
+        if any(tok in qb_n or tok in rec_n or tok in rush_n or tok in gen_n or tok in desc for tok in tokens if len(tok) >= 3):
+            matching.append(p)
+    return matching
+
+
+def get_player_teams(player_plays: List[Dict[str, Any]], player_name: str) -> List[str]:
+    """
+    List all unique NFL teams a player played for across the provided plays.
+    Used for smart team detection (if exactly one team, do not prompt!).
+    """
+    teams: Set[str] = set()
+    p_low = player_name.strip().lower()
+    for p in player_plays:
+        post = str(p.get("posteam", "")).upper()
+        defe = str(p.get("defteam", "")).upper()
+        qb_n = str(p.get("qb_name", "")).lower()
+        rec_n = str(p.get("receiver_player_name", "")).lower()
+        rush_n = str(p.get("rusher_player_name", "")).lower()
+        desc = str(p.get("desc", "")).lower()
+        if (p_low in qb_n or p_low in rec_n or p_low in rush_n) and post:
+            teams.add(post)
+        elif any(kw in desc for kw in ("intercepted by", "sacked", "fumble forced by")) and p_low in desc:
+            if defe:
+                teams.add(defe)
+            elif post:
+                teams.add(post)
+        elif post:
+            teams.add(post)
+    return sorted(t for t in teams if t)
+
+
+def render_player_drilldown_view(
+    engine: StatEngine,
+    plays: List[Dict[str, Any]],
+    season: int,
+    player_name: str,
+    team: Optional[str] = None,
+    interactive: bool = True,
+) -> str:
+    """
+    Drill down into comprehensive individual player statistics for a season.
+    Smart team detection: lists all teams played for; if only 1 team in the season, does not ask!
+    """
+    s_plays = plays_for_season(plays, season)
+    matching_plays = find_player_plays(s_plays, player_name, season=season)
+    if not matching_plays:
+        all_matches = find_player_plays(plays, player_name)
+        if all_matches:
+            seasons_found = sorted({p.get('season') for p in all_matches if p.get('season')})
+            return (
+                f"\n{C.YELLOW}⚠ No plays found for player '{player_name}' in the {season} season.{C.RESET}\n"
+                f"  💡 That player has data in season(s): {', '.join(map(str, seasons_found))}. Try `/season {seasons_found[-1]}`."
+            )
+        return f"\n{C.RED}✖ No plays found for player '{player_name}'.{C.RESET}"
+
+    # SMART TEAM DETECTION:
+    # "If the user picks a player be smart enough to list the teams they played for
+    #  and if it was only one team for the selected season don't ask"
+    teams_played_for = get_player_teams(matching_plays, player_name)
+    selected_team: Optional[str] = resolve_team_abbr(team) if team else None
+    team_selection_note = ""
+
+    if selected_team is None:
+        if len(teams_played_for) == 1:
+            # ONLY ONE TEAM: DO NOT PROMPT/ASK!
+            selected_team = teams_played_for[0]
+            team_selection_note = f"{selected_team} (1 team in {season} — auto-selected)"
+        elif len(teams_played_for) > 1:
+            if interactive and sys.stdin.isatty():
+                print(f"\n  {C.BOLD}{C.CYAN}{player_name} played for {len(teams_played_for)} teams in {season}:{C.RESET}")
+                for idx, t in enumerate(teams_played_for, 1):
+                    t_count = sum(1 for p in matching_plays if str(p.get("posteam", "")).upper() == t)
+                    print(f"    [{idx}] {t} ({t_count} plays)")
+                print(f"    [{len(teams_played_for) + 1}] All Teams (Combined)")
+                try:
+                    sel = prompt_input(f"  Select team [1-{len(teams_played_for) + 1}] (default: {len(teams_played_for) + 1}): ").strip()
+                    if sel.isdigit() and 1 <= int(sel) <= len(teams_played_for):
+                        selected_team = teams_played_for[int(sel) - 1]
+                        team_selection_note = f"{selected_team} (Selected from {', '.join(teams_played_for)})"
+                    else:
+                        selected_team = None
+                        team_selection_note = f"{', '.join(teams_played_for)} (Combined All Teams)"
+                except (EOFError, KeyboardInterrupt):
+                    selected_team = None
+                    team_selection_note = f"{', '.join(teams_played_for)} (Combined All Teams)"
+            else:
+                selected_team = None
+                team_selection_note = f"{', '.join(teams_played_for)} (Combined All Teams)"
+        else:
+            team_selection_note = "Free Agent / Unknown"
+    else:
+        team_selection_note = selected_team
+
+    if selected_team:
+        active_plays = [
+            p for p in matching_plays
+            if str(p.get("posteam", "")).upper() == selected_team
+            or str(p.get("defteam", "")).upper() == selected_team
+        ]
+        if not active_plays:
+            active_plays = matching_plays
+    else:
+        active_plays = matching_plays
+
+    p_low = player_name.strip().lower()
+    p_tokens = [t for t in p_low.replace(".", " ").split() if len(t) >= 3]
+
+    def _matches_name(val: str) -> bool:
+        v = val.strip().lower()
+        if not v:
+            return False
+        return p_low in v or v in p_low or any(tok in v for tok in p_tokens)
+
+    # Determine roles & split plays
+    pass_plays = [
+        p for p in active_plays
+        if (_matches_name(str(p.get("qb_name", ""))) or _matches_name(str(p.get("passer_player_name", ""))))
+        and (int(p.get("pass_attempt", 0)) == 1 or p.get("play_type") == "pass")
+    ]
+    rush_plays = [
+        p for p in active_plays
+        if (_matches_name(str(p.get("rusher_player_name", ""))) or (not p.get("rusher_player_name") and _matches_name(str(p.get("qb_name", "")))))
+        and (int(p.get("rush_attempt", 0)) == 1 or p.get("play_type") == "run")
+    ]
+    rec_plays = [
+        p for p in active_plays
+        if _matches_name(str(p.get("receiver_player_name", "")))
+    ]
+    kick_plays = [
+        p for p in active_plays
+        if _matches_name(str(p.get("kicker_player_name", ""))) or p.get("play_type") == "field_goal"
+    ]
+    punt_plays = [
+        p for p in active_plays
+        if _matches_name(str(p.get("punter_player_name", ""))) or p.get("play_type") == "punt"
+    ]
+    def_plays = [
+        p for p in active_plays
+        if (p.get("sack") or p.get("interception") or p.get("fumble_lost"))
+        and (_matches_name(str(p.get("player_name", ""))) or any(tok in str(p.get("desc", "")).lower() for tok in (p_tokens or [p_low])))
+        and not pass_plays and not rush_plays and not rec_plays
+    ]
+
+    canonical_name = player_name.title()
+    for p in active_plays:
+        for k in ("qb_name", "receiver_player_name", "rusher_player_name", "kicker_player_name", "punter_player_name", "player_name"):
+            cand = str(p.get(k) or "").strip()
+            if cand and _matches_name(cand):
+                canonical_name = cand
+                break
+        if canonical_name != player_name.title():
+            break
+
+    role_str = "Quarterback (QB)" if pass_plays else (
+        "Running Back (RB)" if rush_plays and not rec_plays else (
+            "Wide Receiver / Tight End (WR/TE)" if rec_plays and not rush_plays else (
+                "Running Back / All-Purpose (RB/WR)" if rush_plays and rec_plays else (
+                    "Placekicker (K)" if kick_plays else (
+                        "Punter (P)" if punt_plays else (
+                            "Defensive Player (DEF)" if def_plays else "Player / Skill"
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+    out = [
+        f"\n{C.BOLD}{C.CYAN}┌────────────────────────────────────────────────────────────────────────────────────────┐",
+        f"│                     PLAYER DRILL-DOWN : {canonical_name.upper():<46} │",
+        f"├────────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}",
+        f"  Player: {C.BOLD}{canonical_name}{C.RESET}  |  Primary Role: {C.BOLD}{role_str}{C.RESET}",
+        f"  Team: {C.BOLD}{team_selection_note}{C.RESET}  |  Season: {season}  |  Total Plays Involved: {len(active_plays)}",
+        "",
+    ]
+
+    # Passing Section
+    if pass_plays:
+        p_att = len(pass_plays)
+        p_comp = sum(int(p.get("complete_pass", 0)) for p in pass_plays)
+        p_pct = (100.0 * p_comp / p_att) if p_att else 0.0
+        p_yds = sum(float(p.get("yards_gained", 0.0)) for p in pass_plays if int(p.get("sack", 0)) == 0)
+        p_ypa = (p_yds / p_att) if p_att else 0.0
+        p_tds = sum(int(p.get("pass_touchdown", 0) or p.get("touchdown", 0)) for p in pass_plays)
+        p_ints = sum(int(p.get("interception", 0)) for p in pass_plays)
+        p_sacks = sum(int(p.get("sack", 0)) for p in pass_plays)
+        p_sack_yds = sum(abs(float(p.get("yards_gained", 0.0))) for p in pass_plays if int(p.get("sack", 0)) == 1 and float(p.get("yards_gained", 0.0)) < 0)
+        p_rating = calculate_passer_rating(p_att, p_comp, p_yds, p_tds, p_ints)
+        p_epa = sum(float(p.get("epa", 0.0)) for p in pass_plays)
+        p_epa_att = (p_epa / p_att) if p_att else 0.0
+        cpoe_vals = [float(p.get("cpoe", 0.0)) for p in pass_plays if int(p.get("sack", 0)) == 0]
+        p_cpoe = (sum(cpoe_vals) / len(cpoe_vals)) if cpoe_vals else 0.0
+
+        impact_score_val: Optional[float] = None
+        mw_val = 0
+        ml_val = 0
+        if "qb_impact_score" in engine.stats:
+            try:
+                board = engine.evaluate_stat_leaderboard("qb_impact_score", s_plays, team=selected_team, group_override="qb")
+                for r in board:
+                    if p_low in str(r.get("entity", "")).lower():
+                        impact_score_val = float(r.get("value", 0.0))
+                        mw_val = int(r.get("meaningful_wins", 0))
+                        ml_val = int(r.get("meaningful_losses", 0))
+                        break
+            except Exception:
+                pass
+
+        out.extend([
+            f"  {C.BOLD}{C.GOLD}┌─ PASSING STATISTICS ─────────────────────────────────────────────────────────────────┐{C.RESET}",
+            f"  │ Pass Attempts:       {p_att:<14} Completions:             {p_comp:<22} │",
+            f"  │ Completion %:        {p_pct:<13.1f}% Passing Yards:           {p_yds:<10.1f} yds       │",
+            f"  │ Yards / Attempt:     {p_ypa:<13.2f} ypa Passing Touchdowns:      {p_tds:<22} │",
+            f"  │ Interceptions:       {p_ints:<14} Sacks Taken:             {p_sacks} ({p_sack_yds:.1f} yds lost)        │",
+            f"  │ NFL Passer Rating:   {p_rating:<14.1f} Avg CPOE:                {p_cpoe:<+6.1f}%                 │",
+            f"  │ Total Passing EPA:   {p_epa:<+14.2f} EPA / Pass Attempt:      {p_epa_att:<+10.2f} EPA/att   │",
+        ])
+        if impact_score_val is not None:
+            out.append(f"  │ QB Impact Score:     {impact_score_val:<6.1f} / 100   QB Meaningful Record:    {mw_val} MW - {ml_val} ML         │")
+        out.append(f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
+        out.append("")
+
+    # Rushing Section
+    if rush_plays:
+        r_car = len(rush_plays)
+        r_yds = sum(float(p.get("yards_gained", 0.0)) for p in rush_plays)
+        r_ypc = (r_yds / r_car) if r_car else 0.0
+        r_tds = sum(int(p.get("rush_touchdown", 0) or (p.get("touchdown", 0) and p.get("rush_attempt", 0) == 1)) for p in rush_plays)
+        r_long = max((float(p.get("yards_gained", 0.0)) for p in rush_plays), default=0.0)
+        r_epa = sum(float(p.get("epa", 0.0)) for p in rush_plays)
+        r_epa_car = (r_epa / r_car) if r_car else 0.0
+        r_fd = sum(int(p.get("first_down", 0)) for p in rush_plays)
+        out.extend([
+            f"  {C.BOLD}{C.GREEN}┌─ RUSHING STATISTICS ─────────────────────────────────────────────────────────────────┐{C.RESET}",
+            f"  │ Rushing Carries:     {r_car:<14} Rushing Yards:           {r_yds:<10.1f} yds       │",
+            f"  │ Yards / Carry (YPC): {r_ypc:<14.2f} Rushing Touchdowns:     {r_tds:<22} │",
+            f"  │ Longest Rush:        {r_long:<10.0f} yds   First Downs Gained:      {r_fd:<22} │",
+            f"  │ Total Rushing EPA:   {r_epa:<+14.2f} EPA / Carry:             {r_epa_car:<+10.2f} EPA/car   │",
+            f"  {C.BOLD}{C.GREEN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            "",
+        ])
+
+    # Receiving Section
+    if rec_plays:
+        rc_tgt = len(rec_plays)
+        rc_cat = sum(int(p.get("complete_pass", 0)) for p in rec_plays)
+        rc_pct = (100.0 * rc_cat / rc_tgt) if rc_tgt else 0.0
+        rc_yds = sum(float(p.get("yards_gained", 0.0)) for p in rec_plays if int(p.get("complete_pass", 0)) == 1)
+        rc_ypr = (rc_yds / rc_cat) if rc_cat else 0.0
+        rc_tds = sum(int(p.get("touchdown", 0)) for p in rec_plays if int(p.get("complete_pass", 0)) == 1)
+        rc_yac = sum(float(p.get("yards_after_catch", 0.0)) for p in rec_plays if int(p.get("complete_pass", 0)) == 1)
+        rc_yac_cat = (rc_yac / rc_cat) if rc_cat else 0.0
+        rc_screen = sum(1 for p in rec_plays if int(p.get("is_screen", 0)) == 1)
+        rc_screen_yac = sum(float(p.get("yards_after_catch", 0.0)) for p in rec_plays if int(p.get("is_screen", 0)) == 1 and int(p.get("complete_pass", 0)) == 1)
+        out.extend([
+            f"  {C.BOLD}{C.BLUE}┌─ RECEIVING & YAC STATISTICS ─────────────────────────────────────────────────────────┐{C.RESET}",
+            f"  │ Targets:             {rc_tgt:<14} Receptions (Catches):    {rc_cat:<22} │",
+            f"  │ Catch %:             {rc_pct:<13.1f}% Receiving Yards:         {rc_yds:<10.1f} yds       │",
+            f"  │ Yards / Catch (YPR): {rc_ypr:<13.2f} yds Receiving Touchdowns:    {rc_tds:<22} │",
+            f"  │ Total YAC:           {rc_yac:<10.1f} yds   YAC / Reception:         {rc_yac_cat:<10.2f} yds/rec   │",
+            f"  │ Screen Targets:      {rc_screen:<14} Screen YAC:              {rc_screen_yac:<10.1f} yds       │",
+            f"  {C.BOLD}{C.BLUE}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            "",
+        ])
+
+    # Kicking / Punting Section
+    if kick_plays:
+        fg_yds = sum(float(p.get("yards_gained", 0.0)) for p in kick_plays)
+        out.extend([
+            f"  {C.BOLD}{C.GOLD}┌─ SPECIAL TEAMS (KICKING) ────────────────────────────────────────────────────────────┐{C.RESET}",
+            f"  │ Field Goals Made:    {len(kick_plays):<14} Longest Field Goal:      {fg_yds:<10.0f} yds       │",
+            f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            "",
+        ])
+    if punt_plays:
+        punt_yds = sum(float(p.get("yards_gained", 0.0)) for p in punt_plays)
+        avg_punt = (punt_yds / len(punt_plays)) if punt_plays else 0.0
+        out.extend([
+            f"  {C.BOLD}{C.GOLD}┌─ SPECIAL TEAMS (PUNTING) ────────────────────────────────────────────────────────────┐{C.RESET}",
+            f"  │ Punts Attempted:     {len(punt_plays):<14} Average Punt Distance:   {avg_punt:<10.1f} yds       │",
+            f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            "",
+        ])
+
+    # Situational Efficiency Card
+    t_downs = [p for p in active_plays if int(p.get("down", 0)) == 3]
+    t_conv = sum(1 for p in t_downs if int(p.get("series_success", 0)) == 1 or int(p.get("first_down", 0)) == 1 or float(p.get("yards_gained", 0.0)) >= int(p.get("ydstogo", 10)))
+    t_rate = (100.0 * t_conv / len(t_downs)) if t_downs else 0.0
+    rz_plays = [p for p in active_plays if int(p.get("red_zone", 0)) == 1]
+    rz_tds = sum(1 for p in rz_plays if int(p.get("touchdown", 0)) == 1)
+    rz_rate = (100.0 * rz_tds / len(rz_plays)) if rz_plays else 0.0
+
+    out.extend([
+        f"  {C.BOLD}{C.MAGENTA}┌─ SITUATIONAL BREAKDOWN ──────────────────────────────────────────────────────────────┐{C.RESET}",
+        f"  │ 3rd Down Conversions: {t_conv}/{len(t_downs)} ({t_rate:.1f}%)     Red Zone Touchdowns:     {rz_tds}/{len(rz_plays)} ({rz_rate:.1f}%)          │",
+        f"  {C.BOLD}{C.MAGENTA}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+    ])
+
+    # Top Signature Plays for player
+    top_plays = sorted(active_plays, key=lambda p: (float(p.get("epa", 0.0)), float(p.get("yards_gained", 0.0))), reverse=True)[:3]
+    if top_plays:
+        out.append("")
+        out.append(f"  {C.BOLD}{C.GOLD}┌─ SIGNATURE PLAYS FOR {canonical_name.upper()} ───────────────────────────────────────────┐{C.RESET}")
+        for s_idx, sp in enumerate(top_plays, 1):
+            pid = sp.get("play_id", "N/A")
+            opp = sp.get("defteam") if sp.get("posteam") == (selected_team or (teams_played_for[0] if teams_played_for else "")) else sp.get("posteam")
+            qtr = sp.get("qtr", 1)
+            dn = sp.get("down", 1)
+            dist = sp.get("ydstogo", 10)
+            yds = float(sp.get("yards_gained", 0.0))
+            epa = float(sp.get("epa", 0.0))
+            td_str = " (TD)" if sp.get("touchdown") else ""
+            desc = sp.get("desc", "")[:76]
+            out.append(f"  │ [{s_idx}] Play #{pid} vs {opp} (Q{qtr} {dn}&{dist}): {yds:+.1f} yds, {epa:+.2f} EPA{td_str}")
+            out.append(f"  │     {C.DIM}\"{desc}\"{C.RESET}")
+        out.append(f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
+
+    out.append(f"\n  {C.DIM}💡 Tip: Run `/play` to diagram any of {canonical_name}'s signature plays on the ASCII gridiron.{C.RESET}")
+    return "\n".join(out)
+
+
+def render_team_drilldown_view(
+    engine: StatEngine,
+    plays: List[Dict[str, Any]],
+    season: int,
+    team: str,
+) -> str:
+    """Drill down into comprehensive team offensive, defensive, and roster stats for a season."""
+    team_abbr = resolve_team_abbr(team) or team.upper()
+    s_plays = plays_for_season(plays, season)
+    off_plays = [p for p in s_plays if str(p.get("posteam", "")).upper() == team_abbr]
+    def_plays = [p for p in s_plays if str(p.get("defteam", "")).upper() == team_abbr]
+    if not off_plays and not def_plays:
+        avail = sorted({p.get("posteam") for p in s_plays if p.get("posteam")})
+        return f"\n{C.YELLOW}⚠ No play data found for team `{team_abbr}` in {season}.{C.RESET}\n  Tip: Available teams with data: {', '.join(avail)}"
+
+    full_name = TEAM_FULL_NAMES.get(team_abbr, f"{team_abbr} Football Team")
+    conf = "AFC" if team_abbr in AFC_TEAMS else ("NFC" if team_abbr in NFC_TEAMS else "NFL")
+    division = TEAM_DIVISIONS.get(team_abbr, f"{conf} Division")
+
+    games: Dict[str, int] = {}
+    for p in off_plays:
+        gid = str(p.get("game_id", "game"))
+        games[gid] = int(p.get("team_win", 0))
+    games_played = len(games)
+    games_won = sum(1 for w in games.values() if w == 1)
+    games_lost = games_played - games_won
+    record_str = f"{games_won}-{games_lost}" if games_played > 0 else "N/A"
+    win_pct_str = f"({games_won / games_played:.3f})" if games_played > 0 else ""
+
+    tot_off = len(off_plays)
+    tot_off_yds = sum(float(p.get("yards_gained", 0.0)) for p in off_plays)
+    off_ypp = (tot_off_yds / tot_off) if tot_off else 0.0
+    tot_off_epa = sum(float(p.get("epa", 0.0)) for p in off_plays)
+    off_epa_play = (tot_off_epa / tot_off) if tot_off else 0.0
+    off_succ = sum(1 for p in off_plays if int(p.get("series_success", 0)) == 1)
+    off_succ_rate = (100.0 * off_succ / tot_off) if tot_off else 0.0
+
+    pass_plays = [p for p in off_plays if int(p.get("pass_attempt", 0)) == 1 or p.get("play_type") == "pass"]
+    rush_plays = [p for p in off_plays if int(p.get("rush_attempt", 0)) == 1 or p.get("play_type") == "run"]
+    pass_att = len(pass_plays)
+    pass_comp = sum(int(p.get("complete_pass", 0)) for p in pass_plays)
+    pass_pct = (100.0 * pass_comp / pass_att) if pass_att else 0.0
+    pass_yds = sum(float(p.get("yards_gained", 0.0)) for p in pass_plays if int(p.get("sack", 0)) == 0)
+    pass_tds = sum(int(p.get("pass_touchdown", 0) or p.get("touchdown", 0)) for p in pass_plays)
+    pass_ints = sum(int(p.get("interception", 0)) for p in pass_plays)
+    sacks_all = sum(int(p.get("sack", 0)) for p in pass_plays)
+    sack_yds = sum(abs(float(p.get("yards_gained", 0.0))) for p in pass_plays if int(p.get("sack", 0)) == 1 and float(p.get("yards_gained", 0.0)) < 0)
+
+    rush_att = len(rush_plays)
+    rush_yds = sum(float(p.get("yards_gained", 0.0)) for p in rush_plays)
+    rush_ypc = (rush_yds / rush_att) if rush_att else 0.0
+    rush_tds = sum(int(p.get("rush_touchdown", 0) or (p.get("touchdown", 0) and p.get("rush_attempt", 0) == 1)) for p in rush_plays)
+
+    tot_scrim = pass_att + rush_att
+    call_pass_pct = (100.0 * pass_att / tot_scrim) if tot_scrim else 0.0
+    call_rush_pct = (100.0 * rush_att / tot_scrim) if tot_scrim else 0.0
+
+    exp_pass = sum(1 for p in pass_plays if float(p.get("yards_gained", 0.0)) >= 20.0)
+    exp_rush = sum(1 for p in rush_plays if float(p.get("yards_gained", 0.0)) >= 10.0)
+
+    t_downs = [p for p in off_plays if int(p.get("down", 0)) == 3]
+    t_conv = sum(1 for p in t_downs if int(p.get("series_success", 0)) == 1 or int(p.get("first_down", 0)) == 1 or float(p.get("yards_gained", 0.0)) >= int(p.get("ydstogo", 10)))
+    t_rate = (100.0 * t_conv / len(t_downs)) if t_downs else 0.0
+
+    rz_plays = [p for p in off_plays if int(p.get("red_zone", 0)) == 1]
+    rz_tds = sum(1 for p in rz_plays if int(p.get("touchdown", 0)) == 1)
+    rz_rate = (100.0 * rz_tds / len(rz_plays)) if rz_plays else 0.0
+
+    tot_def = len(def_plays)
+    def_yds = sum(float(p.get("yards_gained", 0.0)) for p in def_plays)
+    def_ypp = (def_yds / tot_def) if tot_def else 0.0
+    def_epa = sum(float(p.get("epa", 0.0)) for p in def_plays)
+    def_epa_play = (def_epa / tot_def) if tot_def else 0.0
+    def_sacks = sum(int(p.get("sack", 0)) for p in def_plays)
+    def_ints = sum(int(p.get("interception", 0)) for p in def_plays)
+    def_fumb = sum(int(p.get("fumble_lost", 0)) for p in def_plays)
+    def_to = def_ints + def_fumb
+    def_stops = sum(1 for p in def_plays if int(p.get("series_success", 0)) == 0)
+    def_stop_rate = (100.0 * def_stops / tot_def) if tot_def else 0.0
+
+    passers: Dict[str, List[Dict[str, Any]]] = {}
+    for p in pass_plays:
+        q_n = p.get("qb_name") or p.get("player_name") or "Passer"
+        passers.setdefault(q_n, []).append(p)
+
+    rushers: Dict[str, List[Dict[str, Any]]] = {}
+    for p in rush_plays:
+        r_n = p.get("rusher_player_name") or p.get("player_name") or "Rusher"
+        rushers.setdefault(r_n, []).append(p)
+
+    receivers: Dict[str, List[Dict[str, Any]]] = {}
+    for p in off_plays:
+        rc_n = p.get("receiver_player_name")
+        if rc_n:
+            receivers.setdefault(rc_n, []).append(p)
+
+    out = [
+        f"\n{C.BOLD}{C.CYAN}┌────────────────────────────────────────────────────────────────────────────────────────┐",
+        f"│                     TEAM DRILL-DOWN : {full_name.upper():<48} │",
+        f"├────────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}",
+        f"  Season: {C.BOLD}{season}{C.RESET}  |  Abbreviation: {C.BOLD}{team_abbr}{C.RESET}  |  Conference: {conf}  |  Division: {division}",
+        f"  Team Record: {C.BOLD}{record_str}{C.RESET} {win_pct_str}  |  Offensive Plays Tracked: {tot_off}  |  Defensive Plays: {tot_def}",
+        "",
+        f"  {C.BOLD}{C.GOLD}┌─ OFFENSIVE EFFICIENCY & PLAY CALLING ────────────────────────────────────────────────┐{C.RESET}",
+        f"  │ Total Plays:         {tot_off:<14} Total Yards Gained:      {tot_off_yds:<10.1f} yds       │",
+        f"  │ Yards Per Play (YPP): {off_ypp:<13.2f} EPA / Play:             {off_epa_play:<+10.2f} EPA/play   │",
+        f"  │ Total Offensive EPA: {tot_off_epa:<+14.2f} Offensive Success Rate:  {off_succ_rate:<6.1f}%                 │",
+        f"  │ Play-Calling Split:  {call_pass_pct:4.1f}% Pass / {call_rush_pct:4.1f}% Rush ({pass_att} pass, {rush_att} rush)                │",
+        f"  │ Passing Comp/Att:    {pass_comp}/{pass_att} ({pass_pct:.1f}%)    Passing Yards:           {pass_yds:<10.1f} yds       │",
+        f"  │ Passing Touchdowns:  {pass_tds:<14} Passing Interceptions:   {pass_ints:<22} │",
+        f"  │ Sacks Allowed:       {sacks_all:<14} Sack Yards Lost:         {sack_yds:<10.1f} yds       │",
+        f"  │ Rushing Carries:     {rush_att:<14} Rushing Yards:           {rush_yds:<10.1f} yds       │",
+        f"  │ Yards / Carry (YPC): {rush_ypc:<14.2f} Rushing Touchdowns:     {rush_tds:<22} │",
+        f"  │ Explosive Plays:     {exp_pass + exp_rush:<14} (20+ Pass: {exp_pass}, 10+ Rush: {exp_rush})                   │",
+        f"  │ 3rd Down Efficiency: {t_conv}/{len(t_downs)} ({t_rate:.1f}%)     Red Zone TD Rate:        {rz_tds}/{len(rz_plays)} ({rz_rate:.1f}%)          │",
+        f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+        "",
+        f"  {C.BOLD}{C.GREEN}┌─ DEFENSIVE PROFILE (OPPONENT SCRIMMAGE FACED) ───────────────────────────────────────┐{C.RESET}",
+        f"  │ Opponent Plays:      {tot_def:<14} Yards Allowed:           {def_yds:<10.1f} yds       │",
+        f"  │ Yards / Play Allowed:{def_ypp:<14.2f} Defensive EPA / Play:   {def_epa_play:<+10.2f} EPA/play   │",
+        f"  │ Sacks Generated:     {def_sacks:<14} Interceptions Caught:    {def_ints:<22} │",
+        f"  │ Turnovers Forced:    {def_to:<14} Defensive Stop Rate:    {def_stops}/{tot_def} ({def_stop_rate:.1f}%)           │",
+        f"  {C.BOLD}{C.GREEN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+        "",
+        f"  {C.BOLD}{C.CYAN}┌─ ROSTER & UNIT LEADERS ──────────────────────────────────────────────────────────────┐{C.RESET}",
+    ]
+
+    if passers:
+        out.append(f"  │ {C.BOLD}PASSING LEADERS:{C.RESET}")
+        for q_n, q_plays in sorted(passers.items(), key=lambda x: len(x[1]), reverse=True)[:3]:
+            q_att = len(q_plays)
+            q_comp = sum(int(p.get("complete_pass", 0)) for p in q_plays)
+            q_yds = sum(float(p.get("yards_gained", 0.0)) for p in q_plays if int(p.get("sack", 0)) == 0)
+            q_tds = sum(int(p.get("pass_touchdown", 0) or p.get("touchdown", 0)) for p in q_plays)
+            q_ints = sum(int(p.get("interception", 0)) for p in q_plays)
+            q_rtg = calculate_passer_rating(q_att, q_comp, q_yds, q_tds, q_ints)
+            q_epa = (sum(float(p.get("epa", 0.0)) for p in q_plays) / q_att) if q_att else 0.0
+            q_pct = (100.0 * q_comp / q_att) if q_att else 0.0
+            out.append(f"  │   • {C.BOLD}{q_n:<14}{C.RESET} {q_comp}/{q_att} ({q_pct:4.1f}%), {q_yds:5.1f} yds, {q_tds} TD, {q_ints} INT, {q_rtg:5.1f} Rating, {q_epa:+4.2f} EPA/att")
+    else:
+        out.append("  │   • Passing: No pass attempts recorded.")
+
+    if rushers:
+        out.append(f"  │ {C.BOLD}RUSHING LEADERS:{C.RESET}")
+        for r_n, r_plays in sorted(rushers.items(), key=lambda x: sum(float(p.get("yards_gained", 0.0)) for p in x[1]), reverse=True)[:3]:
+            r_car = len(r_plays)
+            r_yds = sum(float(p.get("yards_gained", 0.0)) for p in r_plays)
+            r_ypc = (r_yds / r_car) if r_car else 0.0
+            r_tds = sum(int(p.get("rush_touchdown", 0) or (p.get("touchdown", 0) and p.get("rush_attempt", 0) == 1)) for p in r_plays)
+            r_long = max((float(p.get("yards_gained", 0.0)) for p in r_plays), default=0.0)
+            out.append(f"  │   • {C.BOLD}{r_n:<14}{C.RESET} {r_car:2d} car, {r_yds:5.1f} yds, {r_ypc:4.2f} ypc, {r_tds} TD, Long: {r_long:3.0f} yds")
+
+    if receivers:
+        out.append(f"  │ {C.BOLD}RECEIVING LEADERS:{C.RESET}")
+        for rc_n, rc_plays in sorted(receivers.items(), key=lambda x: sum(float(p.get("yards_gained", 0.0)) for p in x[1]), reverse=True)[:3]:
+            rc_tgt = len(rc_plays)
+            rc_cat = sum(int(p.get("complete_pass", 0)) for p in rc_plays)
+            rc_yds = sum(float(p.get("yards_gained", 0.0)) for p in rc_plays if int(p.get("complete_pass", 0)) == 1)
+            rc_tds = sum(int(p.get("touchdown", 0)) for p in rc_plays if int(p.get("complete_pass", 0)) == 1)
+            rc_yac = sum(float(p.get("yards_after_catch", 0.0)) for p in rc_plays if int(p.get("complete_pass", 0)) == 1)
+            rc_ypr = (rc_yds / rc_cat) if rc_cat else 0.0
+            out.append(f"  │   • {C.BOLD}{rc_n:<14}{C.RESET} {rc_cat}/{rc_tgt} rec, {rc_yds:5.1f} yds, {rc_tds} TD, {rc_ypr:4.1f} yds/rec, {rc_yac:4.1f} YAC")
+
+    out.append(f"  {C.BOLD}{C.CYAN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
+
+    top_plays = sorted(off_plays + def_plays, key=lambda p: (float(p.get("epa", 0.0)), float(p.get("yards_gained", 0.0))), reverse=True)[:3]
+    if top_plays:
+        out.append("")
+        out.append(f"  {C.BOLD}{C.GOLD}┌─ TOP SIGNATURE PLAYS ({team_abbr} • {season}) ───────────────────────────────────────────┐{C.RESET}")
+        for s_idx, sp in enumerate(top_plays, 1):
+            pid = sp.get("play_id", "N/A")
+            opp = sp.get("defteam") if sp.get("posteam") == team_abbr else sp.get("posteam")
+            qtr = sp.get("qtr", 1)
+            dn = sp.get("down", 1)
+            dist = sp.get("ydstogo", 10)
+            yds = float(sp.get("yards_gained", 0.0))
+            epa = float(sp.get("epa", 0.0))
+            td_str = " (TD)" if sp.get("touchdown") else ""
+            desc = sp.get("desc", "")[:76]
+            out.append(f"  │ [{s_idx}] Play #{pid} vs {opp} (Q{qtr} {dn}&{dist}): {yds:+.1f} yds, {epa:+.2f} EPA{td_str}")
+            out.append(f"  │     {C.DIM}\"{desc}\"{C.RESET}")
+        out.append(f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
+
+    out.append(f"\n  {C.DIM}💡 Tip: Use `/play` to diagram any of these plays on the ASCII gridiron.{C.RESET}")
+    return "\n".join(out)
+
+
+def interactive_play_explorer(
+    engine: StatEngine,
+    bridge: NFLDataBridge,
+    plays: List[Dict[str, Any]],
+    active_season: int = CURRENT_SEASON,
+    default_camera: str = "behind-offense",
+) -> None:
+    """
+    Interactive play explorer:
+    1. Asks user to select Phase: Offense, Defense, or Special Teams.
+    2. Lists all known plays for that phase.
+    3. Diagrams the selected play on the ASCII football field.
+    4. Offers play analytics, or drill-down into team and player stats.
+    """
+    s_plays = plays_for_season(plays, active_season)
+    if not s_plays:
+        print(f"\n{C.YELLOW}⚠ No play data loaded for season {active_season}. Use `/season` to switch seasons.{C.RESET}")
+        return
+
+    while True:
+        print(f"\n{C.BOLD}{C.GREEN}=== 🏈 INTERACTIVE PLAY EXPLORER & MULTI-ANGLE DIAGRAMMER ==={C.RESET}")
+        print(f"  Active Season: {C.BOLD}{active_season}{C.RESET}")
+        print("  Select Play Phase / Unit:")
+        print(f"    [1] {C.BOLD}Offense{C.RESET}       (Pass, Rush, Play-Action, Screen)")
+        print(f"    [2] {C.BOLD}Defense{C.RESET}       (Interceptions, Sacks, Tackles for Loss, Stops)")
+        print(f"    [3] {C.BOLD}Special Teams{C.RESET} (Field Goals, Extra Points, Punts, Kickoffs)")
+        try:
+            ph_in = prompt_input("  Choose phase [1-3] (or 'q' to exit, default: 1): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if ph_in in ("q", "quit", "exit", "close"):
+            break
+
+        ph_map = {
+            "1": "offense", "offense": "offense", "off": "offense", "o": "offense",
+            "2": "defense", "defense": "defense", "def": "defense", "d": "defense",
+            "3": "special_teams", "special": "special_teams", "special teams": "special_teams", "st": "special_teams"
+        }
+        phase = ph_map.get(ph_in, "offense")
+        phase_plays = filter_plays_by_phase(s_plays, phase)
+        if not phase_plays:
+            print(f"  {C.YELLOW}⚠ No plays found for phase '{phase}' in {active_season}.{C.RESET}")
+            continue
+
+        print(f"\n  {C.BOLD}{C.CYAN}Known Plays ({active_season} • {phase.replace('_', ' ').title()} • {len(phase_plays)} plays):{C.RESET}")
+        print("  " + "─" * 92)
+        for idx, p in enumerate(phase_plays, 1):
+            post = p.get("posteam", "OFF")
+            defe = p.get("defteam", "DEF")
+            qtr = p.get("qtr", 1)
+            down = p.get("down", 1)
+            ydstogo = p.get("ydstogo", 10)
+            yds = float(p.get("yards_gained", 0.0))
+            epa = float(p.get("epa", 0.0))
+            concept = p.get("play_concept", p.get("play_type", "play"))
+            qb = p.get("qb_name") or p.get("player_name") or ""
+            target = p.get("receiver_player_name") or p.get("rusher_player_name") or p.get("kicker_player_name") or p.get("punter_player_name") or ""
+            action_desc = f"{qb} -> {target}" if (qb and target and qb != target) else (qb or target or concept)
+            td_tag = " (TD)" if p.get("touchdown") else ""
+            print(f"    [{idx:2d}] {post} vs {defe:<3} | Q{qtr} {down}&{ydstogo:<2} | {action_desc:<30} ({concept:<14}) | {yds:+5.1f} yds{td_tag} | {epa:+5.2f} EPA")
+        print("  " + "─" * 92)
+
+        try:
+            sel_in = prompt_input(f"  Select play number to diagram [1-{len(phase_plays)}] (or 'b' to change phase, default: 1): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if sel_in.lower() in ("b", "back"):
+            continue
+        if sel_in.lower() in ("q", "quit", "exit"):
+            break
+
+        play_idx = int(sel_in) - 1 if sel_in.isdigit() and 1 <= int(sel_in) <= len(phase_plays) else 0
+        chosen_play = phase_plays[play_idx]
+        current_cam = "behind-defense" if phase == "defense" and default_camera == "behind-offense" else default_camera
+
+        play_title = f"PLAY #{chosen_play['play_id']} DIAGRAM — {chosen_play.get('qb_name') or chosen_play.get('player_name') or 'Play'} ({chosen_play.get('posteam')} vs {chosen_play.get('defteam')})"
+        print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=play_title, camera=current_cam))
+
+        # Follow-up menu
+        while True:
+            print(f"\n  {C.BOLD}{C.GOLD}Play Action Menu for Play #{chosen_play['play_id']}:{C.RESET}")
+            print(f"    [1] {C.BOLD}Play Stats{C.RESET}        (In-depth analytics: EPA, WPA, Air Yards, YAC, Situation)")
+            print(f"    [2] {C.BOLD}Drill Down Team{C.RESET}   (Offense/Defense team efficiency, rankings & roster leaders)")
+            print(f"    [3] {C.BOLD}Drill Down Player{C.RESET} (Player season profile, stats breakdown & signature plays)")
+            print(f"    [4] {C.BOLD}Switch Camera{C.RESET}     (Change view: behind-offense / behind-defense / sideline)")
+            print(f"    [5] {C.BOLD}Another Play{C.RESET}      (Return to play list)")
+            print(f"    [6] {C.BOLD}Exit Explorer{C.RESET}     (Return to main prompt)")
+            try:
+                act = prompt_input("  Choice [1-6] (default: 1): ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                return
+            if act in ("1", "stats", "play stats"):
+                print(render_single_play_deep_dive(chosen_play))
+            elif act in ("2", "team", "drill down team"):
+                p_team = str(chosen_play.get("posteam", ""))
+                d_team = str(chosen_play.get("defteam", ""))
+                if p_team and d_team:
+                    try:
+                        t_choice = prompt_input(f"  Select Team: [1] {p_team} (Offense)  [2] {d_team} (Defense) (default: 1): ").strip() or "1"
+                        target_t = d_team if t_choice in ("2", d_team.lower()) else p_team
+                    except (EOFError, KeyboardInterrupt):
+                        target_t = p_team
+                else:
+                    target_t = p_team or d_team or "KC"
+                print(render_team_drilldown_view(engine, plays, season=active_season, team=target_t))
+            elif act in ("3", "player", "drill down player"):
+                players_here = get_play_key_players(chosen_play)
+                if not players_here:
+                    try:
+                        target_p = prompt_input("  Enter player name to drill down: ").strip() or "Mahomes"
+                    except (EOFError, KeyboardInterrupt):
+                        target_p = "Mahomes"
+                elif len(players_here) == 1:
+                    target_p = players_here[0]
+                    print(f"  {C.CYAN}ℹ Drilling down for player: {target_p}{C.RESET}")
+                else:
+                    print("  Players on this play:")
+                    for p_i, p_n in enumerate(players_here, 1):
+                        print(f"    [{p_i}] {p_n}")
+                    try:
+                        p_sel = prompt_input(f"  Select player [1-{len(players_here)}] (default: 1): ").strip() or "1"
+                        p_idx = int(p_sel) - 1 if p_sel.isdigit() and 1 <= int(p_sel) <= len(players_here) else 0
+                        target_p = players_here[p_idx]
+                    except (EOFError, KeyboardInterrupt):
+                        target_p = players_here[0]
+                print(render_player_drilldown_view(engine, plays, season=active_season, player_name=target_p, interactive=True))
+            elif act in ("4", "camera"):
+                try:
+                    c_in = prompt_input("  Camera perspective [1] behind-offense  [2] behind-defense  [3] sideline  [4] all (default: 1): ").strip() or "1"
+                except (EOFError, KeyboardInterrupt):
+                    c_in = "1"
+                c_map = {"1": "behind-offense", "2": "behind-defense", "3": "sideline", "4": "all"}
+                current_cam = c_map.get(c_in, c_in)
+                print("\n" + AsciiArtRenderer.render_field_and_play(chosen_play, title=play_title, camera=current_cam))
+            elif act in ("5", "another", "back"):
+                break
+            elif act in ("6", "exit", "q", "quit"):
+                return
 
 
 def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any]], season: int = CURRENT_SEASON) -> None:
@@ -3495,9 +4402,11 @@ def render_slash_help() -> str:
 
   {C.BOLD}{C.GOLD}Slash Commands:{C.RESET}
     {C.BOLD}{C.CYAN}/help{C.RESET}                           Show this command & natural-language reference
+    {C.BOLD}{C.CYAN}/team{C.RESET} [abbr/name]              Drill down into team offense, defense, and roster stats
+    {C.BOLD}{C.CYAN}/player{C.RESET} [name]                  Drill down into player passing, rushing, and receiving stats
     {C.BOLD}{C.CYAN}/stat{C.RESET} [stat_id]                 Evaluate any Traditional or Custom Stat leaderboard (Table only)
     {C.BOLD}{C.CYAN}/create{C.RESET}                         Launch the Composable Custom Stat Builder (Season / Game / Play scope)
-    {C.BOLD}{C.CYAN}/play{C.RESET} [qb/team/camera]          Diagram a specific play on the ASCII field (behind-offense / behind-defense / sideline)
+    {C.BOLD}{C.CYAN}/play{C.RESET} [phase/query]             Interactive play explorer (Offense, Defense, Special Teams) & diagrammer
     {C.BOLD}{C.CYAN}/camera{C.RESET} <offense|defense|side>  Set default camera angle for play diagrams
     {C.BOLD}{C.CYAN}/season{C.RESET} <year>                  Set active season year (default: current NFL season)
     {C.BOLD}{C.CYAN}/query{C.RESET}                          Run an ad-hoc season filter & group query
@@ -3616,6 +4525,24 @@ def interactive_tui(
                             print(render_general_stat_view(engine, s_plays, chosen_stat, season_val, conf=conf_arg, team=default_team, group_override=group_val, view_mode="table"))
                 elif cmd_token in ("/create", "/create-stat", "/new", "/build"):
                     interactive_custom_stat_wizard(engine, plays, season=active_season)
+                elif cmd_token in ("/team", "/team-stats", "/team-drilldown"):
+                    if cmd_args:
+                        t_raw = cmd_args[0]
+                        s_val = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else active_season
+                        res_t = resolve_team_abbr(t_raw) or t_raw.upper()
+                        print(render_team_drilldown_view(engine, plays, season=s_val, team=res_t))
+                    else:
+                        def_t = default_team or "KC"
+                        t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions) (default: {def_t}): ").strip() or def_t
+                        res_t = resolve_team_abbr(t_in) or t_in.upper()
+                        print(render_team_drilldown_view(engine, plays, season=active_season, team=res_t))
+                elif cmd_token in ("/player", "/player-stats", "/player-drilldown"):
+                    if cmd_args:
+                        p_arg = " ".join(cmd_args)
+                        print(render_player_drilldown_view(engine, plays, season=active_season, player_name=p_arg, interactive=True))
+                    else:
+                        p_in = prompt_input("  Enter Player name (e.g. Mahomes, Allen, Goff, Worthy) (default: Mahomes): ").strip() or "Mahomes"
+                        print(render_player_drilldown_view(engine, plays, season=active_season, player_name=p_in, interactive=True))
                 elif cmd_token in ("/play", "/diagram", "/field"):
                     if cmd_args:
                         nl_play_q = "show play " + " ".join(cmd_args)
@@ -3629,15 +4556,7 @@ def interactive_tui(
                         last_parsed_nl = parsed
                         print(handle_nl_query_result(parsed, engine, plays))
                     else:
-                        print(f"\n{C.BOLD}{C.GREEN}=== 🏈 SPECIFIC PLAY EXPLORER & MULTI-ANGLE DIAGRAMMER ==={C.RESET}")
-                        qb_q = prompt_input("  Filter by QB/Player name (e.g. Mahomes, Allen, Goff, or Enter for any): ").strip() or None
-                        team_q = prompt_input("  Filter by Team (e.g. KC, BUF, DET, BAL, or Enter for any): ").strip() or None
-                        concept_q = prompt_input("  Filter by Concept (e.g. screen, play_action_deep, rush_outside, or Enter for any): ").strip() or None
-                        sort_q = prompt_input("  Pick top play by [yards_gained / epa / wpa / yac] (default: yards_gained): ").strip() or "yards_gained"
-                        cam_q = prompt_input(f"  Camera View [behind-offense / behind-defense / sideline / all] (default: {default_camera}): ").strip() or default_camera
-                        print(render_specific_play_view(
-                            engine, plays, season=active_season, team=team_q, qb=qb_q, concept=concept_q, sort_by=sort_q, camera=cam_q
-                        ))
+                        interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
                 elif cmd_token in ("/camera", "/perspective"):
                     if cmd_args:
                         cam_in = cmd_args[0].lower()
@@ -3786,6 +4705,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     play_p.add_argument("--sort-by", choices=["yards_gained", "epa", "wpa", "yac", "air_yards"], default="yards_gained", help="Criterion to pick top matching play")
     play_p.add_argument("--perspective", choices=["behind-offense", "behind-defense", "sideline", "offense", "defense", "side", "all"], default=None, help="Camera angle override")
 
+    team_p = sub.add_parser("team", parents=[common], help="Drill down into team offense, defense, and roster stats")
+    team_p.add_argument("team_name", nargs="?", default="KC", help="Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions)")
+
+    player_p = sub.add_parser("player", parents=[common], help="Drill down into player passing, rushing, and receiving stats")
+    player_p.add_argument("player_name", nargs="?", default="Mahomes", help="Player name (e.g. Mahomes, Allen, Goff, Worthy)")
+
     sub.add_parser("list-stats", parents=[common], help="List all registered traditional and custom stats with their formulas and scopes")
 
     create_p = sub.add_parser("create-stat", parents=[common], help="Create & save a new custom stat built from traditional or custom stats")
@@ -3898,6 +4823,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 view_mode=args.view,
                 camera=resolved_camera,
             ))
+        elif cmd == "team":
+            resolved_t = resolve_team_abbr(args.team_name) or args.team_name or "KC"
+            print(render_team_drilldown_view(engine, season_plays, season=args.season, team=resolved_t))
+        elif cmd == "player":
+            print(render_player_drilldown_view(engine, season_plays, season=args.season, player_name=args.player_name, team=args.team, interactive=False))
         elif cmd == "play":
             cam = getattr(args, "perspective", None) or resolved_camera
             print(render_specific_play_view(
