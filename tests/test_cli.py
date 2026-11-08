@@ -82,3 +82,15 @@ def test_custom_stat_example_walkthrough(engine):
     assert "clamp(50 +" in plain
     assert "qb_meaningful_win" in plain
     assert "Meaningful Wins (MW)" in plain
+
+
+def test_stats_catalog_layout(engine):
+    catalog = cli.render_stats_catalog(engine)
+    plain = cli.strip_ansi(catalog)
+    assert "REGISTERED STATS & ANALYTICS CATALOG" in plain
+    assert "Quarterback & Passing Analytics" in plain
+    assert "Team & Offensive Efficiency" in plain
+    assert "Screen Pass & YAC Analytics" in plain
+    assert "epa_per_play" in plain
+    assert "passer_rating" in plain
+    assert "Formula:" in plain

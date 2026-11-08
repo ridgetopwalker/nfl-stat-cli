@@ -3396,6 +3396,91 @@ def interactive_custom_stat_wizard(engine: StatEngine, plays: List[Dict[str, Any
         print(f"\n  {C.RED}✖ Error creating stat: {exc}{C.RESET}")
 
 
+STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
+    (
+        "🏈 Quarterback & Passing Analytics",
+        "Passer rating, efficiency, and impact metrics evaluated at season and per-game scopes.",
+        [
+            "passer_rating",
+            "any_a",
+            "epa_per_play",
+            "qb_impact_score",
+            "qb_meaningful_win",
+            "qb_meaningful_loss",
+            "qb_quality_start",
+        ],
+    ),
+    (
+        "⚡ Team & Offensive Efficiency",
+        "Drive-level, per-snap, and situational conversion efficiency across all plays.",
+        [
+            "yards_per_play",
+            "success_rate_pct",
+            "explosive_play_rate",
+        ],
+    ),
+    (
+        "🎯 Screen Pass & YAC Analytics",
+        "Short-area distribution, run-after-catch, and model-expected YAC performance.",
+        [
+            "screen_yards_after_catch",
+            "yac_over_expected",
+            "screen_effectiveness_index",
+        ],
+    ),
+]
+
+
+def render_stats_catalog(engine: StatEngine) -> str:
+    """
+    Renders an organized, human-readable catalog of all registered traditional and custom stats,
+    grouped by football category with clear descriptions, formulas, and evaluation scopes.
+    """
+    all_stats = engine.stats
+    categorized: Set[str] = set()
+    for _, _, keys in STAT_CATALOG_GROUPS:
+        categorized.update(keys)
+
+    user_created = [k for k in all_stats if k not in categorized]
+    sections = list(STAT_CATALOG_GROUPS)
+    if user_created:
+        sections.append((
+            "🧪 User-Created & Imported Custom Stats",
+            "Custom statistics created via /create or imported from external JSON files.",
+            user_created,
+        ))
+
+    trad_count = sum(1 for s in all_stats.values() if s.category == "traditional")
+    cust_count = sum(1 for s in all_stats.values() if s.category == "custom")
+
+    lines: List[str] = [
+        f"\n{C.BOLD}{C.CYAN}╔═══════════════════════════════════════════════════════════════════════════════════════╗",
+        f"║                      📊 REGISTERED STATS & ANALYTICS CATALOG                          ║",
+        f"╚═══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}",
+        f"  {C.DIM}Catalog: {len(all_stats)} registered metrics ({trad_count} Traditional • {cust_count} Custom).{C.RESET}",
+        f"  {C.DIM}Usage: Run {C.RESET}{C.BOLD}{C.CYAN}/stat <stat_id>{C.RESET}{C.DIM} (e.g. `/stat epa_per_play`) or ask questions in plain English.{C.RESET}\n",
+    ]
+
+    for cat_title, cat_desc, keys in sections:
+        matching = [all_stats[k] for k in keys if k in all_stats]
+        if not matching:
+            continue
+        lines.append(f"{C.BOLD}{C.GOLD}── {cat_title} ({len(matching)}) ──{C.RESET}")
+        lines.append(f"  {C.DIM}{cat_desc}{C.RESET}\n")
+        for s in matching:
+            type_badge = f"{C.MAGENTA}[CUSTOM]{C.RESET}" if s.category == "custom" else f"{C.BLUE}[TRADITIONAL]{C.RESET}"
+            scope_str = f"Scope: {s.scope.upper()}" + (f" ({s.agg})" if s.scope != "season" else "")
+            filter_str = f" • Filter: `{s.filter_expr}`" if s.filter_expr else ""
+            unit_str = f" • Unit: {s.unit}" if s.unit else ""
+            lines.append(f"  {C.BOLD}{C.CYAN}{s.name:<26}{C.RESET} {type_badge} {C.DIM}by {s.group_by.upper()} • {scope_str}{filter_str}{unit_str}{C.RESET}")
+            lines.append(f"    {C.BOLD}{s.title}{C.RESET}")
+            lines.append(f"    {C.WHITE}{s.description}{C.RESET}")
+            lines.append(f"    {C.DIM}Formula: `{s.formula}`{C.RESET}\n")
+
+    lines.append(f"  {C.DIM}💡 Tip: Run {C.RESET}{C.BOLD}{C.CYAN}/example{C.RESET}{C.DIM} for a step-by-step custom stat tutorial, or {C.RESET}{C.BOLD}{C.CYAN}/create{C.RESET}{C.DIM} to build your own.{C.RESET}\n")
+    return "\n".join(lines)
+
+
 def render_slash_help() -> str:
     return f"""
 {C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
@@ -3490,16 +3575,7 @@ def interactive_tui(
                 if cmd_token in ("/help", "/h", "/?", "/commands", "/menu"):
                     print(render_slash_help())
                 elif cmd_token in ("/stats", "/list", "/list-stats", "/catalog"):
-                    rows = [
-                        [s.name, s.title, s.category.upper(), s.group_by, f"{s.scope}/{s.agg}", s.filter_expr or "—", s.formula[:42]]
-                        for s in engine.stats.values()
-                    ]
-                    print(AsciiArtRenderer.render_table(
-                        "Registered Traditional & Custom Stats Catalog",
-                        ["Stat ID", "Title", "Type", "Group By", "Scope/Agg", "Filter", "Formula"],
-                        rows,
-                        alignments=["left", "left", "center", "center", "center", "left", "left"],
-                    ))
+                    print(render_stats_catalog(engine))
                 elif cmd_token in ("/stat", "/leaderboard"):
                     if cmd_args:
                         req_stat = cmd_args[0].lower()
@@ -3776,16 +3852,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Fast path for metadata / file commands that do not require downloading play-by-play data
         if cmd == "list-stats":
             print(AsciiArtRenderer.banner())
-            rows = [
-                [s.name, s.title, s.category.upper(), s.group_by, f"{s.scope}/{s.agg}", s.filter_expr or "—", s.formula[:42]]
-                for s in engine.stats.values()
-            ]
-            print(AsciiArtRenderer.render_table(
-                "Registered Traditional & Custom Stats Catalog",
-                ["Stat ID", "Title", "Type", "Group By", "Scope/Agg", "Filter", "Formula"],
-                rows,
-                alignments=["left", "left", "center", "center", "center", "left", "left"],
-            ))
+            print(render_stats_catalog(engine))
             return 0
         if cmd == "export-stats":
             print(AsciiArtRenderer.banner())
