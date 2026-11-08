@@ -1740,6 +1740,7 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         title="Yards Per Play (YPP)",
         category="traditional",
         group_by="play_concept",
+        filter_expr="pass_attempt == 1 or rush_attempt == 1",
         formula="total_yards / plays",
         description="Average offensive yards gained per snap across matching plays.",
         calculation_explained="Sum of yards_gained divided by total qualifying offensive plays (pass_attempt + rush_attempt).",
@@ -4283,8 +4284,19 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:yac\s+over\s+expected|yacoe)\b", "yac_over_expected", "team"),
         # Yards After Catch (General YAC across all completed passes)
         (r"\b(?:yards\s+after\s+(?:the\s+)?catch|yac)\b", "yards_after_catch", "receiver"),
-        # Yards per play
-        (r"\b(?:yards\s+per\s+play|ypp)\b", "yards_per_play", "play_concept"),
+        # Yards per play / Average yards per play / Play Efficiency
+        (
+            r"\b(?:yards?\s+per\s+play|ypp)\b|"
+            r"\b(?:(?:most|highest|best|avg|average|leading|top)\s+yards?\s+(?:on\s+average|per\s+play))\b|"
+            r"\b(?:(?:produces?|produced|gain(?:ed|s)?|averages?|generates?|got)\s+(?:the\s+)?(?:most|highest|best|top)?\s*yards?\s+(?:on\s+average|per\s+play))\b|"
+            r"\b(?:has\s+(?:produces?|produced|gained?)\s+(?:the\s+)?(?:most|highest)?\s*yards?\s+(?:on\s+average|per\s+play))\b|"
+            r"\b(?:averages?\s+(?:the\s+)?most\s+yards?)\b|"
+            r"\b(?:yards?\s+on\s+average|average\s+yards?(?:\s+gained)?|avg\s+yards?(?:\s+gained)?)\b|"
+            r"\b(?:most\s+yards?\s+on\s+average|highest\s+average\s+yards?)\b|"
+            r"\b(?:play\s+concept\s+efficiency|play\s+efficiency|most\s+efficient\s+plays?|efficient\s+plays?)\b",
+            "yards_per_play",
+            "play_concept",
+        ),
         # General / Overall Yardage Leaders ("most yards", "who had the most yards", "which player has the most yards", "yards this year", etc.)
         (r"\b(?:most\s+yards|highest\s+yards|leading\s+(?:in\s+)?(?:the\s+most\s+)?yards|leader\s+in\s+yards|leaders\s+in\s+yards|has\s+the\s+most\s+yards|had\s+the\s+most\s+yards|more\s+yards|yards\s+leader|yards\s+leaders|total\s+yards)\b", "passing_yards", "qb"),
         (r"\b(?:yards|yds)\b", "passing_yards", "qb"),
@@ -4806,16 +4818,20 @@ class NaturalLanguageStatAssistant:
 
         # Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
         ql_without_stat_phrases = re.sub(
-            r"\b(?:per\s+play|play[\s_-]*action|explosive\s+play\s+rate|play\s+concept\s+efficiency|passing\s+yard|rushing\s+yard|pass\s+yard|rush\s+yard)\b",
+            r"\b(?:per\s+play|play[\s_-]*action|explosive\s+play\s+rate|play\s+concept\s+efficiency|passing\s+yard|rushing\s+yard|pass\s+yard|rush\s+yard|which\s+play|what\s+play|which\s+plays|what\s+plays|by\s+play|each\s+play|play\s+concept|play\s+type)\b",
             "",
             ql,
         )
         is_aggregate_request = any(w in ql for w in (
             "average", "avg", "per play", "across the year", "across the season", "leaderboard",
-            "rankings", "rank teams", "rank qbs", "rank players", "by team", "by qb", "by player", "by concept",
+            "rankings", "rank teams", "rank qbs", "rank players", "rank plays", "rank coaches",
+            "by team", "by qb", "by player", "by concept", "by play", "by coach",
+            "which play", "what play", "which plays", "what plays",
+            "which player", "which team", "which coach", "which qb", "which receiver", "which rusher",
             "effectiveness", "meaningful win", "meaningful loss", "impact score",
             "passer rating", "completion", "success rate", "explosive play rate", "cpoe",
             "who had the most", "who has the most", "who led", "who leads", "most", "highest", "leader", "leaders",
+            "produces the most", "produces", "produced",
         ))
         is_specific_play_request = (
             any(p in ql for p in (
@@ -4940,17 +4956,22 @@ class NaturalLanguageStatAssistant:
             group_override = "qb"
         elif any(w in ql for w in ("by player", "players", "each player", "per player", "which player", "what player", "who committed")):
             group_override = "player"
-        elif any(w in ql for w in ("by receiver", "receivers", "wide receiver", "each receiver")):
+        elif any(w in ql for w in ("by receiver", "receivers", "wide receiver", "each receiver", "which receiver", "what receiver", "which wr", "what wr")):
             group_override = "receiver"
-        elif any(w in ql for w in ("by rusher", "rushers", "running back", "each rusher")):
+        elif any(w in ql for w in ("by rusher", "rushers", "running back", "each rusher", "which rusher", "what rusher", "which rb", "what rb")):
             group_override = "rusher"
-        elif any(w in ql for w in ("by team", "teams", "each team", "team's", "per team")):
+        elif any(w in ql for w in ("by team", "teams", "each team", "team's", "per team", "which team", "what team")):
             group_override = "team"
-        elif any(w in ql for w in ("by division", "divisions", "each division")):
+        elif any(w in ql for w in ("by division", "divisions", "each division", "which division", "what division")):
             group_override = "division"
-        elif any(w in ql for w in ("by conference", "conferences", "each conference")):
+        elif any(w in ql for w in ("by conference", "conferences", "each conference", "which conference", "what conference")):
             group_override = "conference"
-        elif any(w in ql for w in ("by concept", "play concept", "offensive play", "by play")):
+        elif any(w in ql for w in (
+            "by concept", "play concept", "play concepts", "offensive play", "offensive plays",
+            "by play", "by play concept", "per play concept", "play type", "play types",
+            "which play", "what play", "which plays", "what plays", "which concept", "what concept",
+            "which play concept", "what play concept", "type of play", "types of play", "rank plays",
+        )):
             group_override = "play_concept"
         elif any(w in ql for w in ("by coach", "coaches", "each coach", "head coach", "per coach", "best coach", "rank coach", "which coach", "what coach")):
             group_override = "coach"
@@ -4988,6 +5009,9 @@ class NaturalLanguageStatAssistant:
             matched_group = "rusher"
             group_override = "rusher"
 
+        if group_override == "play_concept" and matched_stat in ("passing_yards", None):
+            matched_stat = "yards_per_play"
+
         if not position and not has_generic_player_prompt:
             if matched_stat in ("rushing_yards", "rush_touchdowns", "yards_per_rush"):
                 position = "RB"
@@ -4999,6 +5023,7 @@ class NaturalLanguageStatAssistant:
             "which running back has the most", "who is leading", "leading in", "leader in", "leaders in",
             "who led", "who leads", "leader", "leaders", "leading", "most", "highest", "best", "top",
             "used the most", "called the most", "had the most", "has had the most", "as had the most",
+            "produces the most", "produced the most", "produces", "averages the most",
         ))
         top_m = re.search(r"\btop\s+(\d+)\b", ql)
         limit_val: Optional[int] = None
@@ -5088,20 +5113,38 @@ def render_general_stat_view(
     out: List[str] = []
     if _should_show_table(view_mode, is_play_query=False):
         unit_sfx = f" {sdef.unit}" if sdef.unit else ""
-        headers = ["Rank", group_col.upper(), "Team", "Conf", f"{sdef.title}", "Plays", "Avg Yds/Play", "EPA/Play", "Success %"]
-        rows = []
-        for idx, r in enumerate(display_board, 1):
-            rows.append([
-                f"#{idx}",
-                f"{C.BOLD}{r['entity']}{C.RESET}",
-                r["team"],
-                r["conf"],
-                f"{C.BOLD}{C.GREEN}{r['value']:.2f}{unit_sfx}{C.RESET}",
-                r["plays"],
-                f"{r['yards_per_play']:.2f}",
-                f"{r['epa_per_play']:+.2f}",
-                f"{r['success_rate_pct']:.1f}%",
-            ])
+        if group_col in ("play_concept", "penalty_type"):
+            group_header = "PLAY CONCEPT" if group_col == "play_concept" else "PENALTY TYPE"
+            headers = ["Rank", group_header, f"{sdef.title}", "Plays", "Avg Yds/Play", "EPA/Play", "Success %"]
+            rows = []
+            for idx, r in enumerate(display_board, 1):
+                rows.append([
+                    f"#{idx}",
+                    f"{C.BOLD}{r['entity']}{C.RESET}",
+                    f"{C.BOLD}{C.GREEN}{r['value']:.2f}{unit_sfx}{C.RESET}",
+                    r["plays"],
+                    f"{r['yards_per_play']:.2f}",
+                    f"{r['epa_per_play']:+.2f}",
+                    f"{r['success_rate_pct']:.1f}%",
+                ])
+            alignments = ["right", "left", "right", "right", "right", "right", "right"]
+        else:
+            group_header = group_col.upper()
+            headers = ["Rank", group_header, "Team", "Conf", f"{sdef.title}", "Plays", "Avg Yds/Play", "EPA/Play", "Success %"]
+            rows = []
+            for idx, r in enumerate(display_board, 1):
+                rows.append([
+                    f"#{idx}",
+                    f"{C.BOLD}{r['entity']}{C.RESET}",
+                    r["team"],
+                    r["conf"],
+                    f"{C.BOLD}{C.GREEN}{r['value']:.2f}{unit_sfx}{C.RESET}",
+                    r["plays"],
+                    f"{r['yards_per_play']:.2f}",
+                    f"{r['epa_per_play']:+.2f}",
+                    f"{r['success_rate_pct']:.1f}%",
+                ])
+            alignments = ["right", "left", "center", "center", "right", "right", "right", "right", "right"]
         sub_desc_parts = [str(season)]
         if limit and len(board) > limit:
             sub_desc_parts.append(f"Top {len(display_board)}")
@@ -5125,13 +5168,14 @@ def render_general_stat_view(
             f"{sdef.title} ({title_context})",
             headers,
             rows,
-            alignments=["right", "left", "center", "center", "right", "right", "right", "right", "right"],
+            alignments=alignments,
         ))
         if board:
             overall_avg = sum(r["value"] for r in board) / len(board)
             shown_note = f" (showing top {len(display_board)} of {len(board)})" if (limit and len(board) > limit) else ""
+            group_label_plural = "Play Concepts" if group_col == "play_concept" else ("Penalty Types" if group_col == "penalty_type" else f"{group_col.upper()}s")
             out.append(
-                f"  {C.BOLD}Season Average Across Qualified {group_col.upper()}s:{C.RESET} "
+                f"  {C.BOLD}Season Average Across Qualified {group_label_plural}:{C.RESET} "
                 f"{C.GOLD}{overall_avg:.2f}{unit_sfx}{C.RESET}  │  "
                 f"{C.BOLD}Leader:{C.RESET} {C.CYAN}{board[0]['entity']}{C.RESET} ({board[0]['value']:.2f}{unit_sfx}){shown_note}"
             )
