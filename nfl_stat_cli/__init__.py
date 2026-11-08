@@ -3420,6 +3420,9 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:yac\s+over\s+expected|yacoe)\b", "yac_over_expected", "team"),
         # Yards per play
         (r"\b(?:yards\s+per\s+play|ypp)\b", "yards_per_play", "play_concept"),
+        # General / Overall Yardage Leaders ("most yards", "who had the most yards", "which player has the most yards", "yards this year", etc.)
+        (r"\b(?:most\s+yards|highest\s+yards|leading\s+(?:in\s+)?(?:the\s+most\s+)?yards|leader\s+in\s+yards|leaders\s+in\s+yards|has\s+the\s+most\s+yards|had\s+the\s+most\s+yards|more\s+yards|yards\s+leader|yards\s+leaders|total\s+yards)\b", "passing_yards", "qb"),
+        (r"\b(?:yards|yds)\b", "passing_yards", "qb"),
     )
 
     @classmethod
@@ -3549,7 +3552,12 @@ class NaturalLanguageStatAssistant:
         ql = q.lower()
 
         season_match = re.search(r"\b(20\d{2})\b", ql)
-        season = int(season_match.group(1)) if season_match else default_season
+        if season_match:
+            season = int(season_match.group(1))
+        elif any(phrase in ql for phrase in ("last year", "last season", "previous year", "previous season")):
+            season = default_season - 1
+        else:
+            season = default_season
         conf = "AFC" if re.search(r"\bafc\b", ql) else ("NFC" if re.search(r"\bnfc\b", ql) else None)
 
         # 1. Division detection
@@ -3660,20 +3668,30 @@ class NaturalLanguageStatAssistant:
                 break
 
         if not player_filter:
-            p_pat = re.search(r"\b(?:player\s+stats\s+for|stats\s+for|player|for|show|diagram)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b", q)
+            q_clean_player_prompts = re.sub(r"\b(?:which|what|any|each|every|the|a)\s+player\b", "", q, flags=re.IGNORECASE)
+            p_pat = re.search(
+                r"\b(?:player\s+stats\s+for|stats\s+for|stats\s+on|player\s+profile\s+for|for\s+player|player|for|show|diagram)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b",
+                q_clean_player_prompts,
+            )
             if p_pat:
                 cand = p_pat.group(1).strip()
                 cand_low = cand.lower()
                 ignore_words = {
-                    "the", "a", "an", "all", "each", "me", "play", "plays", "stat", "stats",
+                    "the", "a", "an", "all", "each", "any", "every", "me", "play", "plays", "stat", "stats",
                     "leaderboard", "rankings", "field", "ascii", "offense", "defense", "special",
                     "teams", "team", "screen", "pass", "run", "touchdown", "interception",
                     "sack", "longest", "best", "meaningful", "win", "loss", "impact", "score",
                     "passer", "rating", "cpoe", "epa", "wpa", "yac", "afc", "nfc", "auto",
                     "season", "game", "quarter", "qtr", "down", "view", "sideline", "camera",
                     "week", "division", "most", "highest", "last", "latest", "data", "who", "what",
+                    "which", "has", "had", "have", "is", "was", "are", "were", "with", "in", "at",
+                    "to", "of", "from", "by", "on", "this", "that", "there", "leading", "leader",
+                    "leaders", "led", "leads", "year", "years", "yard", "yards", "yds", "more",
+                    "player", "players", "qb", "qbs", "quarterback", "quarterbacks", "rusher",
+                    "rushers", "receiver", "receivers", "kicker", "punter",
                 } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
-                if cand_low not in ignore_words and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
+                cand_words = set(cand_low.split())
+                if not cand_words.intersection(ignore_words) and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
 
         # Check if user is asking for Dataset Info / Game Information
@@ -3987,6 +4005,11 @@ class NaturalLanguageStatAssistant:
         elif player_filter and not group_override:
             group_override = "player" if "player" in GROUP_BY_COLUMN_MAP else "qb"
 
+        if matched_stat == "passing_yards" and position == "RB":
+            matched_stat = "rushing_yards"
+            matched_group = "rusher"
+            group_override = "rusher"
+
         if not position:
             if matched_stat in ("rushing_yards", "rush_touchdowns", "yards_per_rush"):
                 position = "RB"
@@ -3995,7 +4018,18 @@ class NaturalLanguageStatAssistant:
             elif matched_stat in ("screen_yards_after_catch", "yac_over_expected"):
                 position = "WR"
 
-        is_leader_query = any(w in ql for w in ("who had the most", "who has the most", "who led", "who leads", "leader", "leaders", "most", "highest", "best", "top"))
+        is_leader_query = any(w in ql for w in (
+            "who had the most", "who has the most", "which player has the most", "which qb has the most",
+            "which running back has the most", "who is leading", "leading in", "leader in", "leaders in",
+            "who led", "who leads", "leader", "leaders", "leading", "most", "highest", "best", "top",
+        ))
+        top_m = re.search(r"\btop\s+(\d+)\b", ql)
+        limit_val: Optional[int] = None
+        if top_m:
+            limit_val = int(top_m.group(1))
+        elif is_leader_query:
+            limit_val = 5
+
         exp_prefix = f"Evaluated `{matched_stat}` leaders for {season}" if is_leader_query else f"Evaluated `{matched_stat}` across {season}"
 
         return {
@@ -4014,6 +4048,8 @@ class NaturalLanguageStatAssistant:
             "filter_expr": " and ".join([f for f in filter_parts if f]),
             "show_field": False,
             "camera": camera,
+            "limit": limit_val,
+            "is_leader": is_leader_query,
             "explanation": f"{exp_prefix} (season aggregate/leaderboard — no ASCII field needed).",
         }
 
@@ -4058,6 +4094,7 @@ def render_general_stat_view(
     division: Optional[str] = None,
     week: Optional[int] = None,
     qtr: Optional[int] = None,
+    limit: Optional[int] = None,
 ) -> str:
     if stat_name not in engine.stats:
         matches = difflib.get_close_matches(stat_name, list(engine.stats.keys()), n=3, cutoff=0.5)
@@ -4068,13 +4105,14 @@ def render_general_stat_view(
     board = engine.evaluate_stat_leaderboard(
         stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr
     )
+    display_board = board[:limit] if (limit and limit > 0) else board
 
     out: List[str] = []
     if _should_show_table(view_mode, is_play_query=False):
         unit_sfx = f" {sdef.unit}" if sdef.unit else ""
         headers = ["Rank", group_col.upper(), "Team", "Conf", f"{sdef.title}", "Plays", "Avg Yds/Play", "EPA/Play", "Success %"]
         rows = []
-        for idx, r in enumerate(board, 1):
+        for idx, r in enumerate(display_board, 1):
             rows.append([
                 f"#{idx}",
                 f"{C.BOLD}{r['entity']}{C.RESET}",
@@ -4087,6 +4125,8 @@ def render_general_stat_view(
                 f"{r['success_rate_pct']:.1f}%",
             ])
         sub_desc_parts = [str(season)]
+        if limit and len(board) > limit:
+            sub_desc_parts.append(f"Top {len(display_board)}")
         if conf:
             sub_desc_parts.append(conf)
         if division:
@@ -4109,10 +4149,11 @@ def render_general_stat_view(
         ))
         if board:
             overall_avg = sum(r["value"] for r in board) / len(board)
+            shown_note = f" (showing top {len(display_board)} of {len(board)})" if (limit and len(board) > limit) else ""
             out.append(
                 f"  {C.BOLD}Season Average Across Qualified {group_col.upper()}s:{C.RESET} "
                 f"{C.GOLD}{overall_avg:.2f}{unit_sfx}{C.RESET}  │  "
-                f"{C.BOLD}Leader:{C.RESET} {C.CYAN}{board[0]['entity']}{C.RESET} ({board[0]['value']:.2f}{unit_sfx})"
+                f"{C.BOLD}Leader:{C.RESET} {C.CYAN}{board[0]['entity']}{C.RESET} ({board[0]['value']:.2f}{unit_sfx}){shown_note}"
             )
 
     if _should_show_text(view_mode, is_play_query=False):
@@ -4751,6 +4792,7 @@ def handle_nl_query_result(
         division=division,
         week=week,
         qtr=qtr,
+        limit=parsed.get("limit"),
     )
 
 
@@ -7007,6 +7049,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     stat_p.add_argument("stat_name", nargs="?", default="yards_per_play", help="Stat ID to evaluate (e.g. qb_impact_score, yards_per_play, screen_yards_after_catch)")
     stat_p.add_argument("--group-by", choices=list(GROUP_BY_COLUMN_MAP.keys()), default=None, help="Override grouping dimension")
     stat_p.add_argument("--filter", default="", help="Additional play filter expression (e.g. 'down == 3' or 'is_screen == 1')")
+    stat_p.add_argument("--limit", type=int, default=None, help="Limit number of leaderboard rows to show (e.g. --limit 5)")
 
     play_p = sub.add_parser("play", parents=[common], help="Find and diagram a specific play on the ASCII gridiron (supports behind-offense, behind-defense, sideline)")
     play_p.add_argument("--play-id", type=int, default=None, help="Specific play_id to render")
@@ -7149,6 +7192,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 extra_filter=args.filter,
                 view_mode=args.view,
                 camera=resolved_camera,
+                limit=getattr(args, "limit", None),
             ))
         elif cmd == "team":
             resolved_t = resolve_team_abbr(args.team_name) or args.team_name or "KC"
