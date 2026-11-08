@@ -72,3 +72,13 @@ def test_package_and_legacy_launcher():
         result = subprocess.run([sys.executable] + args, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         assert "usage:" in result.stdout
+
+
+def test_custom_stat_example_walkthrough(engine):
+    walkthrough = cli.render_custom_stat_example_walkthrough(engine, cli.SAMPLE_PBP_PLAYS, season=2025)
+    plain = cli.strip_ansi(walkthrough)
+    assert "HOW TO BUILD A CUSTOM STAT" in plain
+    assert "MLB-STYLE QB WINS" in plain
+    assert "clamp(50 +" in plain
+    assert "qb_meaningful_win" in plain
+    assert "Meaningful Wins (MW)" in plain

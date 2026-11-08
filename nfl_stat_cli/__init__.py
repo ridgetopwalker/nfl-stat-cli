@@ -3023,6 +3023,64 @@ def render_qb_meaningful_wins_view(
     return "\n".join(out)
 
 
+def render_custom_stat_example_walkthrough(
+    engine: StatEngine,
+    plays: List[Dict[str, Any]],
+    season: int = CURRENT_SEASON,
+    conf: Optional[str] = None,
+    team: Optional[str] = None,
+) -> str:
+    """
+    Interactive guide demonstrating how to design and build custom stats in nfl-stat-cli,
+    using MLB-style QB Meaningful Wins (MW / ML) and QB Impact Score as the canonical example.
+    """
+    s_plays = plays_for_season(plays, season)
+    display_season = season
+    if not s_plays:
+        avail = available_seasons(plays)
+        if avail:
+            display_season = avail[-1]
+            s_plays = plays_for_season(plays, display_season)
+        else:
+            s_plays = plays
+    report_table = render_qb_meaningful_wins_view(engine, s_plays, display_season, conf=conf, view_mode="table", team=team)
+
+    guide_lines = [
+        f"\n{C.BOLD}{C.GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗",
+        f"║  🏈  HOW TO BUILD A CUSTOM STAT (FEATURED EXAMPLE: MLB-STYLE QB WINS)                 ║",
+        f"╚═══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}",
+        f"\n{C.BOLD}{C.CYAN}1. The Concept & Problem to Solve:{C.RESET}",
+        f"   In traditional NFL box scores, 'QB Wins' (`team_win == 1`) credit the quarterback even when",
+        f"   the defense carries a subpar performance, or tag them with a loss in a 42-38 shootout.",
+        f"   {C.GREEN}Goal:{C.RESET} Build an MLB-pitcher style Decision System — Meaningful Wins (MW), Meaningful Losses (ML),",
+        f"   and No-Decisions (ND) based on whether the QB met an objective performance threshold.",
+        f"\n{C.BOLD}{C.CYAN}2. The 3-Step Construction in nfl-stat-cli:{C.RESET}",
+        f"   {C.BOLD}Step A: Select Evaluation Scope{C.RESET}",
+        f"     • Scope: `{C.YELLOW}game{C.RESET}` (evaluates each individual game rather than the full season aggregate)",
+        f"     • Aggregation: `{C.YELLOW}sum{C.RESET}` (sums the 1s and 0s across all games in the season)",
+        f"     • Group Dimension: `{C.YELLOW}qb{C.RESET}`",
+        f"",
+        f"   {C.BOLD}Step B: Layer Composable Custom Stats{C.RESET}",
+        f"     • {C.BOLD}Base Metric 1 (0–100 Game Impact Score):{C.RESET}",
+        f"       `qb_impact_score = clamp(50 + (epa_per_play * 18.0) + (wpa_per_game * 85.0) + (avg_cpoe * 0.85) - (turnover_rate * 120.0), 0, 100)`",
+        f"     • {C.BOLD}Base Metric 2 (Meaningful Win):{C.RESET} Awarded ONLY when the team won AND QB impact was high:",
+        f"       `qb_meaningful_win = ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)`",
+        f"     • {C.BOLD}Base Metric 3 (Meaningful Loss):{C.RESET} Charged ONLY when the team lost AND QB impact was low:",
+        f"       `qb_meaningful_loss = ifelse((team_win == 0) and (qb_impact_score <= 42.0), 1, 0)`",
+        f"     • {C.BOLD}No-Decision (ND):{C.RESET} Games won despite sub-55 impact, or lost despite heroic 43+ impact!",
+        f"",
+        f"   {C.BOLD}Step C: Three Ways You Can Build Any Custom Stat:{C.RESET}",
+        f"     1. {C.BOLD}Interactive Builder:{C.RESET} Type {C.CYAN}/create{C.RESET} in the prompt to launch the step-by-step wizard.",
+        f"     2. {C.BOLD}Natural Language:{C.RESET} Type directly in plain English:",
+        f"        {C.DIM}\"create stat called clutch_win with formula ifelse(epa_per_play > 0.15 and team_win == 1, 1, 0) by qb\"{C.RESET}",
+        f"     3. {C.BOLD}CLI Command:{C.RESET}",
+        f"        {C.DIM}nfl-stat create-stat --name qb_meaningful_win --scope game --agg sum --formula \"ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)\" --title \"Meaningful Win\" --description \"...\" --explained \"...\"{C.RESET}",
+        f"\n{C.BOLD}{C.GREEN}3. Live Example Demonstration ({display_season} Leaderboard):{C.RESET}\n",
+        report_table,
+    ]
+    return "\n".join(guide_lines)
+
+
 def render_screen_pass_view(
     engine: StatEngine,
     plays: List[Dict[str, Any]],
@@ -3360,9 +3418,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/query{C.RESET}                          Run an ad-hoc season filter & group query
     {C.BOLD}{C.CYAN}/stats{C.RESET}                          List all registered traditional and custom stats & formulas
     {C.BOLD}{C.CYAN}/page{C.RESET}                           View Saved Stat Page (prior-season lookback & current-season tracking)
-    {C.BOLD}{C.CYAN}/qb-wins{C.RESET}                        Run MLB-style QB Meaningful Wins (MW), Losses (ML) & 0-100 Impact Score table
-    {C.BOLD}{C.CYAN}/screen-pass{C.RESET}                    Run Screen Pass Effectiveness table (Yards Gained, YAC, xYAC, EPA)
-    {C.BOLD}{C.CYAN}/play-efficiency{C.RESET} [AFC|NFC]      Rank most efficient offensive play concepts by yards gained
+    {C.BOLD}{C.CYAN}/example{C.RESET}                        Guide on how to build custom stats (featuring MLB-style QB Wins)
     {C.BOLD}{C.CYAN}/export{C.RESET} [file.json]             Export custom stats to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
@@ -3411,7 +3467,7 @@ def interactive_tui(
 
     while True:
         try:
-            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat > {C.RESET}").strip()
+            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat > {C.RESET}").lstrip("\ufeff").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting nfl-stat-cli.")
             break
@@ -3556,9 +3612,8 @@ def interactive_tui(
                     print(render_general_stat_view(engine, s_plays, stat_q, active_season, group_override=grp_q, extra_filter=flt_q, view_mode="table"))
                 elif cmd_token in ("/page", "/stat-page"):
                     print(render_stat_page(engine, plays))
-                elif cmd_token == "/qb-wins":
-                    s_plays = require_season_plays(plays, active_season)
-                    print(render_qb_meaningful_wins_view(engine, s_plays, active_season, default_conf, view_mode="table", team=default_team))
+                elif cmd_token in ("/example", "/examples", "/ex", "/qb-wins"):
+                    print(render_custom_stat_example_walkthrough(engine, plays, active_season, default_conf, default_team))
                 elif cmd_token == "/screen-pass":
                     s_plays = require_season_plays(plays, active_season)
                     print(render_screen_pass_view(engine, s_plays, active_season, default_conf, view_mode="table", team=default_team))
@@ -3681,6 +3736,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ask_p = sub.add_parser("ask", parents=[common], help="Ask a natural-language NFL stat or play question (Local SLM + deterministic parser)")
     ask_p.add_argument("query", help="Natural language question")
 
+    sub.add_parser("example", parents=[common], help="Walkthrough on how to build a custom stat (featuring QB Meaningful Wins)")
+
     # Backwards-compatible aliases for example workflows
     sub.add_parser("qb-wins", parents=[common], help="Run MLB-style QB Meaningful Wins (MW), Losses (ML) & 0-100 Impact Score report")
     sub.add_parser("screen-pass", parents=[common], help="Analyze screen pass effectiveness in yards gained, YAC, xYAC, and EPA")
@@ -3791,8 +3848,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 game_id=getattr(args, "game_id", None),
                 camera=cam,
             ))
-        elif cmd == "qb-wins":
-            print(render_qb_meaningful_wins_view(engine, season_plays, args.season, args.conf, args.view, camera=resolved_camera, team=args.team))
+        elif cmd in ("example", "qb-wins"):
+            print(render_custom_stat_example_walkthrough(engine, season_plays, args.season, conf=args.conf, team=args.team))
         elif cmd == "screen-pass":
             print(render_screen_pass_view(engine, season_plays, args.season, args.conf, args.view, camera=resolved_camera, team=args.team))
         elif cmd == "play-efficiency":
