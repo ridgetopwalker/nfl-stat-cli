@@ -15,11 +15,14 @@ param(
 $ErrorActionPreference = "Continue"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $ProjectRoot
+$LogFile = Join-Path $env:TEMP "nfl_stat_cli_install.log"
+"" | Set-Content -Path $LogFile -Encoding UTF8 -ErrorAction SilentlyContinue
 
 function Find-RealPython {
     $MachinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $UserPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = "$UserPath;$MachinePath"
+    $Combined = "$env:Path;$UserPath;$MachinePath"
+    $env:Path = (($Combined -split ";") | Where-Object { $_ -ne "" } | Select-Object -Unique) -join ";"
 
     $candidates = @("python", "python3", "py")
     foreach ($cmd in $candidates) {
@@ -94,7 +97,7 @@ if (-not $PythonExe) {
         if ($VerboseMode) {
             & winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
         } else {
-            & winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements >$null 2>&1
+            & winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements >>$LogFile 2>&1
         }
     }
     $PythonExe = Find-RealPython
@@ -116,31 +119,47 @@ if (-not $PythonExe) {
 if ($VerboseMode) { Write-Host "[1/5] Using Python: $PythonExe" -ForegroundColor Green }
 else { Update-CompactUI 20 "Using Python: $PythonExe" }
 
-# 2. Ensure pip is installed
+# 2. Ensure virtual environment (.venv) and pip are ready
+$VenvDir = Join-Path $ProjectRoot ".venv"
+$VenvPy = Join-Path $VenvDir "Scripts\python.exe"
+if (-not (Test-Path $VenvPy)) {
+    if ($VerboseMode) { Write-Host "[2/5] Creating virtual environment in .venv..." -ForegroundColor Cyan }
+    else { Update-CompactUI 25 "$PythonExe -m venv .venv" }
+    & $PythonExe -m venv $VenvDir >>$LogFile 2>&1
+}
+if (Test-Path $VenvPy) {
+    & $VenvPy -m pip --version >>$LogFile 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $PythonExe = $VenvPy
+    } else {
+        Remove-Item $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if ($VerboseMode) { Write-Host "[2/5] Checking pip..." -ForegroundColor Cyan }
 else { Update-CompactUI 28 "$PythonExe -m pip --version" }
-& $PythonExe -m pip --version >$null 2>&1
+& $PythonExe -m pip --version >>$LogFile 2>&1
 if ($LASTEXITCODE -ne 0) {
     if (-not $VerboseMode) { Update-CompactUI 32 "$PythonExe -m ensurepip --upgrade" }
-    & $PythonExe -m ensurepip --upgrade >$null 2>&1
+    & $PythonExe -m ensurepip --upgrade >>$LogFile 2>&1
 }
 if (-not $VerboseMode) { Update-CompactUI 40 "$PythonExe -m pip install --upgrade pip setuptools wheel" }
-& $PythonExe -m pip install --upgrade pip setuptools wheel --quiet
+& $PythonExe -m pip install --upgrade pip setuptools wheel --quiet >>$LogFile 2>&1
 
 # 3. Install required Python packages & nfl-stat-cli
 if (-not $SkipLivePackages) {
     if ($VerboseMode) {
-        Write-Host "[3/5] Installing NFL analytics Python packages (pandas, pyarrow, polars, nfl_data_py)..." -ForegroundColor Cyan
+        Write-Host "[3/5] Installing NFL analytics Python packages (pandas, pyarrow, polars, nfl_data_py, nflreadpy)..." -ForegroundColor Cyan
         & $PythonExe -m pip install --only-binary=:all: pandas pyarrow polars
         & $PythonExe -m pip install nfl_data_py
-        & $PythonExe -m pip install --only-binary=:all: nflreadpy >$null 2>&1
+        & $PythonExe -m pip install --only-binary=:all: nflreadpy >>$LogFile 2>&1
     } else {
         Update-CompactUI 55 "pip install --only-binary=:all: pandas pyarrow polars"
-        & $PythonExe -m pip install --only-binary=:all: pandas pyarrow polars --quiet
+        & $PythonExe -m pip install --only-binary=:all: pandas pyarrow polars --quiet >>$LogFile 2>&1
         Update-CompactUI 75 "pip install nfl_data_py"
-        & $PythonExe -m pip install nfl_data_py --quiet
+        & $PythonExe -m pip install nfl_data_py --quiet >>$LogFile 2>&1
         Update-CompactUI 82 "pip install --only-binary=:all: nflreadpy"
-        & $PythonExe -m pip install --only-binary=:all: nflreadpy >$null 2>&1
+        & $PythonExe -m pip install --only-binary=:all: nflreadpy >>$LogFile 2>&1
     }
 }
 
@@ -149,18 +168,41 @@ if ($VerboseMode) {
     & $PythonExe -m pip install -e . --no-build-isolation
 } else {
     Update-CompactUI 90 "pip install -e . --no-build-isolation"
-    & $PythonExe -m pip install -e . --no-build-isolation >$null 2>&1
+    & $PythonExe -m pip install -e . --no-build-isolation >>$LogFile 2>&1
 }
 
-# 4. Optional R
+# 4. Optional R & Optional Local SLM (Ollama)
 $rscript = Get-Command Rscript -ErrorAction SilentlyContinue
 if ($rscript) {
-    if (-not $VerboseMode) { Update-CompactUI 95 "Rscript -e install.packages('nflreadr')" }
-    & Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" >$null 2>&1
+    if (-not $VerboseMode) { Update-CompactUI 94 "Rscript -e install.packages('nflreadr')" }
+    & Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" >>$LogFile 2>&1
 }
 
-# 5. Create local folder launchers (nfl-stat.bat & nfl-stat-cli.bat) & verify
-$LauncherContent = "@echo off`r`n`"$PythonExe`" `"%~dp0nfl_stat_cli.py`" %*`r`n"
+if ($WithSLM) {
+    $ollama = Get-Command ollama -ErrorAction SilentlyContinue
+    if ($ollama) {
+        if ($VerboseMode) { Write-Host "[4/5] Pulling local SLM model (qwen2.5:1.5b) via Ollama..." -ForegroundColor Cyan }
+        else { Update-CompactUI 96 "ollama pull qwen2.5:1.5b" }
+        & ollama pull qwen2.5:1.5b >>$LogFile 2>&1
+    } elseif ($VerboseMode) {
+        Write-Host "[4/5] Note: Ollama not found on PATH; skipping local SLM model pull." -ForegroundColor DarkYellow
+    }
+}
+
+# 5. Ensure portable local folder launchers (nfl-stat.bat & nfl-stat-cli.bat) & verify
+$LauncherContent = @"
+@echo off
+if exist "%~dp0.venv\Scripts\python.exe" (
+    "%~dp0.venv\Scripts\python.exe" "%~dp0nfl_stat_cli.py" %*
+) else (
+    where py >nul 2>nul
+    if %ERRORLEVEL% EQU 0 (
+        py -3 "%~dp0nfl_stat_cli.py" %*
+    ) else (
+        python "%~dp0nfl_stat_cli.py" %*
+    )
+)
+"@
 Set-Content -Path (Join-Path $ProjectRoot "nfl-stat.bat") -Value $LauncherContent -Encoding ASCII
 Set-Content -Path (Join-Path $ProjectRoot "nfl-stat-cli.bat") -Value $LauncherContent -Encoding ASCII
 
@@ -170,17 +212,22 @@ if ($VerboseMode) {
     $VerifyCode = $LASTEXITCODE
     if ($VerifyCode -eq 0) {
         Write-Host "  [OK] INSTALLATION COMPLETE! Run: .\nfl-stat" -ForegroundColor Green
+    } else {
+        Write-Host "  [!] Verification failed (see $LogFile)." -ForegroundColor Red
+        exit $VerifyCode
     }
 } else {
     Update-CompactUI 98 ".\nfl-stat.bat --version"
-    & (Join-Path $ProjectRoot "nfl-stat.bat") --version >$null 2>&1
+    & (Join-Path $ProjectRoot "nfl-stat.bat") --version >>$LogFile 2>&1
     $VerifyCode = $LASTEXITCODE
     if ($VerifyCode -eq 0) {
         Update-CompactUI 100 "Done! Run: .\nfl-stat  (or .\install.ps1 -v for verbose)"
+        Write-Host ""
     } else {
-        Update-CompactUI 100 "ERROR: Verification failed."
+        Update-CompactUI 100 "ERROR: Verification failed (log: $LogFile)."
+        Write-Host ""
+        exit $VerifyCode
     }
-    Write-Host ""
 }
 
 if ($VerifyCode -eq 0 -and [Environment]::UserInteractive) {

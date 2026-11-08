@@ -78,15 +78,24 @@ prompt_add_to_path() {
             done
             if [ -w "/usr/local/bin" ]; then
                 ln -sf "$SCRIPT_DIR/nfl-stat" "/usr/local/bin/nfl-stat" 2>/dev/null || true
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo ln -sf "$SCRIPT_DIR/nfl-stat" "/usr/local/bin/nfl-stat" 2>/dev/null || true
             fi
-            printf "${GREEN}✔ Added 'nfl-stat' to PATH! You can now run 'nfl-stat' from anywhere (or './nfl-stat' here).${RESET}\n"
+            printf "${GREEN}✔ Added 'nfl-stat' to PATH (~/.local/bin/nfl-stat)! You can now run 'nfl-stat' from anywhere (or './nfl-stat' here).${RESET}\n"
             ;;
         *)
             printf "${DIM}Skipped adding to global PATH. You can run './nfl-stat' in this folder anytime.${RESET}\n"
             ;;
     esac
+}
+
+bootstrap_pip_safe() {
+    local py_bin="$1"
+    "$py_bin" -m ensurepip --upgrade || {
+        local get_pip_tmp
+        get_pip_tmp="$(mktemp "${TMPDIR:-/tmp}/get-pip.XXXXXX.py")"
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$get_pip_tmp"
+        "$py_bin" "$get_pip_tmp" --user
+        rm -f "$get_pip_tmp"
+    }
 }
 
 # ==============================================================================
@@ -119,29 +128,31 @@ if [ "$VERBOSE" -eq 1 ]; then
     PYTHON_BIN="$(command -v python3)"
     echo "[1/5] Using Python: $PYTHON_BIN ($($PYTHON_BIN --version))"
 
-    echo "[2/5] Checking pip..."
+    echo "[2/5] Checking pip and virtual environment..."
     if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
         echo "      Bootstrapping pip..."
-        "$PYTHON_BIN" -m ensurepip --upgrade || {
-            curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-            "$PYTHON_BIN" /tmp/get-pip.py --user
-            rm -f /tmp/get-pip.py
-        }
+        bootstrap_pip_safe "$PYTHON_BIN"
     fi
 
     if [ ! -d ".venv" ]; then
         if "$PYTHON_BIN" -m venv .venv >/dev/null 2>&1; then
             echo "      Created virtual environment in $SCRIPT_DIR/.venv"
+        else
+            rm -rf .venv
         fi
     fi
     if [ -x ".venv/bin/python" ]; then
-        PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+        if ".venv/bin/python" -m pip --version >/dev/null 2>&1; then
+            PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+        else
+            rm -rf .venv
+        fi
     fi
 
     "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel --quiet || true
     echo "[2/5] pip is ready."
 
-    echo "[3/5] Installing NFL analytics Python packages (pandas, pyarrow, polars, nfl_data_py)..."
+    echo "[3/5] Installing NFL analytics Python packages (pandas, pyarrow, polars, nfl_data_py, nflreadpy)..."
     "$PYTHON_BIN" -m pip install --only-binary=:all: pandas pyarrow polars || "$PYTHON_BIN" -m pip install pandas pyarrow polars || true
     "$PYTHON_BIN" -m pip install nfl_data_py || true
     "$PYTHON_BIN" -m pip install --only-binary=:all: nflreadpy >/dev/null 2>&1 || true
@@ -174,7 +185,7 @@ fi
 # 2. Below that: ONE progress bar line (exact width of banner, capped to terminal width so it never wraps)
 # 3. Below that: ONE command line that overwrites itself in-place
 # ==============================================================================
-LOG_FILE="/tmp/nfl_stat_cli_install.log"
+LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/nfl_stat_cli_install.XXXXXX.log" 2>/dev/null || echo "${TMPDIR:-/tmp}/nfl_stat_cli_install.$$.log")"
 : > "$LOG_FILE"
 
 TERM_COLS="$(tput cols 2>/dev/null || echo 89)"
@@ -257,30 +268,38 @@ PYTHON_BIN="$(command -v python3)"
 update_ui 15 "command -v python3 -> $PYTHON_BIN"
 
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-    run_step 15 25 "$PYTHON_BIN -m ensurepip --upgrade" "$PYTHON_BIN" -m ensurepip --upgrade || {
-        run_step 18 25 "curl https://bootstrap.pypa.io/get-pip.py && $PYTHON_BIN get-pip.py" bash -c "curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && $PYTHON_BIN /tmp/get-pip.py --user && rm -f /tmp/get-pip.py"
-    }
+    run_step 15 25 "$PYTHON_BIN -m ensurepip --upgrade" bootstrap_pip_safe "$PYTHON_BIN"
 fi
 
 if [ ! -d ".venv" ]; then
-    run_step 25 32 "$PYTHON_BIN -m venv .venv" "$PYTHON_BIN" -m venv .venv || true
+    run_step 25 32 "$PYTHON_BIN -m venv .venv" "$PYTHON_BIN" -m venv .venv || rm -rf .venv
 fi
 if [ -x ".venv/bin/python" ]; then
-    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+    if ".venv/bin/python" -m pip --version >/dev/null 2>&1; then
+        PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+    else
+        rm -rf .venv
+    fi
 fi
 
 run_step 32 45 "pip install --upgrade pip setuptools wheel" "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel || true
 run_step 45 70 "pip install --only-binary=:all: pandas pyarrow polars" "$PYTHON_BIN" -m pip install --only-binary=:all: pandas pyarrow polars || true
 run_step 70 84 "pip install nfl_data_py" "$PYTHON_BIN" -m pip install nfl_data_py || true
 run_step 84 90 "pip install --only-binary=:all: nflreadpy" "$PYTHON_BIN" -m pip install --only-binary=:all: nflreadpy || true
-run_step 90 96 "pip install -e . --no-build-isolation" "$PYTHON_BIN" -m pip install -e . --no-build-isolation || run_step 92 96 "pip install -e ." "$PYTHON_BIN" -m pip install -e .
+run_step 90 96 "pip install -e . --no-build-isolation" "$PYTHON_BIN" -m pip install -e . --no-build-isolation || run_step 92 96 "pip install -e ." "$PYTHON_BIN" -m pip install -e . || true
 
 if command -v Rscript >/dev/null 2>&1; then
     run_step 96 98 "Rscript -e install.packages('nflreadr')" Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" || true
 fi
 
 create_local_launcher
-run_step 98 100 "./nfl-stat --version" "$SCRIPT_DIR/nfl-stat" --version
-update_ui 100 "Done! Run: ./nfl-stat  (or ./install.sh -v for verbose)"
-printf "\n"
-prompt_add_to_path
+if run_step 98 100 "./nfl-stat --version" "$SCRIPT_DIR/nfl-stat" --version; then
+    rm -f "$LOG_FILE"
+    update_ui 100 "Done! Run: ./nfl-stat  (or ./install.sh -v for verbose)"
+    printf "\n"
+    prompt_add_to_path
+else
+    update_ui 100 "ERROR: Verification failed (see $LOG_FILE)"
+    printf "\n"
+    exit 1
+fi
