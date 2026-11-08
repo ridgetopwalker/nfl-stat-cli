@@ -77,10 +77,12 @@ keep_cols <- intersect(
     "yards_gained", "epa", "wpa", "cpoe", "complete_pass", "pass_attempt",
     "rush_attempt", "down", "ydstogo", "yardline_100", "success", "series_success", "first_down",
     "touchdown", "pass_touchdown", "rush_touchdown", "interception", "fumble_lost", "sack", "team_win",
-    "home_score", "away_score", "score_differential", "qtr", "desc"),
+    "home_score", "away_score", "score_differential", "qtr", "desc",
+    "penalty", "penalty_type", "penalty_yards", "penalty_team", "penalty_player_name",
+    "timeout", "timeout_team", "posteam_timeouts_remaining", "defteam_timeouts_remaining"),
   names(pbp)
 )
 
-out_df <- pbp[!is.na(pbp$posteam) & ((!is.na(pbp$pass_attempt) & pbp$pass_attempt == 1) | (!is.na(pbp$rush_attempt) & pbp$rush_attempt == 1)), keep_cols]
+out_df <- pbp[!is.na(pbp$posteam) & ((!is.na(pbp$pass_attempt) & pbp$pass_attempt == 1) | (!is.na(pbp$rush_attempt) & pbp$rush_attempt == 1) | (!is.na(pbp$penalty) & pbp$penalty == 1) | (!is.na(pbp$timeout) & pbp$timeout == 1)), keep_cols]
 write.csv(out_df, file = output_csv, row.names = FALSE, na = "")
 message(sprintf("[nflverse-bridge] Exported %d plays to %s", nrow(out_df), output_csv))

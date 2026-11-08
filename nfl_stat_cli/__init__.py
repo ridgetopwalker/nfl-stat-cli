@@ -666,6 +666,27 @@ SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
      "penalty": 1, "penalty_type": "Defensive Pass Interference", "penalty_yards": 25.0, "penalty_team": "KC", "penalty_player_name": "T.McDuffie",
      "team_win": 0, "home_score": 27, "away_score": 20, "qtr": 3,
      "desc": "(03:40 Q3) L.Jackson pass incomplete deep left to Z.Flowers. PENALTY on KC-T.McDuffie, Defensive Pass Interference, 25 yards, enforced at KC 35."},
+    # Timeout Plays (2025 Week 1 BAL @ KC)
+    {"play_id": 125, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "KC", "defteam": "BAL", "conf": "AFC",
+     "qb_name": "", "receiver_player_name": "", "rusher_player_name": "", "player_name": "",
+     "play_type": "no_play", "play_concept": "timeout", "play_direction": "", "is_screen": 0, "play_action": 0, "shotgun": 0,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": 0.0,
+     "epa": 0.0, "wpa": 0.0, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 0, "rush_attempt": 0,
+     "down": 4, "ydstogo": 1, "yardline_100": 34, "series_success": 0, "touchdown": 0, "interception": 0, "sack": 0,
+     "timeout": 1, "timeout_team": "KC", "timeout_coach": "Andy Reid",
+     "posteam_timeouts_remaining": 2, "defteam_timeouts_remaining": 3,
+     "team_win": 1, "home_score": 27, "away_score": 20, "qtr": 4,
+     "desc": "(02:15 Q4) Timeout #1 by KC at 02:15."},
+    {"play_id": 126, "season": 2025, "week": 1, "game_id": "2025_01_BAL_KC", "posteam": "BAL", "defteam": "KC", "conf": "AFC",
+     "qb_name": "", "receiver_player_name": "", "rusher_player_name": "", "player_name": "",
+     "play_type": "no_play", "play_concept": "timeout", "play_direction": "", "is_screen": 0, "play_action": 0, "shotgun": 0,
+     "air_yards": 0.0, "yards_after_catch": 0.0, "xyac_mean_yardage": 0.0, "yards_gained": 0.0,
+     "epa": 0.0, "wpa": 0.0, "cpoe": 0.0, "complete_pass": 0, "pass_attempt": 0, "rush_attempt": 0,
+     "down": 3, "ydstogo": 10, "yardline_100": 65, "series_success": 0, "touchdown": 0, "interception": 0, "sack": 0,
+     "timeout": 1, "timeout_team": "BAL", "timeout_coach": "John Harbaugh",
+     "posteam_timeouts_remaining": 1, "defteam_timeouts_remaining": 2,
+     "team_win": 0, "home_score": 27, "away_score": 20, "qtr": 4,
+     "desc": "(01:10 Q4) Timeout #2 by BAL at 01:10."},
 
     # 2024 Historical Lookback plays for Stat Page trend tracking
     {"play_id": 201, "season": 2024, "week": 1, "game_id": "2024_01_DET_KC", "posteam": "KC", "defteam": "DET", "conf": "AFC",
@@ -953,7 +974,10 @@ class NFLDataBridge:
             pa = _safe_int(r.get("pass_attempt"), 0)
             ra = _safe_int(r.get("rush_attempt"), 0)
             pt = _safe_str(r.get("play_type"), "").lower()
-            if pa == 0 and ra == 0 and pt not in ("pass", "run"):
+            pen = _safe_opt_flag(r.get("penalty")) or 0
+            to = _safe_opt_flag(r.get("timeout")) or 0
+            desc = _safe_str(r.get("desc"), "").lower()
+            if pa == 0 and ra == 0 and pt not in ("pass", "run") and not pen and not to and "penalty" not in desc and "timeout" not in desc:
                 continue
             out.append(self._normalize_row(r, idx))
         return out
@@ -1082,7 +1106,13 @@ class NFLDataBridge:
             if m_yds and ("penalty" in desc.lower() or "holding" in desc.lower() or "interference" in desc.lower()):
                 penalty_yards = float(m_yds.group(1))
 
-        penalty_team = _safe_str(r.get("penalty_team"), "") or (posteam if penalty else "")
+        penalty_team = _safe_str(r.get("penalty_team"), "")
+        if not penalty_team and penalty:
+            m_pteam = re.search(r"\bpenalty\s+on\s+([A-Za-z]+)\b", desc, re.IGNORECASE)
+            if m_pteam:
+                penalty_team = resolve_team_abbr(m_pteam.group(1)) or m_pteam.group(1).upper()
+            else:
+                penalty_team = posteam if penalty else ""
         penalty_player_name = _safe_str(r.get("penalty_player_name"), "")
 
         # Coaching attributes
@@ -1096,6 +1126,39 @@ class NFLDataBridge:
         oc = str(staff.get("oc", ""))
         def_staff = get_team_coaching_staff(defteam, season=season_val)
         dc = str(def_staff.get("dc", ""))
+
+        # Beneficiary / Favored team for penalty
+        penalty_favored_team = ""
+        if penalty and penalty_team:
+            if penalty_team == posteam:
+                penalty_favored_team = defteam
+            elif penalty_team == defteam:
+                penalty_favored_team = posteam
+            elif penalty_team == home_team:
+                penalty_favored_team = away_team
+            elif penalty_team == away_team:
+                penalty_favored_team = home_team
+            else:
+                penalty_favored_team = defteam if posteam == penalty_team else posteam
+
+        penalty_coach = get_team_head_coach(penalty_team, season=season_val) if penalty_team else coach
+        penalty_favored_coach = get_team_head_coach(penalty_favored_team, season=season_val) if penalty_favored_team else ""
+
+        # Timeout attributes
+        raw_to = _safe_opt_flag(r.get("timeout"))
+        timeout = raw_to if raw_to is not None else (
+            1 if (re.search(r"\btimeout\b", desc, re.IGNORECASE) and not re.search(r"\binjury\s+timeout\b", desc, re.IGNORECASE)) else 0
+        )
+        timeout_team = _safe_str(r.get("timeout_team"), "")
+        if timeout and not timeout_team:
+            m_to = re.search(r"\btimeout\s+(?:#\d+\s+)?(?:by|of)\s+([A-Za-z]+)\b", desc, re.IGNORECASE)
+            if m_to:
+                timeout_team = resolve_team_abbr(m_to.group(1)) or m_to.group(1).upper()
+            else:
+                timeout_team = posteam
+        timeout_coach = get_team_head_coach(timeout_team, season=season_val) if timeout_team else coach
+        posteam_timeouts_rem = _safe_int(r.get("posteam_timeouts_remaining"), 3)
+        defteam_timeouts_rem = _safe_int(r.get("defteam_timeouts_remaining"), 3)
 
         return {
             "play_id": _safe_int(r.get("play_id"), idx),
@@ -1123,6 +1186,14 @@ class NFLDataBridge:
             "penalty_yards": penalty_yards,
             "penalty_team": penalty_team,
             "penalty_player_name": penalty_player_name,
+            "penalty_favored_team": penalty_favored_team,
+            "penalty_coach": penalty_coach,
+            "penalty_favored_coach": penalty_favored_coach,
+            "timeout": timeout,
+            "timeout_team": timeout_team,
+            "timeout_coach": timeout_coach,
+            "posteam_timeouts_remaining": posteam_timeouts_rem,
+            "defteam_timeouts_remaining": defteam_timeouts_rem,
             "play_type": play_type,
             "play_concept": play_concept,
             "play_direction": direction,
@@ -1692,6 +1763,61 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="yds",
         dependencies=["penalty_yards"],
     ),
+    "penalties_drawn": StatDefinition(
+        name="penalties_drawn",
+        title="Penalties in Favor / Drawn (Pen Drawn)",
+        category="traditional",
+        group_by="team",
+        formula="penalties_drawn",
+        description="Total penalties called against opponents that benefited this team (penalties in their favor).",
+        calculation_explained="Sum of plays where an accepted penalty was called on the opponent in favor of this team.",
+        unit="pen",
+        dependencies=["penalties_drawn"],
+    ),
+    "penalty_yards_drawn": StatDefinition(
+        name="penalty_yards_drawn",
+        title="Penalty Yards in Favor / Drawn (Pen Yds Drawn)",
+        category="traditional",
+        group_by="team",
+        formula="penalty_yards_drawn",
+        description="Total penalty yards awarded to this team from opponent infractions (penalty yards in their favor).",
+        calculation_explained="Sum of penalty yards assessed against the opponent on accepted penalties.",
+        unit="yds",
+        dependencies=["penalty_yards_drawn"],
+    ),
+    "net_penalties": StatDefinition(
+        name="net_penalties",
+        title="Net Penalty Differential (Net Pen)",
+        category="traditional",
+        group_by="team",
+        formula="penalties_drawn - penalties",
+        description="Net penalty differential (penalties in team's favor minus penalties committed).",
+        calculation_explained="Penalties drawn in team's favor minus penalties committed by the team.",
+        unit="pen",
+        dependencies=["penalties_drawn", "penalties"],
+    ),
+    "net_penalty_yards": StatDefinition(
+        name="net_penalty_yards",
+        title="Net Penalty Yards Differential (Net Pen Yds)",
+        category="traditional",
+        group_by="team",
+        formula="penalty_yards_drawn - penalty_yards",
+        description="Net penalty yards differential (penalty yards in team's favor minus penalty yards assessed).",
+        calculation_explained="Penalty yards drawn in team's favor minus penalty yards assessed against team.",
+        unit="yds",
+        dependencies=["penalty_yards_drawn", "penalty_yards"],
+    ),
+    "timeouts": StatDefinition(
+        name="timeouts",
+        title="Timeouts Used (TO Used)",
+        category="traditional",
+        group_by="coach",
+        formula="timeouts",
+        description="Total timeouts called / used by the head coach or team.",
+        calculation_explained="Sum of timeout events charged to the coach or team (timeout == 1).",
+        unit="TO",
+        dependencies=["timeouts"],
+    ),
 }
 
 # Example / Showcase Custom Stats (demonstrating how custom stats work without polluting a fresh install)
@@ -1839,6 +1965,10 @@ GROUP_BY_COLUMN_MAP: Dict[str, str] = {
     "oc": "oc",
     "dc": "dc",
     "penalty_type": "penalty_type",
+    "penalty_team": "penalty_team",
+    "penalty_favored_team": "penalty_favored_team",
+    "timeout_team": "timeout_team",
+    "timeout_coach": "timeout_coach",
     "play_concept": "play_concept",
     "play_type": "play_type",
     "conference": "conf",
@@ -1864,6 +1994,8 @@ BASE_METRIC_KEYS: Set[str] = {
     "turnover_rate", "sack_rate", "td_rate", "int_rate", "success_rate",
     "nfl_passer_rating", "penalties", "penalty_yards", "penalty_rate",
     "penalties_per_game", "penalty_yards_per_game",
+    "penalties_drawn", "penalty_yards_drawn", "net_penalties", "net_penalty_yards",
+    "timeouts", "timeouts_used", "timeouts_called",
 }
 
 PLAY_ROW_KEYS: Set[str] = {
@@ -1871,6 +2003,9 @@ PLAY_ROW_KEYS: Set[str] = {
     "qb_name", "receiver_player_name", "rusher_player_name", "player_name",
     "coach", "head_coach", "oc", "dc", "home_coach", "away_coach",
     "penalty", "penalty_type", "penalty_yards", "penalty_team", "penalty_player_name",
+    "penalty_favored_team", "penalty_coach", "penalty_favored_coach",
+    "timeout", "timeout_team", "timeout_coach",
+    "posteam_timeouts_remaining", "defteam_timeouts_remaining",
     "play_type", "play_concept", "play_direction", "is_screen", "play_action",
     "shotgun", "no_huddle", "red_zone", "air_yards", "yards_after_catch",
     "xyac_mean_yardage", "yards_gained", "epa", "wpa", "cpoe", "complete_pass",
@@ -2310,6 +2445,9 @@ class StatEngine:
         play_action_plays = sum(1 for p in plays if int(p.get("play_action", 0)) == 1)
         penalties = sum(int(p.get("penalty", 0)) for p in plays)
         penalty_yards = sum(float(p.get("penalty_yards", 0.0)) for p in plays)
+        penalties_drawn = sum(int(p.get("penalty_drawn", p.get("penalty", 0))) for p in plays)
+        penalty_yards_drawn = sum(float(p.get("penalty_yards_drawn", p.get("penalty_yards", 0.0))) for p in plays)
+        timeouts = sum(int(p.get("timeout", 0)) for p in plays)
 
         # Key games by (game_id, posteam) so multi-team groups count team-game outcomes accurately
         games: Dict[Tuple[str, str], int] = {}
@@ -2391,6 +2529,13 @@ class StatEngine:
             "penalty_rate": (float(penalties) / n) * 100.0,
             "penalties_per_game": float(penalties) / float(games_played),
             "penalty_yards_per_game": float(penalty_yards) / float(games_played),
+            "penalties_drawn": float(penalties_drawn),
+            "penalty_yards_drawn": float(penalty_yards_drawn),
+            "net_penalties": float(penalties_drawn - penalties),
+            "net_penalty_yards": float(penalty_yards_drawn - penalty_yards),
+            "timeouts": float(timeouts),
+            "timeouts_used": float(timeouts),
+            "timeouts_called": float(timeouts),
         }
         return base
 
@@ -2535,14 +2680,37 @@ class StatEngine:
         if extra_filter:
             filtered = self.apply_filter(filtered, extra_filter)
         group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
-        key_field = GROUP_BY_COLUMN_MAP.get(group_col, "posteam")
+        if stat_name in ("penalties", "penalty_yards", "penalty_rate", "penalties_per_game", "penalty_yards_per_game"):
+            if group_col in ("coach", "head_coach"):
+                key_field = "penalty_coach"
+            elif group_col in ("player", "rusher", "receiver", "qb"):
+                key_field = "penalty_player_name"
+            elif group_col == "penalty_type":
+                key_field = "penalty_type"
+            else:
+                key_field = "penalty_team"
+            filtered = [p for p in filtered if int(p.get("penalty", 0)) == 1 and p.get(key_field)]
+        elif stat_name in ("penalties_drawn", "penalty_yards_drawn", "net_penalties", "net_penalty_yards"):
+            if group_col in ("coach", "head_coach"):
+                key_field = "penalty_favored_coach"
+            else:
+                key_field = "penalty_favored_team"
+            filtered = [p for p in filtered if int(p.get("penalty", 0)) == 1 and p.get(key_field)]
+        elif stat_name in ("timeouts", "timeouts_used", "timeouts_called"):
+            if group_col in ("team", "timeout_team"):
+                key_field = "timeout_team"
+            else:
+                key_field = "timeout_coach"
+            filtered = [p for p in filtered if int(p.get("timeout", 0)) == 1 and p.get(key_field)]
+        else:
+            key_field = GROUP_BY_COLUMN_MAP.get(group_col, "posteam")
 
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for p in filtered:
             gval = str(p.get(key_field) or "").strip()
             if not gval and key_field == "player_name":
                 gval = str(p.get("receiver_player_name") or p.get("rusher_player_name") or p.get("qb_name") or p.get("kicker_player_name") or p.get("punter_player_name") or "").strip()
-            if not gval or gval.lower() in ("unknown qb", "unknown player"):
+            if not gval or gval.lower() in ("unknown qb", "unknown player", "unknown coach", "none", ""):
                 continue
             groups.setdefault(gval, []).append(p)
 
@@ -2556,10 +2724,19 @@ class StatEngine:
             val = float(metrics.get(stat_name, 0.0))
             if not math.isfinite(val):
                 val = 0.0
+            ent_team = str(gplays[0].get("timeout_team") if stat_name in ("timeouts", "timeouts_used") else (
+                gplays[0].get("penalty_favored_team") if stat_name in ("penalties_drawn", "penalty_yards_drawn") else (
+                    gplays[0].get("penalty_team") if stat_name in ("penalties", "penalty_yards") else gplays[0].get("posteam", "")
+                )
+            ))
+            if not ent_team and key_field in ("coach", "head_coach", "penalty_coach", "timeout_coach"):
+                c_inf = find_coach_team(gval)
+                ent_team = c_inf[0] if c_inf else ""
+            ent_conf = "AFC" if ent_team in AFC_TEAMS else ("NFC" if ent_team in NFC_TEAMS else str(gplays[0].get("conf", "")))
             rows.append({
                 "entity": gval,
-                "team": str(gplays[0].get("posteam", "")),
-                "conf": str(gplays[0].get("conf", "")),
+                "team": ent_team,
+                "conf": ent_conf,
                 "value": round(val, 2),
                 "plays": int(metrics["plays"]),
                 "games_played": gp,
@@ -3736,6 +3913,14 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:passer\s+rating|qb\s+rating|passing\s+rating)\b", "passer_rating", "qb"),
         # First Downs
         (r"\b(?:first\s+down|first\s+downs|1st\s+downs)\b", "first_downs", "team"),
+        # Timeouts Used / Called
+        (r"\b(?:timeouts?\s+used|timeouts?\s+called|used\s+(?:the\s+)?most\s+timeouts?|called\s+(?:the\s+)?most\s+timeouts?|call\s+(?:the\s+)?most\s+timeouts?|most\s+timeouts?|timeouts?|timeout)\b", "timeouts", "coach"),
+        # Penalties in Favor / Drawn / Benefited
+        (r"\b(?:penalties\s+in\s+(?:their|its)?\s*favor|penalties\s+drawn|opponent\s+penalties|penalties\s+against\s+(?:their\s+)?opponents?|benefited\s+(?:the\s+most\s+)?from\s+penalties|benefitted\s+(?:the\s+most\s+)?from\s+penalties|penalties\s+awarded|penalties\s+in\s+favor)\b", "penalties_drawn", "team"),
+        (r"\b(?:penalty\s+yards\s+in\s+(?:their|its)?\s*favor|penalty\s+yards\s+drawn|opponent\s+penalty\s+yards|penalty\s+yardage\s+in\s+(?:their|its)?\s*favor)\b", "penalty_yards_drawn", "team"),
+        # Net Penalties
+        (r"\b(?:net\s+penalties|net\s+penalty|penalty\s+differential|penalty\s+margin)\b", "net_penalties", "team"),
+        (r"\b(?:net\s+penalty\s+yards|net\s+penalty\s+yardage)\b", "net_penalty_yards", "team"),
         # Penalty Yards
         (r"\b(?:penalty\s+yards|pen\s+yds|penalty\s+yardage|yards\s+penalized)\b|\b(?:most\s+penalty\s+yards|highest\s+penalty\s+yards)\b", "penalty_yards", "team"),
         # Total Penalties
@@ -4022,14 +4207,18 @@ class NaturalLanguageStatAssistant:
                     "player", "players", "qb", "qbs", "quarterback", "quarterbacks", "rusher",
                     "rushers", "receiver", "receivers", "kicker", "punter",
                     "coach", "coaches", "coaching", "staff", "hc", "oc", "dc", "coordinator",
-                    "penalty", "penalties", "flags",
+                    "penalty", "penalties", "flags", "timeout", "timeouts", "favor", "benefited", "benefitted", "drawn", "called", "used",
                 } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
                 cand_words = set(cand_low.split())
                 if not cand_words.intersection(ignore_words) and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
 
         # Check if user is asking for Coaching Staff information
-        has_stat_term = any(w in ql for w in ("epa", "yards", "stat", "stats", "leaderboard", "rank", "ranking", "rate", "rating", "success", "cpoe", "wpa", "points", "touchdowns"))
+        has_stat_term = any(w in ql for w in (
+            "epa", "yards", "stat", "stats", "leaderboard", "rank", "ranking", "rate", "rating",
+            "success", "cpoe", "wpa", "points", "touchdowns", "timeout", "timeouts", "penalty",
+            "penalties", "flags", "favor", "benefited", "benefitted", "drawn", "differential"
+        ))
         is_coaching_query = (not has_stat_term) and (
             any(phrase in ql for phrase in (
                 "head coach", "coach of", "coaches the", "coached by", "offensive coordinator",
@@ -4405,7 +4594,7 @@ class NaturalLanguageStatAssistant:
             group_override = "conference"
         elif any(w in ql for w in ("by concept", "play concept", "offensive play", "by play")):
             group_override = "play_concept"
-        elif any(w in ql for w in ("by coach", "coaches", "each coach", "head coach", "per coach", "best coach", "rank coach")):
+        elif any(w in ql for w in ("by coach", "coaches", "each coach", "head coach", "per coach", "best coach", "rank coach", "which coach", "what coach")):
             group_override = "coach"
         elif position:
             pos_map = {"QB": "qb", "RB": "rusher", "WR": "receiver", "TE": "receiver", "K": "player", "P": "player", "DEF": "player"}
@@ -4414,6 +4603,17 @@ class NaturalLanguageStatAssistant:
             group_override = matched_group
         elif player_filter and not group_override:
             group_override = "player" if "player" in GROUP_BY_COLUMN_MAP else "qb"
+
+        if matched_stat in ("timeouts", "timeouts_used", "timeouts_called"):
+            if "team" in ql:
+                group_override = "team"
+            elif "coach" in ql or "who " in ql or not group_override:
+                group_override = "coach"
+        elif matched_stat in ("penalties_drawn", "penalty_yards_drawn", "net_penalties", "net_penalty_yards"):
+            if "coach" in ql:
+                group_override = "coach"
+            elif "team" in ql or not group_override:
+                group_override = "team"
 
         if matched_stat == "passing_yards" and position == "RB":
             matched_stat = "rushing_yards"
@@ -4432,6 +4632,7 @@ class NaturalLanguageStatAssistant:
             "who had the most", "who has the most", "which player has the most", "which qb has the most",
             "which running back has the most", "who is leading", "leading in", "leader in", "leaders in",
             "who led", "who leads", "leader", "leaders", "leading", "most", "highest", "best", "top",
+            "used the most", "called the most", "had the most", "has had the most", "as had the most",
         ))
         top_m = re.search(r"\btop\s+(\d+)\b", ql)
         limit_val: Optional[int] = None
@@ -5797,10 +5998,17 @@ def render_team_drilldown_view(
     off_succ = sum(1 for p in off_plays if int(p.get("series_success", 0)) == 1)
     off_succ_rate = (100.0 * off_succ / tot_off) if tot_off else 0.0
 
-    off_pens = sum(int(p.get("penalty", 0)) for p in off_plays)
-    off_pen_yds = sum(float(p.get("penalty_yards", 0.0)) for p in off_plays)
-    def_pens = sum(int(p.get("penalty", 0)) for p in def_plays)
-    def_pen_yds = sum(float(p.get("penalty_yards", 0.0)) for p in def_plays)
+    all_team_plays = off_plays + def_plays
+    pens_committed = sum(1 for p in all_team_plays if int(p.get("penalty", 0)) == 1 and (p.get("penalty_team") == team_abbr or (not p.get("penalty_team") and p.get("posteam") == team_abbr)))
+    pen_yds_committed = sum(float(p.get("penalty_yards", 0.0)) for p in all_team_plays if int(p.get("penalty", 0)) == 1 and (p.get("penalty_team") == team_abbr or (not p.get("penalty_team") and p.get("posteam") == team_abbr)))
+    pens_drawn = sum(1 for p in all_team_plays if int(p.get("penalty", 0)) == 1 and (p.get("penalty_favored_team") == team_abbr or (p.get("penalty_team") and p.get("penalty_team") != team_abbr)))
+    pen_yds_drawn = sum(float(p.get("penalty_yards", 0.0)) for p in all_team_plays if int(p.get("penalty", 0)) == 1 and (p.get("penalty_favored_team") == team_abbr or (p.get("penalty_team") and p.get("penalty_team") != team_abbr)))
+    timeouts_called = sum(1 for p in all_team_plays if int(p.get("timeout", 0)) == 1 and p.get("timeout_team") == team_abbr)
+
+    off_pens = pens_committed
+    off_pen_yds = pen_yds_committed
+    def_pens = pens_drawn
+    def_pen_yds = pen_yds_drawn
 
     pass_plays = [p for p in off_plays if int(p.get("pass_attempt", 0)) == 1 or p.get("play_type") == "pass"]
     rush_plays = [p for p in off_plays if int(p.get("rush_attempt", 0)) == 1 or p.get("play_type") == "run"]
@@ -5905,7 +6113,9 @@ def render_team_drilldown_view(
         f"  │ Yards / Play Allowed:{def_ypp:<14.2f} Defensive EPA / Play:   {def_epa_play:<+10.2f} EPA/play   │",
         f"  │ Sacks Generated:     {def_sacks:<14} Interceptions Caught:    {def_ints:<22} │",
         f"  │ Turnovers Forced:    {def_to:<14} Defensive Stop Rate:    {def_stops}/{tot_def} ({def_stop_rate:.1f}%)           │",
-        f"  │ Opponent Penalties:  {def_pens:<14} Opponent Penalty Yards: {def_pen_yds:<10.1f} yds       │",
+        f"  │ Penalties Committed: {pens_committed:<14} Penalty Yds Conceded:   {pen_yds_committed:<10.1f} yds       │",
+        f"  │ Penalties in Favor:  {pens_drawn:<14} Penalty Yds in Favor:  {pen_yds_drawn:<10.1f} yds       │",
+        f"  │ Timeouts Charged:    {timeouts_called:<14} Net Penalty Margin:     {pens_drawn - pens_committed:<+6} ({pen_yds_drawn - pen_yds_committed:+.1f} yds)  │",
         f"  {C.BOLD}{C.GREEN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
         "",
         f"  {C.BOLD}{C.CYAN}┌─ ROSTER & UNIT LEADERS ──────────────────────────────────────────────────────────────┐{C.RESET}",
