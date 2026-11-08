@@ -74,5 +74,6 @@ nfl-stat = "nfl_stat_cli:main"
 nfl-stat-cli = "nfl_stat_cli:main"
 
 [tool.setuptools]
-py-modules = ["nfl_stat_cli"]
+packages = ["nfl_stat_cli"]
+package-data = {"nfl_stat_cli" = ["*.R", "*.json"]}
 include-package-data = true
