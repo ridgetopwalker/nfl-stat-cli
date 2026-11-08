@@ -2,7 +2,7 @@
 # ==============================================================================
 # nfl-stat-cli : Run-Once Installer for Linux, WSL & macOS (*nix)
 # Usage:
-#   ./install.sh        Compact UI (ASCII Art + Full-Width Progress Bar + 1-Line Live Command)
+#   ./install.sh        Compact UI (ASCII Art + 1 Progress Bar Line + 1 Command Line)
 #   ./install.sh -v     Verbose mode (full command and pip output)
 # ==============================================================================
 set -e
@@ -28,84 +28,20 @@ CYAN="\033[96m"
 GREEN="\033[92m"
 WHITE="\033[97m"
 GRAY="\033[90m"
-RED="\033[91m"
-
-BANNER_WIDTH=90
-BAR_INNER_WIDTH=83  # '[' (1) + 83 + '] ' (2) + '100%' (4) = 90 chars total (matches banner width)
 
 print_banner() {
-    printf "${BOLD}${GOLD}╔════════════════════════════════════════════════════════════════════════════════════════╗${RESET}\n"
-    printf "${BOLD}${GOLD}║${RESET}  ${BOLD}${CYAN}███╗   ██╗███████╗██╗         ███████╗████████╗ █████╗ ████████╗   ██████╗██╗     ██╗${RESET}  ${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}║${RESET}  ${BOLD}${CYAN}████╗  ██║██╔════╝██║         ██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝  ██╔════╝██║     ██║${RESET}  ${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}║${RESET}  ${BOLD}${WHITE}██╔██╗ ██║█████╗  ██║   █████╗███████╗   ██║   ███████║   ██║     ██║     ██║     ██║${RESET}  ${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}║${RESET}  ${BOLD}${GREEN}██║╚██╗██║██╔══╝  ██║   ╚════╝╚════██║   ██║   ██╔══██║   ██║     ██║     ██║     ██║${RESET}  ${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}║${RESET}  ${BOLD}${GREEN}██║ ╚████║██║     ███████╗    ███████║   ██║   ██║  ██║   ██║     ╚██████╗███████╗██║${RESET}  ${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}║${RESET}  ${DIM}${WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer     ${RESET}${BOLD}${GOLD}║${RESET}\n"
-    printf "${BOLD}${GOLD}╚════════════════════════════════════════════════════════════════════════════════════════╝${RESET}\n"
-}
-
-# Draw the 90-char progress bar on line 1 and the single overwriting command line on line 2
-update_ui() {
-    local pct="$1"
-    local cmd_text="$2"
-    if [ "$VERBOSE" -eq 1 ]; then
-        return
-    fi
-
-    local filled=$(( (pct * BAR_INNER_WIDTH) / 100 ))
-    local empty=$(( BAR_INNER_WIDTH - filled ))
-
-    local bar_fill=""
-    local bar_empty=""
-    local i=0
-    while [ $i -lt $filled ]; do
-        bar_fill="${bar_fill}█"
-        i=$(( i + 1 ))
-    done
-    i=0
-    while [ $i -lt $empty ]; do
-        bar_empty="${bar_empty}░"
-        i=$(( i + 1 ))
-    done
-
-    # Truncate command text so it never wraps past 90 columns
-    local clean_cmd
-    clean_cmd="$(printf "%s" "$cmd_text" | tr -d '\r\n' | cut -c 1-86)"
-
-    # Move cursor up 2 lines, clear & draw progress bar, move down & clear & draw single command line
-    printf "\033[2A\r\033[2K"
-    printf "${BOLD}${GOLD}[${GREEN}%s${GRAY}%s${GOLD}] %3d%%${RESET}\n" "$bar_fill" "$bar_empty" "$pct"
-    printf "\r\033[2K${CYAN}❯${RESET} ${DIM}%s${RESET}\n" "$clean_cmd"
-}
-
-# Run a command: in verbose mode show all output; in default mode update the single command line live
-run_cmd() {
-    local pct_start="$1"
-    local pct_end="$2"
-    local display_cmd="$3"
-    shift 3
-
-    if [ "$VERBOSE" -eq 1 ]; then
-        echo "  -> $display_cmd"
-        "$@"
-        return $?
-    fi
-
-    update_ui "$pct_start" "$display_cmd"
-    set +e
-    "$@" 2>&1 | while IFS= read -r line; do
-        if [ -n "$line" ]; then
-            update_ui "$pct_start" "$display_cmd  [$line]"
-        fi
-    done
-    local status=${PIPESTATUS[0]}
-    set -e
-    update_ui "$pct_end" "$display_cmd"
-    return $status
+    printf "${BOLD}${GOLD}╔══════════════════════════════════════════════════════════════════════════════════════╗${RESET}\n"
+    printf "${BOLD}${GOLD}║${RESET} ${BOLD}${CYAN}███╗   ██╗███████╗██╗         ███████╗████████╗ █████╗ ████████╗   ██████╗██╗     ██╗${RESET} ${BOLD}${GOLD}║${RESET}\n"
+    printf "${BOLD}${GOLD}║${RESET} ${BOLD}${CYAN}████╗  ██║██╔════╝██║         ██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝  ██╔════╝██║     ██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
+    printf "${BOLD}${GOLD}║${RESET} ${BOLD}${WHITE}██╔██╗ ██║█████╗  ██║   █████╗███████╗   ██║   ███████║   ██║     ██║     ██║     ██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
+    printf "${BOLD}${GOLD}║${RESET} ${BOLD}${GREEN}██║╚██╗██║██╔══╝  ██║   ╚════╝╚════██║   ██║   ██╔══██║   ██║     ██║     ██║     ██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
+    printf "${BOLD}${GOLD}║${RESET} ${BOLD}${GREEN}██║ ╚████║██║     ███████╗    ███████║   ██║   ██║  ██║   ██║     ╚██████╗███████╗██║${RESET} ${BOLD}${GOLD}║${RESET}\n"
+    printf "${BOLD}${GOLD}║${RESET} ${DIM}${WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer   ${RESET} ${BOLD}${GOLD}║${RESET}\n"
+    printf "${BOLD}${GOLD}╚══════════════════════════════════════════════════════════════════════════════════════╝${RESET}\n"
 }
 
 # ==============================================================================
-# VERBOSE MODE (-v / --verbose): Original full-log installer
+# VERBOSE MODE (-v / --verbose): Full-log installer
 # ==============================================================================
 if [ "$VERBOSE" -eq 1 ]; then
     echo "======================================================================"
@@ -183,58 +119,121 @@ if [ "$VERBOSE" -eq 1 ]; then
 fi
 
 # ==============================================================================
-# DEFAULT COMPACT MODE: ASCII Art + Full-Width Progress Bar + Single-Line Command
+# DEFAULT COMPACT MODE:
+# 1. Prints the ASCII art banner
+# 2. Below that: ONE progress bar line (exact width of banner, capped to terminal width so it never wraps)
+# 3. Below that: ONE command line that overwrites itself in-place
 # ==============================================================================
-print_banner
-# Reserve 2 lines below the ASCII art (Line 1: Progress Bar, Line 2: Latest Command)
-printf "\n\n"
-update_ui 2 "Checking Python 3 installation..."
+LOG_FILE="/tmp/nfl_stat_cli_install.log"
+: > "$LOG_FILE"
 
+TERM_COLS="$(tput cols 2>/dev/null || echo 88)"
+TARGET_WIDTH=88
+if [ "$TERM_COLS" -lt 89 ] 2>/dev/null; then
+    TARGET_WIDTH=$(( TERM_COLS - 1 ))
+fi
+if [ "$TARGET_WIDTH" -lt 30 ]; then
+    TARGET_WIDTH=30
+fi
+# '[' (1) + BAR_INNER_WIDTH + '] ' (2) + '100%' (4) = TARGET_WIDTH
+BAR_INNER_WIDTH=$(( TARGET_WIDTH - 7 ))
+CMD_MAX_LEN=$(( TARGET_WIDTH - 4 ))
+
+# Redraw the single progress bar line (Line 1) and single command line (Line 2) in-place
+update_ui() {
+    local pct="$1"
+    local cmd_text="$2"
+
+    local filled=$(( (pct * BAR_INNER_WIDTH) / 100 ))
+    local empty=$(( BAR_INNER_WIDTH - filled ))
+
+    local bar_fill=""
+    local bar_empty=""
+    local i=0
+    while [ $i -lt $filled ]; do
+        bar_fill="${bar_fill}█"
+        i=$(( i + 1 ))
+    done
+    i=0
+    while [ $i -lt $empty ]; do
+        bar_empty="${bar_empty}░"
+        i=$(( i + 1 ))
+    done
+
+    local clean_cmd="${cmd_text:0:$CMD_MAX_LEN}"
+
+    # Cursor rests on Line 2 (command line).
+    # Clear Line 2, move up 1 line to Line 1 (progress bar), clear Line 1, print bar + \n, print command (no \n).
+    printf "\r\033[2K\033[1A\r\033[2K"
+    printf "${BOLD}${GOLD}[${GREEN}%s${GRAY}%s${GOLD}] %3d%%${RESET}\n" "$bar_fill" "$bar_empty" "$pct"
+    printf "${CYAN}❯${RESET} ${DIM}%s${RESET}" "$clean_cmd"
+}
+
+run_step() {
+    local pct_start="$1"
+    local pct_end="$2"
+    local display_cmd="$3"
+    shift 3
+
+    update_ui "$pct_start" "$display_cmd"
+    "$@" >>"$LOG_FILE" 2>&1
+    local rc=$?
+    update_ui "$pct_end" "$display_cmd"
+    return $rc
+}
+
+print_banner
+# Create Line 1 (progress bar) and move cursor onto Line 2 (command line)
+printf "\n"
+
+update_ui 5 "Checking Python 3 installation..."
 if ! command -v python3 >/dev/null 2>&1; then
     if command -v brew >/dev/null 2>&1; then
-        run_cmd 4 12 "brew install python" brew install python
+        run_step 5 15 "brew install python" brew install python
     elif command -v apt-get >/dev/null 2>&1; then
-        run_cmd 4 12 "sudo apt-get install -y python3 python3-pip python3-venv" bash -c "sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv"
+        run_step 5 15 "sudo apt-get install -y python3 python3-pip python3-venv" bash -c "sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv"
     elif command -v dnf >/dev/null 2>&1; then
-        run_cmd 4 12 "sudo dnf install -y python3 python3-pip" sudo dnf install -y python3 python3-pip
+        run_step 5 15 "sudo dnf install -y python3 python3-pip" sudo dnf install -y python3 python3-pip
     elif command -v yum >/dev/null 2>&1; then
-        run_cmd 4 12 "sudo yum install -y python3 python3-pip" sudo yum install -y python3 python3-pip
+        run_step 5 15 "sudo yum install -y python3 python3-pip" sudo yum install -y python3 python3-pip
     elif command -v pacman >/dev/null 2>&1; then
-        run_cmd 4 12 "sudo pacman -Sy --noconfirm python python-pip" sudo pacman -Sy --noconfirm python python-pip
+        run_step 5 15 "sudo pacman -Sy --noconfirm python python-pip" sudo pacman -Sy --noconfirm python python-pip
     elif command -v apk >/dev/null 2>&1; then
-        run_cmd 4 12 "sudo apk add --no-cache python3 py3-pip" sudo apk add --no-cache python3 py3-pip
+        run_step 5 15 "sudo apk add --no-cache python3 py3-pip" sudo apk add --no-cache python3 py3-pip
     else
-        update_ui 12 "ERROR: Could not detect package manager to install Python 3."
+        update_ui 15 "ERROR: Could not detect package manager to install Python 3."
+        printf "\n"
         exit 1
     fi
 fi
 
 PYTHON_BIN="$(command -v python3)"
-update_ui 15 "Found Python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
+update_ui 15 "command -v python3 -> $PYTHON_BIN"
 
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-    run_cmd 16 22 "$PYTHON_BIN -m ensurepip --upgrade" "$PYTHON_BIN" -m ensurepip --upgrade || {
-        run_cmd 18 22 "curl https://bootstrap.pypa.io/get-pip.py && $PYTHON_BIN get-pip.py" bash -c "curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && $PYTHON_BIN /tmp/get-pip.py --user && rm -f /tmp/get-pip.py"
+    run_step 15 25 "$PYTHON_BIN -m ensurepip --upgrade" "$PYTHON_BIN" -m ensurepip --upgrade || {
+        run_step 18 25 "curl https://bootstrap.pypa.io/get-pip.py && $PYTHON_BIN get-pip.py" bash -c "curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && $PYTHON_BIN /tmp/get-pip.py --user && rm -f /tmp/get-pip.py"
     }
 fi
 
 if [ ! -d ".venv" ]; then
-    run_cmd 22 28 "$PYTHON_BIN -m venv .venv" "$PYTHON_BIN" -m venv .venv || true
+    run_step 25 32 "$PYTHON_BIN -m venv .venv" "$PYTHON_BIN" -m venv .venv || true
 fi
 if [ -x ".venv/bin/python" ]; then
     PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 fi
 
-run_cmd 30 42 "pip install --upgrade pip setuptools wheel" "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel || true
-run_cmd 42 68 "pip install --only-binary=:all: pandas pyarrow polars" "$PYTHON_BIN" -m pip install --only-binary=:all: pandas pyarrow polars || true
-run_cmd 68 82 "pip install nfl_data_py" "$PYTHON_BIN" -m pip install nfl_data_py || true
-run_cmd 82 88 "pip install --only-binary=:all: nflreadpy" "$PYTHON_BIN" -m pip install --only-binary=:all: nflreadpy || true
-run_cmd 88 95 "pip install -e . --no-build-isolation" "$PYTHON_BIN" -m pip install -e . --no-build-isolation || run_cmd 90 95 "pip install -e ." "$PYTHON_BIN" -m pip install -e .
+run_step 32 45 "pip install --upgrade pip setuptools wheel" "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel || true
+run_step 45 70 "pip install --only-binary=:all: pandas pyarrow polars" "$PYTHON_BIN" -m pip install --only-binary=:all: pandas pyarrow polars || true
+run_step 70 84 "pip install nfl_data_py" "$PYTHON_BIN" -m pip install nfl_data_py || true
+run_step 84 90 "pip install --only-binary=:all: nflreadpy" "$PYTHON_BIN" -m pip install --only-binary=:all: nflreadpy || true
+run_step 90 96 "pip install -e . --no-build-isolation" "$PYTHON_BIN" -m pip install -e . --no-build-isolation || run_step 92 96 "pip install -e ." "$PYTHON_BIN" -m pip install -e .
 
 if command -v Rscript >/dev/null 2>&1; then
-    run_cmd 95 98 "Rscript -e install.packages('nflreadr')" Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" || true
+    run_step 96 98 "Rscript -e install.packages('nflreadr')" Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" || true
 fi
 
 chmod +x "$SCRIPT_DIR/nfl_stat_cli.py"
-run_cmd 98 100 "$PYTHON_BIN nfl_stat_cli.py --version" "$PYTHON_BIN" "$SCRIPT_DIR/nfl_stat_cli.py" --version
-update_ui 100 "✔ Installed! Run: $PYTHON_BIN nfl_stat_cli.py  (use ./install.sh -v for verbose output)"
+run_step 98 100 "$PYTHON_BIN nfl_stat_cli.py --version" "$PYTHON_BIN" "$SCRIPT_DIR/nfl_stat_cli.py" --version
+update_ui 100 "Done! Run: $PYTHON_BIN nfl_stat_cli.py  (or ./install.sh -v for verbose)"
+printf "\n"
