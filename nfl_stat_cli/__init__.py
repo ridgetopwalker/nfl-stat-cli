@@ -50,10 +50,12 @@ from .fantasy import (
 )
 from .sportsbook import (
     compute_team_power_ratings,
+    compute_underdog_leaders,
     handicap_matchup,
     render_sportsbook_board_view,
     render_power_ratings_view,
     render_game_handicap_dossier_view,
+    render_underdog_leaderboard_view,
     interactive_sportsbook_browser,
 )
 from .contracts import (
@@ -5076,8 +5078,9 @@ class NaturalLanguageStatAssistant:
         if any(w in ql for w in (
             "spread", "spreads", "point spread", "handicap", "handicapping",
             "sportsbook", "odds", "betting line", "betting lines", "moneyline",
-            "moneylines", "over under", "over/under", "who is favored", "underdog",
-            "power rating", "power ratings", "power ranking", "power rankings", "betting"
+            "moneylines", "over under", "over/under", "who is favored", "underdog", "underdogs",
+            "power rating", "power ratings", "power ranking", "power rankings", "betting",
+            "upset", "upsets"
         )):
             if any(w in ql for w in ("power", "ratings", "rankings")):
                 return {
@@ -5089,6 +5092,29 @@ class NaturalLanguageStatAssistant:
                     "team": team_filter,
                     "show_field": False,
                     "explanation": f"Quantitative team power ratings derived from Net EPA/play and scoring differentials ({season}).",
+                }
+
+            # Check if user is asking about UNDERDOG performance / wins
+            if any(w in ql for w in ("underdog", "underdogs", "as a dog", "as an underdog", "upset", "upsets")) and not re.search(r"\b([a-zA-Z]+)\s+(?:vs\.?|against|at|@)\s+([a-zA-Z]+)\b", ql):
+                top_m = re.search(r"\btop\s+(\d+)\b", ql)
+                if top_m:
+                    lim_val = int(top_m.group(1))
+                elif any(w in ql for w in ("all underdogs", "every underdog", "all dogs")):
+                    lim_val = None
+                else:
+                    # When asking for the leader ("which team", "who", "most", "leader", "best"), give top 5
+                    lim_val = 5
+
+                return {
+                    "intent": "sportsbook_report",
+                    "subquery": "underdogs",
+                    "query": query,
+                    "team": team_filter,
+                    "season": season,
+                    "week": week,
+                    "limit": lim_val,
+                    "show_field": False,
+                    "explanation": f"Top {lim_val or 'all'} NFL teams with the most wins as an underdog ({season}).",
                 }
 
             # Check for matchup teams
@@ -6265,6 +6291,9 @@ def handle_nl_query_result(
         subq = parsed.get("subquery", "board")
         if subq == "power_ratings":
             return header + "\n" + render_power_ratings_view(s_plays, season=season)
+        if subq in ("underdogs", "underdog_leaderboard", "dogs"):
+            lim = parsed.get("limit", 5)
+            return header + "\n" + render_underdog_leaderboard_view(s_plays, season=season, team_filter=team or parsed.get("team"), limit=lim)
         if subq == "matchup":
             home_t = parsed.get("home_team") or team or "KC"
             away_t = parsed.get("away_team") or "BUF"
@@ -8824,7 +8853,11 @@ def interactive_tui(
                     if cmd_args:
                         arg_str = " ".join(cmd_args).strip()
                         s_plays = require_season_plays(plays, active_season)
-                        if any(w in arg_str.lower() for w in ("power", "ratings", "rankings")):
+                        if any(w in arg_str.lower() for w in ("underdog", "underdogs", "dog", "dogs", "upset", "upsets")):
+                            top_m = re.search(r"\b(\d+)\b", arg_str)
+                            lim = int(top_m.group(1)) if top_m else 5
+                            print(render_underdog_leaderboard_view(s_plays, season=active_season, limit=lim))
+                        elif any(w in arg_str.lower() for w in ("power", "ratings", "rankings")):
                             print(render_power_ratings_view(s_plays, season=active_season))
                         elif arg_str.isdigit():
                             print(render_sportsbook_board_view(s_plays, season=active_season, week_filter=int(arg_str)))
