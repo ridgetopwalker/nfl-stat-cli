@@ -3476,12 +3476,13 @@ class StatEngine:
         return filtered
 
     def _compute_base_metrics(self, plays: List[Dict[str, Any]]) -> Dict[str, float]:
+        n = max(1, len(plays))
+        total_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays)
         # Per-play rates divide by real offensive downs: penalty/timeout-only rows and special teams are not plays
         # (and their first downs, TDs and EPA do not feed the rate numerators either)
         down_plays = [p for p in plays if _is_scrimmage_down(p)]
         scrimmage_plays = len(down_plays)
         n = max(1, scrimmage_plays)
-        total_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays)
         passing_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays if int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0)
         rushing_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays if int(p.get("rush_attempt", 0)) == 1)
         total_air = sum(float(p.get("air_yards", 0.0)) for p in plays)
