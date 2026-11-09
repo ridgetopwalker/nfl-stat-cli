@@ -92,6 +92,16 @@ def test_bare_player_name_gets_exactly_one_role_on_a_completion():
     row = _board(bare)[WR]
     assert row["pass_yards"] == 0 and row["pass_tds"] == 0
     assert row["rec_yards"] == 30.0
+    # profile and leaderboard agree on the catch itself (both fall back to complete_pass when reception is absent)
+    assert prof["receptions"] == row["receptions"] == 1
+    assert prof["points_ppr"] == pytest.approx(row["points_ppr"])
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), "", "NA"])
+def test_bare_player_name_with_missing_flag_values_does_not_crash(bad):
+    bare = [_play(1, player_name=WR, reception=bad, complete_pass=bad, rush_attempt=bad, pass_attempt=1,
+                  qb_name=float("nan"), yards_gained=5.0)]
+    assert _profile(WR, bare)["pass_yards"] == 5.0  # NaN role fields do not suppress the one-role fallback
 
 
 def test_bare_player_name_on_an_incompletion_is_the_passer_only():

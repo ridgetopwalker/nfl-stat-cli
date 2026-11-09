@@ -116,6 +116,14 @@ def calculate_player_fantasy_points(
 _ROLE_FIELDS = ("qb_name", "passer_player_name", "rusher_player_name", "receiver_player_name")
 
 
+def _role_flag(p: Dict[str, Any], key: str) -> int:
+    """0/1 flag from a play dict; missing, None, NaN or non-numeric values count as 0."""
+    try:
+        return int(float(p.get(key) or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _player_name_fallback_role(p: Dict[str, Any]) -> Optional[str]:
     """
     Role ("pass", "rush" or "rec") that a bare ``player_name`` plays on this play, or None.
@@ -124,17 +132,22 @@ def _player_name_fallback_role(p: Dict[str, Any]) -> Optional[str]:
     so it must never earn QB points on top of a named receiver. It is only used when the play has no
     passer/rusher/receiver field at all, and then it gets exactly one role.
     """
-    if not str(p.get("player_name") or "").strip():
+    def _named(v: Any) -> bool:
+        # str(NaN) is "nan", so treat NaN like a blank field
+        t = str(v or "").strip()
+        return bool(t) and t.lower() not in ("nan", "none", "na")
+
+    if not _named(p.get("player_name")):
         return None
-    if any(str(p.get(k) or "").strip() for k in _ROLE_FIELDS):
+    if any(_named(p.get(k)) for k in _ROLE_FIELDS):
         return None
     pt = str(p.get("play_type", "")).lower()
-    complete = int(p.get("reception", 0) or 0) == 1 or int(p.get("complete_pass", 0) or 0) == 1
-    if complete:
+    # A completion is a catch when either flag says so (the profile and the leaderboard both count it the same way)
+    if _role_flag(p, "reception") == 1 or _role_flag(p, "complete_pass") == 1:
         return "rec"
-    if int(p.get("rush_attempt", 0) or 0) == 1 or pt == "run":
+    if _role_flag(p, "rush_attempt") == 1 or pt == "run":
         return "rush"
-    if int(p.get("pass_attempt", 0) or 0) == 1 or pt == "pass":
+    if _role_flag(p, "pass_attempt") == 1 or pt == "pass":
         return "pass"
     return None
 
@@ -172,15 +185,15 @@ def compute_player_fantasy_profile(player_name: str, plays: List[Dict[str, Any]]
     # (see _player_name_fallback_role), so a receiver is never also scored as the passer.
     def _matches_qb(p: Dict[str, Any]) -> bool:
         return any(_match_val(p.get(k)) for k in ("qb_name", "passer_player_name")) or (
-            _player_name_fallback_role(p) == "pass" and _match_val(p.get("player_name")))
+            _match_val(p.get("player_name")) and _player_name_fallback_role(p) == "pass")
 
     def _matches_rusher(p: Dict[str, Any]) -> bool:
         return _match_val(p.get("rusher_player_name")) or (
-            _player_name_fallback_role(p) == "rush" and _match_val(p.get("player_name")))
+            _match_val(p.get("player_name")) and _player_name_fallback_role(p) == "rush")
 
     def _matches_rec(p: Dict[str, Any]) -> bool:
         return _match_val(p.get("receiver_player_name")) or (
-            _player_name_fallback_role(p) == "rec" and _match_val(p.get("player_name")))
+            _match_val(p.get("player_name")) and _player_name_fallback_role(p) == "rec")
 
     # Filter to plays where player was QB, rusher, receiver, or main player
     relevant = [
