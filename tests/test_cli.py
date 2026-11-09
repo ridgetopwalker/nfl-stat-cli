@@ -1333,6 +1333,35 @@ def test_nl_query_create_stat_interactive_prompt_no(monkeypatch, tmp_path):
         assert "prompt_no_stat" not in disk_data.get("stats", {})
 
 
+def test_defense_turnovers_and_takeaways_nl_query():
+    engine = cli.StatEngine()
+
+    # 1. Reported query: "which team's defense has produces the most turnovers?"
+    q = "which team's defense has produces the most turnovers?"
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(q, engine, slm_model="off")
+    assert parsed["intent"] == "stat_query"
+    assert parsed["stat_name"] == "takeaways"
+    assert parsed["group_by"] == "defteam"
+    assert parsed["is_leader"] is True
+    assert parsed["show_field"] is False
+
+    # Execute leaderboard view
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS))
+    assert "Takeaways (Turnovers Forced)" in out
+    assert "DEFENSE" in out
+    assert "DAL" in out
+
+    # 2. Test variations
+    p_def = cli.NaturalLanguageStatAssistant.interpret_query("which defense has the most takeaways?", engine, slm_model="off")
+    assert p_def["stat_name"] == "takeaways"
+    assert p_def["group_by"] == "defteam"
+
+    p_off = cli.NaturalLanguageStatAssistant.interpret_query("which team has the most turnovers?", engine, slm_model="off")
+    assert p_off["stat_name"] == "turnovers"
+    assert p_off["group_by"] == "team"
+
+
+
 
 
 

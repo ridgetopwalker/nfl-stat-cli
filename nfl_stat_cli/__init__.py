@@ -1890,6 +1890,28 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="%",
         dependencies=["turnovers", "plays"],
     ),
+    "turnovers": StatDefinition(
+        name="turnovers",
+        title="Turnovers (Takeaways / Giveaways)",
+        category="traditional",
+        group_by="team",
+        formula="turnovers",
+        description="Total turnovers (interceptions + lost fumbles). Reflects takeaways when grouped by defense, and giveaways when grouped by offense/team.",
+        calculation_explained="Sum of interceptions and lost fumbles.",
+        unit="TO",
+        dependencies=["turnovers"],
+    ),
+    "takeaways": StatDefinition(
+        name="takeaways",
+        title="Takeaways (Turnovers Forced)",
+        category="traditional",
+        group_by="defteam",
+        formula="turnovers",
+        description="Total turnovers forced by defense (interceptions + opposing fumbles recovered).",
+        calculation_explained="Sum of defensive takeaways: interceptions + fumbles lost by opposing offense.",
+        unit="TO",
+        dependencies=["turnovers"],
+    ),
     "clean_play_score": StatDefinition(
         name="clean_play_score",
         title="Clean Play Score",
@@ -3056,11 +3078,14 @@ class StatEngine:
             val = float(metrics.get(stat_name, 0.0))
             if not math.isfinite(val):
                 val = 0.0
-            ent_team = str(gplays[0].get("timeout_team") if stat_name in ("timeouts", "timeouts_used") else (
-                gplays[0].get("penalty_favored_team") if stat_name in ("penalties_drawn", "penalty_yards_drawn") else (
-                    gplays[0].get("penalty_team") if stat_name in ("penalties", "penalty_yards") else gplays[0].get("posteam", "")
-                )
-            ))
+            if group_col == "defteam" or key_field == "defteam":
+                ent_team = str(gval)
+            else:
+                ent_team = str(gplays[0].get("timeout_team") if stat_name in ("timeouts", "timeouts_used") else (
+                    gplays[0].get("penalty_favored_team") if stat_name in ("penalties_drawn", "penalty_yards_drawn") else (
+                        gplays[0].get("penalty_team") if stat_name in ("penalties", "penalty_yards") else gplays[0].get("posteam", "")
+                    )
+                ))
             if not ent_team and key_field in ("coach", "head_coach", "penalty_coach", "timeout_coach"):
                 c_inf = find_coach_team(gval)
                 ent_team = c_inf[0] if c_inf else ""
@@ -4830,7 +4855,8 @@ class NaturalLanguageStatAssistant:
         is_drill_kw = any(w in ql for w in ("drill down", "drilldown", "team profile", "team breakdown", "player profile", "player breakdown"))
         has_specific_stat_kw = any(w in ql for w in (
             "epa", "rating", "yac", "cpoe", "wpa", "yards per play", "success rate", "explosive", "meaningful win", "qb win",
-            "passing yard", "rushing yard", "touchdown", "sack", "interception", "pass yards", "rush yards", "td"
+            "passing yard", "rushing yard", "touchdown", "sack", "interception", "pass yards", "rush yards", "td",
+            "turnover", "turnovers", "takeaway", "takeaways",
         ))
         if not has_specific_stat_kw and (is_drill_kw or (
             team_filter and any(w in ql for w in ("team stats", "stats for the chiefs", "stats for the bills", "stats for the lions", "team overview"))
@@ -4890,6 +4916,7 @@ class NaturalLanguageStatAssistant:
             "passer rating", "completion", "success rate", "explosive play rate", "cpoe",
             "who had the most", "who has the most", "who led", "who leads", "most", "highest", "leader", "leaders",
             "produces the most", "produces", "produced",
+            "turnover", "turnovers", "takeaway", "takeaways",
         ))
 
         top_m = re.search(r"\btop\s+(\d+)\b", ql)
@@ -5005,6 +5032,16 @@ class NaturalLanguageStatAssistant:
             elif "epa" in ql:
                 matched_stat = "epa_per_play"
                 matched_group = "qb"
+            elif any(w in ql for w in ("turnover", "turnovers", "takeaway", "takeaways", "turn overs", "turn over")):
+                if any(w in ql for w in ("rate", "pct", "percent", "percentage", "%")):
+                    matched_stat = "turnover_rate"
+                    matched_group = "team"
+                elif any(w in ql for w in ("defense", "defensive", "defenses", "takeaway", "takeaways", "forced", "produced", "produces")):
+                    matched_stat = "takeaways"
+                    matched_group = "defteam"
+                else:
+                    matched_stat = "turnovers"
+                    matched_group = "team"
             else:
                 return {
                     "intent": "ambiguous",
@@ -5024,9 +5061,19 @@ class NaturalLanguageStatAssistant:
                     "explanation": f"Could not determine a specific stat or play from query: '{query}'.",
                 }
 
+        if matched_stat in ("turnovers", "takeaways"):
+            if any(w in ql for w in ("defense", "defensive", "defenses", "takeaway", "takeaways", "forced", "produced", "produces")):
+                matched_stat = "takeaways"
+                matched_group = "defteam"
+
         # Determine group_by override from query
         group_override: Optional[str] = None
-        if any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")):
+        if any(w in ql for w in (
+            "by defense", "defense", "defenses", "defensive", "team's defense", "team defense", "defteam"
+        )) and not any(w in ql for w in ("behind defense", "behind-defense")):
+            group_override = "defteam"
+            position = None
+        elif any(w in ql for w in ("by qb", "qbs", "each qb", "quarterback", "quarterbacks", "per qb")):
             group_override = "qb"
         elif any(w in ql for w in ("by player", "players", "each player", "per player", "which player", "what player", "who committed")):
             group_override = "player"
@@ -5202,6 +5249,22 @@ def render_general_stat_view(
                     f"{r['success_rate_pct']:.1f}%",
                 ])
             alignments = ["right", "left", "right", "right", "right", "right", "right"]
+        elif group_col in ("team", "defteam"):
+            group_header = "DEFENSE" if group_col == "defteam" else "TEAM"
+            headers = ["Rank", group_header, "Conf", f"{sdef.title}", "Plays", "Avg Yds/Play", "EPA/Play", "Success %"]
+            rows = []
+            for idx, r in enumerate(display_board, 1):
+                rows.append([
+                    f"#{idx}",
+                    f"{C.BOLD}{r['entity']}{C.RESET}",
+                    r["conf"],
+                    f"{C.BOLD}{C.GREEN}{r['value']:.2f}{unit_sfx}{C.RESET}",
+                    r["plays"],
+                    f"{r['yards_per_play']:.2f}",
+                    f"{r['epa_per_play']:+.2f}",
+                    f"{r['success_rate_pct']:.1f}%",
+                ])
+            alignments = ["right", "left", "center", "right", "right", "right", "right", "right"]
         else:
             group_header = group_col.upper()
             headers = ["Rank", group_header, "Team", "Conf", f"{sdef.title}", "Plays", "Avg Yds/Play", "EPA/Play", "Success %"]
@@ -7813,6 +7876,8 @@ STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
             "success_rate_pct",
             "explosive_play_rate",
             "turnover_rate",
+            "turnovers",
+            "takeaways",
             "clean_play_score",
         ],
     ),
