@@ -44,6 +44,41 @@ FANTASY_DST_BLOCK_PTS = 2.0
 FANTASY_DST_TD_PTS = 6.0
 
 
+def _dst_play_events(p: Dict[str, Any], team_abbr: str) -> Dict[str, int]:
+    """
+    Classify one play, seen from the defending team `team_abbr`, into D/ST scoring events (0/1 each).
+    Every event comes from THIS play only, so an earlier takeaway can never turn a later offensive
+    touchdown into a defensive one. Shared by the leaderboard and the single-team profile.
+    """
+    desc = str(p.get("desc") or "").lower()
+    is_sack = int(p.get("sack", 0)) == 1 or ("sacked" in desc and "penalty" not in desc)
+    is_int = int(p.get("interception", 0)) == 1 or ("intercepted" in desc and "penalty" not in desc)
+    is_fr = int(p.get("fumble_lost", 0)) == 1 or ("fumble" in desc and "recovered" in desc and (team_abbr.lower() in desc or "defense" in desc))
+    is_safety = int(p.get("safety", 0)) == 1 or ("safety" in desc and "safety valve" not in desc)
+    is_block = int(p.get("blocked_kick", 0)) == 1 or int(p.get("punt_blocked", 0)) == 1 or (
+        "blocked" in desc and any(k in desc for k in ("punt", "field goal", "extra point", "fg", "pat", "kick"))
+    )
+
+    is_def_td = False
+    if int(p.get("touchdown", 0)) == 1 or "touchdown" in desc:
+        is_pass_td = int(p.get("pass_touchdown", 0)) == 1 or "pass to" in desc
+        is_rush_td = int(p.get("rush_touchdown", 0)) == 1 or "run for" in desc or "rush for" in desc
+        scoring_team = str(p.get("td_team") or "").strip().upper()
+        if scoring_team and scoring_team != team_abbr.upper():
+            is_def_td = False  # the touchdown was scored by the other side
+        elif is_int or is_fr or is_block or (not is_pass_td and not is_rush_td and ("return" in desc or "recovery" in desc or "intercept" in desc)):
+            is_def_td = True
+
+    return {
+        "sack": int(is_sack),
+        "int": int(is_int),
+        "fr": int(is_fr),
+        "safety": int(is_safety),
+        "block": int(is_block),
+        "td": int(is_def_td),
+    }
+
+
 def calculate_dst_points_allowed_score(points_allowed: int) -> float:
     """
     Calculate standard NFL fantasy points awarded for Points Allowed (PA):
@@ -418,35 +453,13 @@ def compute_team_dst_fantasy_leaders(
         def_tds = 0
 
         for p in t_plays:
-            desc = str(p.get("desc") or "").lower()
-            is_sack = int(p.get("sack", 0)) == 1 or ("sacked" in desc and "penalty" not in desc)
-            if is_sack:
-                sacks += 1
-
-            is_int = int(p.get("interception", 0)) == 1 or ("intercepted" in desc and "penalty" not in desc)
-            if is_int:
-                ints += 1
-
-            is_fr = int(p.get("fumble_lost", 0)) == 1 or ("fumble" in desc and "recovered" in desc and (team.lower() in desc or "defense" in desc))
-            if is_fr:
-                fumbles_rec += 1
-
-            is_safety = int(p.get("safety", 0)) == 1 or ("safety" in desc and "safety valve" not in desc)
-            if is_safety:
-                safeties += 1
-
-            is_block = int(p.get("blocked_kick", 0)) == 1 or int(p.get("punt_blocked", 0)) == 1 or (
-                "blocked" in desc and any(k in desc for k in ("punt", "field goal", "extra point", "fg", "pat", "kick"))
-            )
-            if is_block:
-                blocked_kicks += 1
-
-            is_td = int(p.get("touchdown", 0)) == 1 or "touchdown" in desc
-            if is_td:
-                is_pass_td = int(p.get("pass_touchdown", 0)) == 1 or "pass to" in desc
-                is_rush_td = int(p.get("rush_touchdown", 0)) == 1 or "run for" in desc or "rush for" in desc
-                if is_int or is_fr or is_block or (not is_pass_td and not is_rush_td and ("return" in desc or "recovery" in desc or "intercept" in desc)):
-                    def_tds += 1
+            ev = _dst_play_events(p, team)
+            sacks += ev["sack"]
+            ints += ev["int"]
+            fumbles_rec += ev["fr"]
+            safeties += ev["safety"]
+            blocked_kicks += ev["block"]
+            def_tds += ev["td"]
 
         # Calculate points allowed per game
         total_pa = 0
@@ -571,26 +584,13 @@ def compute_team_dst_fantasy_profile(team_name: str, plays: List[Dict[str, Any]]
         tds = 0
 
         for p in t_def_plays:
-            desc = str(p.get("desc") or "").lower()
-            if int(p.get("sack", 0)) == 1 or ("sacked" in desc and "penalty" not in desc):
-                sacks += 1
-            if int(p.get("interception", 0)) == 1 or ("intercepted" in desc and "penalty" not in desc):
-                ints += 1
-            if int(p.get("fumble_lost", 0)) == 1 or ("fumble" in desc and "recovered" in desc and (t_abbr.lower() in desc or "defense" in desc)):
-                fr += 1
-            if int(p.get("safety", 0)) == 1 or ("safety" in desc and "safety valve" not in desc):
-                safeties += 1
-            if int(p.get("blocked_kick", 0)) == 1 or int(p.get("punt_blocked", 0)) == 1 or (
-                "blocked" in desc and any(k in desc for k in ("punt", "field goal", "extra point", "fg", "pat", "kick"))
-            ):
-                blocks += 1
-
-            is_td = int(p.get("touchdown", 0)) == 1 or "touchdown" in desc
-            if is_td:
-                is_pass_td = int(p.get("pass_touchdown", 0)) == 1 or "pass to" in desc
-                is_rush_td = int(p.get("rush_touchdown", 0)) == 1 or "run for" in desc or "rush for" in desc
-                if ints > 0 or fr > 0 or blocks > 0 or (not is_pass_td and not is_rush_td and ("return" in desc or "recovery" in desc or "intercept" in desc)):
-                    tds += 1
+            ev = _dst_play_events(p, t_abbr)
+            sacks += ev["sack"]
+            ints += ev["int"]
+            fr += ev["fr"]
+            safeties += ev["safety"]
+            blocks += ev["block"]
+            tds += ev["td"]
 
         home_sc = max([int(p.get("home_score", 0) or 0) for p in gplays], default=0)
         away_sc = max([int(p.get("away_score", 0) or 0) for p in gplays], default=0)
