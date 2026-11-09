@@ -4771,6 +4771,21 @@ class AsciiArtRenderer:
 # Hybrid Local Small Language Model (SLM) + Deterministic NL-to-Stat Engine
 # ---------------------------------------------------------------------------
 
+# Hard cap on natural-language query length, enforced before any parsing/regex work so crafted
+# long inputs cannot reach backtracking-prone patterns (override with NFL_STAT_MAX_QUERY_CHARS).
+MAX_QUERY_CHARS = 300
+
+
+def get_max_query_chars() -> int:
+    try:
+        val = int(os.environ.get("NFL_STAT_MAX_QUERY_CHARS", "") or MAX_QUERY_CHARS)
+    except ValueError:
+        return MAX_QUERY_CHARS
+    if val < 1:
+        return MAX_QUERY_CHARS  # a zero/negative override is a mistake, not a request to reject everything
+    return min(val, MAX_QUERY_CHARS)
+
+
 class NaturalLanguageStatAssistant:
     """
     Translates natural-language user questions or custom-stat requests into structured
@@ -5095,6 +5110,32 @@ class NaturalLanguageStatAssistant:
         or the deterministic rule/AST parser.
         Never forces an ASCII field when the user is asking for an average or leaderboard across the year!
         """
+        # Reject over-long input before any regex, SLM call or other parsing work
+        max_chars = get_max_query_chars()
+        if query is not None and len(str(query)) > max_chars:
+            preview = "".join(ch if ch.isprintable() else " " for ch in strip_ansi(str(query)[:60])) + "..."
+            return {
+                "intent": "query_too_long",
+                "status": "rejected",
+                "reason": f"queries are limited to {max_chars} characters (received {len(str(query))}).",
+                "query": preview,
+                "query_length": len(str(query)),
+                "max_chars": max_chars,
+                "stat_name": None,
+                "group_by": None,
+                "season": default_season,
+                "week": None,
+                "qtr": None,
+                "division": None,
+                "conf": None,
+                "team": None,
+                "player": None,
+                "position": None,
+                "filter_expr": "",
+                "show_field": False,
+                "explanation": f"Query rejected: longer than {max_chars} characters.",
+            }
+
         effective_mode = (slm_model or "auto").strip().lower()
         if engine is not None and effective_mode not in ("none", "off", "disable", "disabled"):
             detected = pre_detected_model or cls.detect_ollama_model(slm_model)
@@ -6746,6 +6787,12 @@ def handle_nl_query_result(
             f"  \u2022 {C.BOLD}To evaluate a stat:{C.RESET} try 'epa per play', 'passer rating', 'yards after catch', or 'qb impact score'.\n"
             f"  \u2022 {C.BOLD}To diagram a play:{C.RESET} try 'show Mahomes touchdown play' or 'diagram Goff screen play'.\n"
             f"  \u2022 {C.BOLD}Available stats:{C.RESET} {stat_list} (type {C.CYAN}/stats{C.RESET} for full catalog, or {C.CYAN}/help{C.RESET} for guidance)."
+        )
+
+    if intent == "query_too_long":
+        return (
+            f"\n{C.BOLD}{C.RED}\u2716 Query too long:{C.RESET} {parsed.get('reason', 'query exceeds the maximum length.')}\n"
+            f"  {C.DIM}Please shorten your question and try again.{C.RESET}"
         )
 
     slm_tag = f" [SLM: {parsed['slm_model_used']}]" if parsed.get("slm_model_used") else " [Local Rule/AST Parser]"
@@ -9860,12 +9907,14 @@ def interactive_tui(
                         parsed = NaturalLanguageStatAssistant.interpret_query(
                             nl_play_q, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
                         )
-                        parsed["intent"] = "specific_play"
-                        parsed["show_field"] = True
+                        if parsed.get("intent") != "query_too_long":
+                            parsed["intent"] = "specific_play"
+                            parsed["show_field"] = True
                         if not any(k in nl_play_q.lower() for k in ("behind", "offense", "defense", "sideline")):
                             parsed["camera"] = default_camera
-                        last_parsed_nl = parsed
-                        last_query_raw = nl_play_q
+                        if parsed.get("intent") != "query_too_long":
+                            last_parsed_nl = parsed
+                            last_query_raw = nl_play_q
                         print(handle_nl_query_result(parsed, engine, plays, interactive=is_interactive))
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
@@ -10124,8 +10173,9 @@ def interactive_tui(
             )
             if parsed.get("intent") == "specific_play" and not any(k in low_in for k in ("behind", "offense", "defense", "sideline")):
                 parsed["camera"] = default_camera
-            last_parsed_nl = parsed
-            last_query_raw = raw_in
+            if parsed.get("intent") != "query_too_long":
+                last_parsed_nl = parsed
+                last_query_raw = raw_in
             res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
             LAST_RAW_OUTPUT = strip_ansi(res_str)
             print(res_str)
@@ -10304,10 +10354,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if cmd == "ask":
             parsed = NaturalLanguageStatAssistant.interpret_query(args.query, engine=engine, slm_model=args.slm_model, default_season=args.season)
-            if parsed.get("intent") == "ambiguous":
+            if parsed.get("intent") in ("ambiguous", "query_too_long"):
                 print(AsciiArtRenderer.banner())
                 print(handle_nl_query_result(parsed, engine, []))
-                return 0
+                return 1 if parsed.get("intent") == "query_too_long" else 0
             target_season = int(parsed.get("season") or args.season)
             all_plays = bridge.load_pbp(sorted({target_season - 1, target_season}))
             print(AsciiArtRenderer.banner())
