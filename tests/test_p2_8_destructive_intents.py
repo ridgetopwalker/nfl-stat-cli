@@ -72,7 +72,7 @@ def test_valid_typed_fields_pass_and_text_is_cleaned(engine):
 
 
 @pytest.mark.parametrize("flt", ["__import__('os').system('x')", "a; b", "x" * 500, "down == 3 `id`", "{}", ["list"],
-                                 "open('/etc/passwd').read()", "getattr(x,'_'+'_class_'+'_')", "x.y == 1", "d[0] == 1",
+                                 "open('/etc/passwd').read()", "9**9**9**9 == 1", "down == 2**8", "getattr(x,'_'+'_class_'+'_')", "x.y == 1", "d[0] == 1",
                                  "(lambda: 1)()", "down == 3 and \u0430 == 1", "down ==", ""])
 def test_suspicious_filter_expr_is_dropped(engine, flt):
     out = NLA._validate_slm_response({"intent": "stat_query", "stat_name": "yards_per_play", "filter_expr": flt}, engine)
@@ -225,11 +225,14 @@ def test_explicit_allow_overrides_env_through_the_handler(engine, monkeypatch):
     assert "Successfully deleted" in out
 
 
-def test_delete_prompt_does_not_echo_control_characters(engine, monkeypatch):
+@pytest.mark.parametrize("interactive", [True, False])
+@pytest.mark.parametrize("name", ["a\x1b[2Jb", "x" * 80, "has space"])
+def test_odd_stat_names_are_refused_not_echoed_or_deleted(engine, monkeypatch, interactive, name):
     shown = []
-    monkeypatch.setattr(cli, "prompt_input", lambda prompt: shown.append(prompt) or "n")
-    cli.handle_nl_query_result({"intent": "delete_stat", "stat_name": "a\x1b[2Jb", "query": "q"}, engine, cli.SAMPLE_PBP_PLAYS, interactive=True)
-    assert shown and "\x1b[2J" not in shown[0]
+    monkeypatch.setattr(cli, "prompt_input", lambda prompt: shown.append(prompt) or "y")
+    out = cli.handle_nl_query_result({"intent": "delete_stat", "stat_name": name, "query": "q"}, engine, cli.SAMPLE_PBP_PLAYS, interactive=interactive)
+    assert "\x1b[2J" not in out and shown == []
+    assert "characters a stat id cannot have" in cli.strip_ansi(out)
 
 
 def test_ollama_url_keeps_a_path_prefix_and_accepts_ipv6_loopback(monkeypatch):
@@ -239,3 +242,6 @@ def test_ollama_url_keeps_a_path_prefix_and_accepts_ipv6_loopback(monkeypatch):
     assert NLA.ollama_base_url() == "http://[::1]:11434"
     monkeypatch.setenv("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:0")
     assert NLA.ollama_base_url() is None
+    for odd in ("http://h:1/a b", "http://h:1/../x", "http://h:1/a?x=1", "http://h:1/a#f", "http://h:1/a\\b"):
+        monkeypatch.setenv("NFL_STAT_OLLAMA_URL", odd)
+        assert NLA.ollama_base_url() is None, odd
