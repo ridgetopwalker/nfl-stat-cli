@@ -86,3 +86,45 @@ def test_sample_rows_keep_their_explicit_concepts():
         norm = bridge._normalize_row(raw, 1)
         assert norm["play_concept"] == raw["play_concept"]
         assert norm["play_concept_source"] == "explicit"
+
+
+@pytest.mark.parametrize("missing", [None, "", "NA", float("nan")])
+def test_missing_concept_type_and_gap_values_are_unknown_not_text(missing):
+    row = _row(play_type="run", rush_attempt=1, play_concept=missing, run_gap=missing)
+    assert row["play_concept"] == "rush" and row["play_concept_source"] == "unknown"
+    row = _row(play_type=missing, pass_attempt=1, air_yards=12.0, play_concept=missing)
+    assert row["play_concept"] == "pass_intermediate" and row["play_concept_source"] == "inferred"
+
+
+def test_screen_heuristics_and_their_guards():
+    assert _pass(air_yards=-2.0, complete_pass=1)["is_screen"] == 1
+    assert _pass(air_yards=-2.0, complete_pass=1)["play_concept"] == "screen"
+    assert _pass(air_yards=0.0, sack=1)["is_screen"] == 0
+    assert _pass(air_yards=15.0, desc="short pass, screen to the left")["play_concept"] == "screen"
+
+
+def test_r_style_empty_values_behave_like_missing_values():
+    # the R bridge writes NA as '' (is_screen stays blank when air_yards is NA): same result as a missing column
+    r_row = _pass(air_yards="", is_screen="", play_action="", complete_pass=1, sack=0)
+    assert r_row["is_screen"] == 0 and r_row["play_concept"] == "pass"
+    full = _pass(air_yards="-2.0", is_screen="", complete_pass=1)
+    assert full["is_screen"] == 1
+
+
+def test_a_no_play_whose_description_mentions_a_screen_is_not_a_screen():
+    row = _row(play_type="no_play", desc="screen pass nullified by a penalty")
+    assert row["play_concept"] == "no_play"
+
+
+def test_untyped_rows_use_their_attempt_flags():
+    assert _row(pass_attempt=1, air_yards=20.0)["play_concept"] == "pass_deep"
+    assert _row(rush_attempt=1, run_gap="end")["play_concept"] == "rush_outside"
+
+
+def test_play_action_with_unknown_air_yards_does_not_claim_depth():
+    row = _pass(play_action=1)
+    assert row["play_concept"] == "play_action" and row["play_concept_source"] == "inferred"
+
+
+def test_run_gap_tackle_is_not_guessed():
+    assert _run(run_gap="tackle", run_location="left")["play_concept"] == "rush"

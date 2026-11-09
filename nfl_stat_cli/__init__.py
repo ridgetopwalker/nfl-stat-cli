@@ -1378,16 +1378,17 @@ def _infer_play_concept(
     (a heuristic over explicit attributes) or "unknown" (generic label, nothing to go on).
     Explicit attributes always win: a pass with play_action=0 is never a play-action concept, an
     unknown air_yards is never read as 0, and a run is only inside/outside when the run gap or
-    location says so.
+    location says so (run_gap "tackle" or a left/right location alone stays plain "rush").
     """
     explicit = _safe_str(r.get("play_concept"), "")
     if explicit:
         return explicit, "explicit"
-    if is_screen:
-        return "screen", "inferred"
     pt = raw_play_type.lower()
     if pt and pt not in ("pass", "run"):
         return pt, "explicit"  # punt, kickoff, field_goal, no_play, qb_kneel, ...
+    if is_screen:
+        # is_screen is the CSV/R flag when present, else a description / air_yards <= 0 heuristic
+        return "screen", "inferred"
     if pt == "pass" or (not pt and pass_attempt):
         if play_action:
             return ("play_action_deep" if air_known and air_yards >= 18 else "play_action"), "inferred"
