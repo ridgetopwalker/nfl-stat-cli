@@ -59,6 +59,7 @@ from .sportsbook import (
     render_game_handicap_dossier_view,
     render_underdog_leaderboard_view,
     interactive_sportsbook_browser,
+    render_model_explanation,
 )
 from .contracts import (
     ContractRecord,
@@ -308,7 +309,7 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
 
 SLASH_COMMAND_OPTIONS: List[str] = [
     "/help", "/stats", "/stat", "/create", "/delete", "/team", "/coaches", "/coach",
-    "/player", "/play", "/games", "/fantasy", "/sportsbook", "/contract", "/camera",
+    "/player", "/play", "/games", "/fantasy", "/projections", "/explain", "/contract", "/camera",
     "/season", "/why", "/error", "/reload", "/update", "/query", "/page", "/example",
     "/screen-pass", "/play-efficiency", "/export", "/export-stats", "/import",
     "/clear", "/quit", "/exit"
@@ -413,7 +414,7 @@ class CLICompleter:
                 "ppr", "half-ppr", "std", "standard", "leaders", "matchups", "projections",
                 "qb", "rb", "wr", "te", "dst", "defense"
             ] + self.get_team_options() + self.get_player_options()
-        if cmd in ("/sportsbook", "/odds", "/handicap", "/lines", "/betting"):
+        if cmd in ("/projections", "/projection", "/model", "/sportsbook", "/odds", "/handicap", "/lines", "/betting"):
             return ["board", "underdogs", "power_ratings", "lines", "matchup"] + self.get_team_options()
         if cmd in ("/contract", "/contracts", "/contrat", "/payroll", "/salary", "/salaries"):
             return ["coaches", "leaders", "apy", "guaranteed", "total"] + self.get_team_options() + self.get_player_options()
@@ -5733,7 +5734,7 @@ class NaturalLanguageStatAssistant:
                     "season": season,
                     "week": week,
                     "show_field": False,
-                    "explanation": f"Sportsbook handicap dossier, spread, moneyline, and total for {away_t} at {home_t} ({season}).",
+                    "explanation": f"Model projection dossier: spread, moneyline, and total for {away_t} at {home_t} ({season}).",
                 }
 
             return {
@@ -5744,7 +5745,7 @@ class NaturalLanguageStatAssistant:
                 "season": season,
                 "week": week,
                 "show_field": False,
-                "explanation": f"Sportsbook betting board, projected lines, and ATS results{' for Week ' + str(week) if week else ''} ({season}).",
+                "explanation": f"Model projections board and model accuracy vs. actual results{' for Week ' + str(week) if week else ''} ({season}).",
             }
 
         # Check if user is asking about PLAYER & COACH CONTRACTS / SALARIES
@@ -9541,7 +9542,8 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/play{C.RESET} [phase/query]             Interactive play explorer (pass/run concepts, generic chalkboards & drilldowns)
     {C.BOLD}{C.CYAN}/games{C.RESET} [week/team]             Browse games by team/week, view quarter play tables & step plays
     {C.BOLD}{C.CYAN}/fantasy{C.RESET} [player/week]          Fantasy football center (PPR, Half-PPR, Standard, weekly logs & leaders)
-    {C.BOLD}{C.CYAN}/sportsbook{C.RESET} [week/matchup]      Sportsbook handicapper (spreads, totals, moneylines, power ratings & ATS)
+    {C.BOLD}{C.CYAN}/projections{C.RESET} [week/matchup]    Model Projections (spreads, totals, win probability, power ratings & model vs. actual)
+    {C.BOLD}{C.CYAN}/explain{C.RESET} | {C.BOLD}{C.CYAN}/formula{C.RESET}              Show the formulas behind Model Projections
     {C.BOLD}{C.CYAN}/contract{C.RESET} [name/team]          NFL player & coach contracts (APY, guarantees, payrolls & cap hits)
     {C.BOLD}{C.CYAN}/camera{C.RESET} <offense|defense|side>  Set default camera angle for play diagrams
     {C.BOLD}{C.CYAN}/season{C.RESET} <year>                  Set active season year (default: current NFL season)
@@ -9902,7 +9904,9 @@ def interactive_tui(
                             print(render_player_fantasy_profile_view(arg_str, s_plays, season=active_season))
                     else:
                         interactive_fantasy_browser(plays, active_season=active_season)
-                elif cmd_token in ("/sportsbook", "/odds", "/handicap", "/lines", "/betting"):
+                elif cmd_token in ("/explain", "/formula"):
+                    print(render_model_explanation())
+                elif cmd_token in ("/projections", "/projection", "/model", "/sportsbook", "/odds", "/handicap", "/lines", "/betting"):
                     if cmd_args:
                         arg_str = " ".join(cmd_args).strip()
                         s_plays = require_season_plays(plays, active_season)
@@ -10173,6 +10177,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         no_color=False,
     )
 
+    parser.add_argument("--explain", "--formula", dest="explain", action="store_true", default=False,
+                        help="Show the formulas behind Model Projections (spread, win probability, moneyline, total) and exit")
+
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("tui", parents=[common], help="Launch interactive colorized terminal interface (default)")
@@ -10262,6 +10269,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     engine = StatEngine()
     resolved_camera = args.camera or "behind-offense"
     cmd = args.command or "tui"
+
+    if getattr(args, "explain", False):
+        print(render_model_explanation())
+        return 0
 
     try:
         if cmd == "tui":
