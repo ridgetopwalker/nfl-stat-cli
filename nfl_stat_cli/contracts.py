@@ -158,25 +158,32 @@ CONTRACT_SEASONS: Dict[int, Dict[str, Any]] = {
 }
 
 
+def as_season(value: Any) -> int:
+    """A season as an int; anything missing, NaN or non-numeric is 0 (= unknown, never cataloged)."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def contract_season_cataloged(season: Optional[int]) -> bool:
     """True when contract rows exist for ``season``; None means "the latest cataloged season"."""
-    return True if season is None else int(season) in CONTRACT_SEASONS
+    return True if season is None else as_season(season) in CONTRACT_SEASONS
 
 
 def contracts_cataloged_for(seasons: Any) -> bool:
-    """True only when every (known) season in ``seasons`` is cataloged; an unknown season (0/None) is not."""
-    seen = {int(s or 0) for s in seasons}
-    return bool(seen) and all(s in CONTRACT_SEASONS for s in seen)
+    """True when at least one season in ``seasons`` is cataloged; unknown seasons (0) and other seasons never count."""
+    return any(as_season(s) in CONTRACT_SEASONS for s in seasons)
 
 
 def contract_catalog_note(season: Optional[int] = None) -> str:
     """One-line statement of what the contract data can and cannot say for ``season``."""
     cataloged = sorted(CONTRACT_SEASONS)
-    if season is None or int(season) in CONTRACT_SEASONS:
-        use = max(cataloged) if season is None else int(season)
+    if contract_season_cataloged(season):
+        use = max(cataloged) if season is None else as_season(season)
         return (f"Contract data is an unverified static snapshot for season {use}; "
                 f"no source or as-of date is recorded.")
-    return (f"Contract data is not cataloged for season {int(season)} "
+    return (f"Contract data is not cataloged for season {as_season(season)} "
             f"(cataloged: {', '.join(str(c) for c in cataloged)}, unverified); nothing is shown for it.")
 
 

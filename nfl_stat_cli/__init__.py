@@ -62,6 +62,7 @@ from .sportsbook import (
 )
 from .contracts import (
     ContractRecord,
+    as_season,
     NFL_CONTRACTS,
     contract_catalog_note,
     contract_season_cataloged,
@@ -818,16 +819,16 @@ COACHING_STAFF_STATUS: Dict[int, str] = {COACHING_SNAPSHOT_SEASON: "unverified"}
 
 def coaching_season_cataloged(season: Optional[int]) -> bool:
     """True when staffs exist for ``season``; None means "the latest cataloged season"."""
-    return True if season is None else int(season) in COACHING_STAFFS_BY_SEASON
+    return True if season is None else as_season(season) in COACHING_STAFFS_BY_SEASON
 
 
 def coaching_catalog_note(season: Optional[int] = None) -> str:
     """One-line statement of what the coaching data can and cannot say for ``season``."""
     cataloged = sorted(COACHING_STAFFS_BY_SEASON)
     if coaching_season_cataloged(season):
-        use = max(cataloged) if season is None else int(season)
+        use = max(cataloged) if season is None else as_season(season)
         return f"Coaching staffs are a {COACHING_STAFF_STATUS.get(use, 'unverified')} static snapshot for season {use}."
-    return (f"Coaching staffs are not cataloged for season {int(season)} "
+    return (f"Coaching staffs are not cataloged for season {as_season(season)} "
             f"(cataloged: {', '.join(str(c) for c in cataloged)}, unverified).")
 
 
@@ -866,7 +867,7 @@ def find_coach_team(coach_name: str, season: Optional[int] = None) -> Optional[T
     if c_low in stop_words:
         return None
 
-    staffs = COACHING_STAFFS_BY_SEASON[max(COACHING_STAFFS_BY_SEASON) if season is None else int(season)]
+    staffs = COACHING_STAFFS_BY_SEASON[max(COACHING_STAFFS_BY_SEASON) if season is None else as_season(season)]
     for team, staff in staffs.items():
         if team == "LAR":
             continue
@@ -1073,6 +1074,17 @@ KNOWN_PLAYER_POSITIONS: Dict[str, str] = {
 }
 
 
+@functools.lru_cache(maxsize=1)
+def _surname_only_position_keys() -> frozenset:
+    """Registry surnames that have no initial/full-name entry; any other bare surname is an alias of one player."""
+    keys = list(KNOWN_PLAYER_POSITIONS)
+    return frozenset(
+        k for k in keys
+        if "." not in k and " " not in k
+        and not any(re.fullmatch(r"[a-z]\." + re.escape(k), o) or o.endswith(" " + k) for o in keys)
+    )
+
+
 def get_player_position(player_name: str, plays: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
     """
     Resolve a player's official football position (QB, RB, WR, TE, K, P, DEF).
@@ -1090,9 +1102,11 @@ def get_player_position(player_name: str, plays: Optional[List[Dict[str, Any]]] 
         if key in KNOWN_PLAYER_POSITIONS:
             return KNOWN_PLAYER_POSITIONS[key]
 
-    # No surname-only fallback for a name that carries a first name or initial: reducing "<initial>.Allen" to
-    # "allen" mapped every such player to the QB. A bare surname is an exact registry key and matched above;
-    # anything else falls through to the play rows and then to unknown.
+    # A name with a first name or initial is reduced to its surname only when the registry knows that surname
+    # and nothing more specific (no "x.surname" / "first surname" entry): "K.Allen" must not become the QB "allen".
+    parts = p_norm.replace(".", " ").split()
+    if len(parts) > 1 and parts[-1] in _surname_only_position_keys():
+        return KNOWN_PLAYER_POSITIONS[parts[-1]]
 
     # 2. Check play rows if plays are provided
     if plays:
@@ -3487,9 +3501,8 @@ class StatEngine:
             "contract_value_m": tot_val,
         }
         if not contracts_cataloged_for(p.get("season") for p in plays):
-            # contract rows are only cataloged for some seasons: never attach them to plays from another one
-            for key in ("cap_hit", "cap_hit_current_m", "yearly_salary_against_cap", "salary_against_cap",
-                        "apy", "apy_m", "salary", "guaranteed_m", "contract_value_m"):
+            # contracts are cataloged for some seasons only: with no play from one, report 0, not another year's row
+            for key in sorted(_CONTRACT_STAT_NAMES):
                 base[key] = 0.0
         return base
 
@@ -8170,7 +8183,8 @@ def render_team_drilldown_view(
             receivers.setdefault(rc_n, []).append(p)
 
     staff = get_team_coaching_staff(team_abbr, season)
-    staff_missing = "" if staff else f"not cataloged for {season}"
+    staff_missing = "" if staff else (
+        f"not cataloged for season {season}" if not coaching_season_cataloged(season) else "not cataloged for this team")
     pos_coaches = [
         f"QB: {staff.get('qb_coach')}" if staff.get("qb_coach") else "",
         f"OL: {staff.get('ol_coach')}" if staff.get("ol_coach") else "",

@@ -152,3 +152,41 @@ def test_query_header_carries_the_note_for_an_uncataloged_season(tmp_path):
         {"intent": "coaching_staff", "query": f"kc coach {SNAP_COACH + 1}", "season": SNAP_COACH + 1, "team": "KC"},
         engine, plays))
     assert "not cataloged" in staff and "Andy Reid" not in staff
+
+
+def test_surname_only_registry_players_still_resolve_from_an_initial_form():
+    only = sorted(cli._surname_only_position_keys())
+    assert "dalton" in only and "allen" not in only and "jackson" not in only
+    assert cli.get_player_position("A.Dalton") == cli.KNOWN_PLAYER_POSITIONS["dalton"]
+    for key in only:  # no bare surname with a more specific entry is ever widened to every player of that name
+        assert cli.get_player_position(f"Qx.{key}") == cli.KNOWN_PLAYER_POSITIONS[key]
+    ambiguous = [k for k in cli.KNOWN_PLAYER_POSITIONS if "." not in k and " " not in k and k not in only]
+    assert ambiguous and all(cli.get_player_position(f"Qx.{k}") is None for k in ambiguous)
+
+
+# --- mixed, unknown and malformed seasons -----------------------------------------------------------
+
+def test_contracts_attach_when_any_play_is_from_a_cataloged_season(tmp_path):
+    eng = cli.StatEngine(storage_dir=tmp_path)
+    mixed = _mahomes_rows(SNAP_CONTRACT) + _mahomes_rows(SNAP_CONTRACT + 1)
+    assert eng._compute_base_metrics(mixed)["cap_hit"] > 0
+    only_unknown = eng._compute_base_metrics(_mahomes_rows(0))
+    assert only_unknown["cap_hit"] == 0 and only_unknown["apy"] == 0
+    assert eng._compute_base_metrics([])["cap_hit"] == 0
+
+
+@pytest.mark.parametrize("bad", [float("nan"), "n/a", ""])
+def test_a_malformed_season_is_unknown_not_an_error(bad):
+    assert ct.as_season(bad) == 0 and ct.as_season(None) == 0
+    assert ct.contract_season_cataloged(bad) is False
+    assert cli.coaching_season_cataloged(bad) is False
+    assert ct.contracts_cataloged_for([bad]) is False
+
+
+def test_team_view_distinguishes_a_missing_team_from_a_missing_season(monkeypatch):
+    eng = cli.StatEngine()
+    monkeypatch.delitem(cli.NFL_COACHING_STAFFS, "BAL")
+    for season, expected in ((SNAP_COACH, "not cataloged for this team"), (SNAP_COACH + 1, "not cataloged for season")):
+        plays = [_row(posteam="BAL", defteam="KC", season=season, game_id=f"{season}_01_BAL_KC")]
+        out = cli.strip_ansi(cli.render_team_drilldown_view(eng, plays, season, "BAL"))
+        assert expected in out, out
