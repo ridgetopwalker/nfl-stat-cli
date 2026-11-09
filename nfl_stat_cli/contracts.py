@@ -10,12 +10,11 @@ Provides comprehensive, publicly sourced contract data from OverTheCap & Spotrac
 from __future__ import annotations
 
 import difflib
-import functools
 import math
 import re
 import unicodedata
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -268,19 +267,15 @@ def name_match_key(name: Any) -> Optional[Tuple[str, str]]:
     return (tokens[0][0], surname)
 
 
-@functools.lru_cache(maxsize=8)
-def _colliding_keys_for(names: Tuple[str, ...]) -> Set[Tuple[str, str]]:
-    seen: Dict[Tuple[str, str], int] = {}
-    for n in names:
-        k = name_match_key(n)
-        if k:
-            seen[k] = seen.get(k, 0) + 1
-    return {k for k, n in seen.items() if n > 1}
+_TEAM_ALIASES = {
+    "LAR": "LA", "STL": "LA", "SL": "LA", "JAC": "JAX", "WSH": "WAS", "OAK": "LV", "ARZ": "ARI",
+    "SD": "LAC", "BLT": "BAL", "CLV": "CLE", "HST": "HOU",
+}
 
 
-def _colliding_name_keys() -> Set[Tuple[str, str]]:
-    """Name keys shared by more than one cataloged contract (need the team to tell them apart)."""
-    return _colliding_keys_for(tuple(c.name for c in NFL_CONTRACTS))
+def _team_code(value: Any) -> str:
+    code = str(value or "").strip().upper()
+    return _TEAM_ALIASES.get(code, code)
 
 
 def _safe_epa(value: Any) -> float:
@@ -303,8 +298,8 @@ def calculate_contract_performance_efficiency(
     - APY per Touchdown
 
     Contracts carry full names while play-by-play uses abbreviated forms ("P.Mahomes"), so plays are
-    matched on a normalized (first initial, surname) key. If that key is shared by several cataloged
-    contracts, the play's team must also match the contract's team. `epa_matched_plays` reports how many
+    matched on a normalized (first initial, surname) key, and an abbreviated name must also be on the contract's
+    team (so uncataloged namesakes elsewhere are not credited). `epa_matched_plays` reports how many
     plays were matched so callers can tell "no EPA" from "no name match".
     """
     from .fantasy import compute_player_fantasy_profile
@@ -312,7 +307,7 @@ def calculate_contract_performance_efficiency(
     p_low = contract.name.strip().lower()
     # Coaches are only matched on the exact full name: an abbreviated "J.Harbaugh" row is a player, not a coach
     c_key = name_match_key(contract.name) if contract.contract_type != "coach" else None
-    ambiguous = bool(c_key) and c_key in _colliding_name_keys()
+    c_team = _team_code(contract.team)
 
     def _play_matches(p: Dict[str, Any]) -> bool:
         for field in _PLAY_NAME_FIELDS:
@@ -321,10 +316,12 @@ def calculate_contract_performance_efficiency(
                 continue
             if val.lower() == p_low:
                 return True
+            # An abbreviated name ("J.Allen") is shared by many league players, only some of whom are
+            # cataloged, so it must also be on the contract's team (rows without a team are accepted).
             if c_key and name_match_key(val) == c_key:
-                if ambiguous and str(p.get("posteam") or "").strip().upper() not in ("", contract.team.upper()):
-                    continue
-                return True
+                p_team = _team_code(p.get("posteam"))
+                if not p_team or p_team == c_team:
+                    return True
         return False
 
     p_plays = [p for p in plays if _play_matches(p)]
@@ -461,7 +458,7 @@ def render_player_contract_view(
             # Say so instead of showing an empty-looking ROI card
             lines.extend([
                 "",
-                f"  {C.YELLOW}⚠ EPA unavailable ({season}): no play-by-play rows matched the name '{c.name}'.{C.RESET}",
+                f"  {C.YELLOW}⚠ EPA unavailable ({season}): no play-by-play rows matched '{c.name}' (name/team mismatch, or no snaps).{C.RESET}",
             ])
         if eff["total_epa"] != 0 or eff["fantasy_points"] != 0:
             cost_epa_str = f"${eff['cost_per_epa_k']}k / EPA" if eff["cost_per_epa_k"] > 0 else "N/A"

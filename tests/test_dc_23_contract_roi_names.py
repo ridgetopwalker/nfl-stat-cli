@@ -99,7 +99,7 @@ def test_dossier_warns_instead_of_silently_omitting_when_no_name_matches(monkeyp
     assert "EPA unavailable" in out
 
 
-def test_shared_key_play_without_team_is_still_matched(monkeypatch):
+def test_play_without_team_is_still_matched(monkeypatch):
     a = _contract("Jon Harlow", team="ZZZ", pos="RB")
     b = _contract("Jim Harlow", team="YYY", pos="RB")
     monkeypatch.setattr(ct, "NFL_CONTRACTS", [a, b])
@@ -152,3 +152,24 @@ def test_roi_card_labels_epa_unavailable_when_only_fantasy_points_match(monkeypa
     out = cli.strip_ansi(ct.render_player_contract_view("Quincy Testarro", plays=[_play(qb="N.Nobody")], season=2025))
     assert "unavailable (no name match)" in out
     assert "Season Fantasy Points:    12.0" in out
+
+
+def test_uncataloged_namesake_on_another_team_is_not_credited():
+    c = _contract("Quincy Testarro", team="ZZZ")
+    plays = [_play(qb="Q.Testarro", epa=0.9, posteam="YYY"), _play(qb="Q.Testarro", epa=0.3, posteam="ZZZ")]
+    eff = ct.calculate_contract_performance_efficiency(c, plays, 2025)
+    assert eff["epa_matched_plays"] == 1
+    assert eff["total_epa"] == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize("contract_team,play_team", [("LA", "LAR"), ("JAX", "JAC"), ("WAS", "WSH"), ("LV", "OAK")])
+def test_team_abbreviation_aliases_do_not_drop_plays(contract_team, play_team):
+    c = _contract("Quincy Testarro", team=contract_team)
+    eff = ct.calculate_contract_performance_efficiency(c, [_play(qb="Q.Testarro", epa=0.5, posteam=play_team)], 2025)
+    assert eff["epa_matched_plays"] == 1
+
+
+def test_exact_full_name_match_does_not_require_a_team_match():
+    c = _contract("Quincy Testarro", team="ZZZ")
+    eff = ct.calculate_contract_performance_efficiency(c, [_play(qb="Quincy Testarro", epa=0.5, posteam="YYY")], 2025)
+    assert eff["epa_matched_plays"] == 1
