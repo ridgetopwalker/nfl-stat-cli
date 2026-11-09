@@ -36,7 +36,7 @@ from collections import Counter
 from importlib import resources
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from .fantasy import (
     calculate_player_fantasy_points,
@@ -1959,6 +1959,11 @@ def unguarded_division_warning(formula: str) -> Optional[str]:
     )
 
 
+LEADERBOARD_ROW_METRICS: Tuple[str, ...] = (
+    "plays", "games_played", "games_won", "games_lost", "yards_per_play", "total_yards", "yac_per_play",
+    "epa_per_play", "success_rate", "completion_pct",
+)
+
 ALLOWED_AST_OPS: Dict[Any, Callable[..., Any]] = {
     ast.Add: _safe_arith(operator.add),
     ast.Sub: _safe_arith(operator.sub),
@@ -3506,7 +3511,21 @@ class StatEngine:
             if not progressed:
                 break
 
-    def evaluate_all_metrics_for_group(self, plays: List[Dict[str, Any]]) -> Dict[str, float]:
+    def stat_dependency_closure(self, stat_names: Iterable[str]) -> Set[str]:
+        """Names of the given stats plus every registered stat their formulas or filters reference, transitively."""
+        needed: Set[str] = set()
+        stack = [n for n in stat_names if n in self.stats]
+        while stack:
+            cur = stack.pop()
+            if cur in needed:
+                continue
+            needed.add(cur)
+            sd = self.stats[cur]
+            refs = set(extract_formula_dependencies(sd.formula)) | set(extract_formula_dependencies(sd.filter_expr or "")) | set(sd.dependencies or [])
+            stack.extend(r for r in refs if r in self.stats and r not in needed)
+        return needed
+
+    def evaluate_all_metrics_for_group(self, plays: List[Dict[str, Any]], only: Optional[Iterable[str]] = None) -> Dict[str, float]:
         """
         Compute base traditional metrics AND resolve all composable custom stats across:
         1. Play-scoped custom stats (evaluated per play, aggregated via sdef.agg)
@@ -3515,6 +3534,10 @@ class StatEngine:
         """
         ctx = self._compute_base_metrics(plays)
         all_defs = list(self.stats.values())
+        if only is not None:
+            # Evaluate just the requested stats and what they depend on (the other registered stats are skipped)
+            needed = self.stat_dependency_closure(only)
+            all_defs = [d for d in all_defs if d.name in needed]
 
         # 1. Play-scoped custom stats
         play_defs = [s for s in all_defs if s.scope == "play"]
@@ -3587,8 +3610,13 @@ class StatEngine:
         week: Optional[int] = None,
         qtr: Optional[int] = None,
         position: Optional[str] = None,
+        also: Iterable[str] = (),
     ) -> List[Dict[str, Any]]:
-        """Evaluate a traditional or custom stat across entities and return a sorted leaderboard."""
+        """
+        Evaluate a traditional or custom stat across entities and return a sorted leaderboard.
+        Only the requested stat (and the stats it depends on) is evaluated per group; pass extra stat names in
+        ``also`` when the caller reads their per-row fields (qb_impact_score / qb_meaningful_win / qb_meaningful_loss).
+        """
         if stat_name not in self.stats:
             matches = difflib.get_close_matches(stat_name, list(self.stats.keys()), n=3, cutoff=0.5)
             hint = f" Did you mean: {', '.join(matches)}?" if matches else " Run `list-stats` or `/stats` to see available stats."
@@ -3638,6 +3666,10 @@ class StatEngine:
             or key_field in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name", "penalty_player_name")
         )
 
+        # Leaderboard rows also report these headline metrics; registered stats with the same names override the raw
+        # base metric, so they are evaluated too to keep the row fields identical to a full evaluation.
+        wanted = [stat_name, *also, *(k for k in LEADERBOARD_ROW_METRICS if k in self.stats)]
+        evaluated_stats = self.stat_dependency_closure(wanted)
         rows: List[Dict[str, Any]] = []
         for gval, gplays in groups.items():
             ent_pos = get_player_position(gval, gplays) or ""
@@ -3645,10 +3677,11 @@ class StatEngine:
                 if ent_pos and ent_pos != pos_target:
                     continue
 
-            metrics = self.evaluate_all_metrics_for_group(gplays)
+            metrics = self.evaluate_all_metrics_for_group(gplays, only=wanted)
             sample_play = max(gplays, key=lambda x: float(x.get("yards_gained", 0.0)))
-            mw = int(round(metrics.get("qb_meaningful_win", 0.0)))
-            ml = int(round(metrics.get("qb_meaningful_loss", 0.0)))
+            # QB record fields are only computed when the requested stat depends on them; otherwise they are None
+            mw = int(round(metrics.get("qb_meaningful_win", 0.0))) if "qb_meaningful_win" in evaluated_stats else None
+            ml = int(round(metrics.get("qb_meaningful_loss", 0.0))) if "qb_meaningful_loss" in evaluated_stats else None
             gp = int(metrics["games_played"])
             val = float(metrics.get(stat_name, 0.0))
             if not math.isfinite(val):
@@ -3679,12 +3712,12 @@ class StatEngine:
                 "epa_per_play": round(metrics["epa_per_play"], 2),
                 "success_rate_pct": round(metrics["success_rate"] * 100.0, 1),
                 "completion_pct": round(metrics["completion_pct"], 1),
-                "qb_impact_score": round(metrics.get("qb_impact_score", 0.0), 1),
+                "qb_impact_score": round(metrics.get("qb_impact_score", 0.0), 1) if "qb_impact_score" in evaluated_stats else None,
                 "qb_meaningful_win": mw,
                 "qb_meaningful_loss": ml,
                 "games_won": int(metrics["games_won"]),
                 "games_lost": int(metrics["games_lost"]),
-                "no_decisions": max(0, gp - mw - ml),
+                "no_decisions": max(0, gp - mw - ml) if (mw is not None and ml is not None) else None,
                 "best_play": sample_play,
                 "metrics": metrics,
             })
@@ -6351,7 +6384,10 @@ def render_qb_meaningful_wins_view(
         for k in needed_example_stats:
             eval_engine.stats[k] = EXAMPLE_CUSTOM_STATS[k]
 
-    board = eval_engine.evaluate_stat_leaderboard("qb_impact_score", plays, conf=conf, team=team, group_override="qb")
+    board = eval_engine.evaluate_stat_leaderboard(
+        "qb_impact_score", plays, conf=conf, team=team, group_override="qb",
+        also=("qb_meaningful_win", "qb_meaningful_loss"),
+    )
     sdef_win = eval_engine.stats["qb_meaningful_win"]
     sdef_loss = eval_engine.stats["qb_meaningful_loss"]
     sdef_imp = eval_engine.stats["qb_impact_score"]
