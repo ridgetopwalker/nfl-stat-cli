@@ -2,7 +2,6 @@ include LICENSE
 include README.md
 include pyproject.toml
 include nfl_stat_cli/*.R
-include custom_stats_export.json
 include install.sh
 include install.bat
 include install.ps1

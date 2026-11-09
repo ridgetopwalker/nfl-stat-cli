@@ -46,3 +46,14 @@ def test_stale_upload_helper_removed():
     # upload_to_github.py claimed the repo was private, omitted the package and tests, and
     # pushed with a token; the repository now exists and is published via normal git/PRs.
     assert not (ROOT / "upload_to_github.py").exists()
+
+
+def test_metadata_is_honest_and_export_json_not_shipped():
+    meta = (ROOT / "pyproject.toml").read_text()
+    assert "Production/Stable" not in meta
+    assert "Development Status :: 3 - Alpha" in meta
+    assert 'requires-python = ">=3.9"' in meta
+    assert "Python :: 3.8" not in meta
+    assert "custom_stats_export.json" not in (ROOT / "MANIFEST.in").read_text()
+    assert not (ROOT / "custom_stats_export.json").exists() or \
+        "custom_stats_export.json" in (ROOT / ".gitignore").read_text()
