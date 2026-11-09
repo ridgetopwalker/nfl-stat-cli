@@ -95,8 +95,9 @@ def test_metadata_is_honest_and_export_json_not_shipped():
     meta = (ROOT / "pyproject.toml").read_text()
     assert "Production/Stable" not in meta
     assert "Development Status :: 3 - Alpha" in meta
-    assert 'requires-python = ">=3.9"' in meta
+    assert 'requires-python = ">=3.10"' in meta
     assert "Python :: 3.8" not in meta
+    assert "Python :: 3.9" not in meta
     assert "custom_stats_export.json" not in (ROOT / "MANIFEST.in").read_text()
     assert not (ROOT / "custom_stats_export.json").exists() or \
         "custom_stats_export.json" in (ROOT / ".gitignore").read_text()

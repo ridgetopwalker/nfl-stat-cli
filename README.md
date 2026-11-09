@@ -7,7 +7,7 @@ A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and in
 - **One-Step Automated Installer (`install.sh` / `install.bat` / `install.ps1`)**:
   - **Compact Progress UI (Default)**: Displays the colorized `NFL-STAT-CLI` ASCII art banner, a full-width progress bar matched to the banner width, and a single overwriting status line showing the current installer command.
   - **Verbose Mode (`-v` / `--verbose`)**: Pass `-v` (`./install.sh -v` or `.\install.ps1 -v`) to view full step-by-step `pip` and environment logs.
-  - **Zero-Prerequisite Setup**: Automatically detects or installs **Python 3** (`>=3.9`), bootstraps **`pip`**, creates/updates `.venv`, installs required Python packages (`pandas`, `pyarrow`, `polars`, `nfl_data_py`), and installs R's `nflreadr` if `Rscript` is present.
+  - **Zero-Prerequisite Setup**: Automatically detects or installs **Python 3** (`>=3.10`), bootstraps **`pip`**, creates/updates `.venv`, installs required Python packages (`pandas`, `pyarrow`, `polars`, `nfl_data_py`), and installs R's `nflreadr` if `Rscript` is present.
   - **`nfl-stat` Command & Post-Install `PATH` Prompt**: Generates the `nfl-stat` launcher in the project folder (`./nfl-stat` on `*nix`/WSL and `.\nfl-stat` on Windows) and, once installation verification succeeds, asks if you want to add `nfl-stat` to your global `PATH` so you can run `nfl-stat` from any directory.
 - **General-Purpose Multi-Scope Composable Custom Stat Engine**:
   - Build custom stats across three evaluation scopes:
