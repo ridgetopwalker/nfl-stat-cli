@@ -6,7 +6,10 @@ from nfl_stat_cli import contracts as ct
 
 
 def _rec(name, pos, ctype, apy, cap):
-    return ct.ContractRecord(name, "ZZZ", pos, ctype, apy * 4, apy, apy * 2, 4, 2024, 2028, cap, "")
+    return ct.ContractRecord(
+        name=name, team="ZZZ", position=pos, contract_type=ctype, total_value_m=apy * 4, apy_m=apy,
+        guaranteed_m=apy * 2, years=4, signed_year=2024, free_agent_year=2028, cap_hit_current_m=cap,
+    )
 
 
 @pytest.fixture
@@ -16,7 +19,10 @@ def synthetic_team(monkeypatch):
         _rec("Bravo Player", "WR", "player", 20.0, 8.0),
         _rec("Charlie Coach", "HC", "coach", 25.0, 25.0),
         # A different team that must never leak into ZZZ totals
-        ct.ContractRecord("Delta Player", "YYY", "QB", "player", 400.0, 100.0, 100.0, 4, 2024, 2028, 90.0, ""),
+        ct.ContractRecord(
+            name="Delta Player", team="YYY", position="QB", contract_type="player", total_value_m=400.0,
+            apy_m=100.0, guaranteed_m=100.0, years=4, signed_year=2024, free_agent_year=2028, cap_hit_current_m=90.0,
+        ),
     ]
     monkeypatch.setattr(ct, "NFL_CONTRACTS", records)
     return records
@@ -56,3 +62,11 @@ def test_payroll_view_coach_only_team_has_no_player_total(monkeypatch):
     assert "CATALOGED PLAYER TOTAL" not in out
     assert "TOTAL COMMITTED" not in out
     assert "Charlie Coach" in out
+    assert "cataloged player contract" not in out
+
+
+def test_payroll_view_still_lists_unknown_contract_types(monkeypatch):
+    odd = _rec("Echo Exec", "GM", "executive", 4.0, 1.0)
+    monkeypatch.setattr(ct, "NFL_CONTRACTS", [_rec("Alpha Player", "QB", "player", 10.0, 5.0), odd])
+    out = cli.strip_ansi(ct.render_team_payroll_view("ZZZ"))
+    assert "Echo Exec" in out

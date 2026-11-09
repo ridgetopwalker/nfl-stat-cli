@@ -399,18 +399,18 @@ def render_player_contract_view(
     return "\n".join(lines)
 
 
-def compute_team_payroll_totals(team_abbr: str) -> Dict[str, Any]:
+def compute_team_payroll_totals(team_abbr: str, contracts: Optional[List[ContractRecord]] = None) -> Dict[str, Any]:
     """
     Sum cataloged contract money for one team, keeping player cap and coach pay apart.
 
     Head-coach salaries are not salary-cap charges, so they are never added to the player totals.
-    The catalog is partial (it is a curated list, not every roster contract), so the player totals
-    describe only the cataloged players.
+    Any contract whose type is not "coach" is treated as a player contract. The catalog is partial
+    (a curated list, not every roster contract), so the player totals describe only cataloged players.
     """
     t = team_abbr.strip().upper()
-    contracts = get_contracts_by_team(t)
-    players = [c for c in contracts if c.contract_type == "player"]
-    coaches = [c for c in contracts if c.contract_type == "coach"]
+    rows = get_contracts_by_team(t) if contracts is None else contracts
+    players = [c for c in rows if c.contract_type != "coach"]
+    coaches = [c for c in rows if c.contract_type == "coach"]
     return {
         "team": t,
         "player_count": len(players),
@@ -430,8 +430,8 @@ def render_team_payroll_view(team_abbr: str) -> str:
     if not team_contracts:
         return f"\n{C.YELLOW}⚠ No contracts cataloged for team '{team_abbr}'.{C.RESET}"
 
-    totals = compute_team_payroll_totals(t)
-    players = sorted((c for c in team_contracts if c.contract_type == "player"), key=lambda x: x.apy_m, reverse=True)
+    totals = compute_team_payroll_totals(t, team_contracts)
+    players = sorted((c for c in team_contracts if c.contract_type != "coach"), key=lambda x: x.apy_m, reverse=True)
     coaches = sorted((c for c in team_contracts if c.contract_type == "coach"), key=lambda x: x.apy_m, reverse=True)
 
     title_str = f"🏛️ Team Contract Payroll & Cap Allocation: {t}"
@@ -477,7 +477,9 @@ def render_team_payroll_view(team_abbr: str) -> str:
         rows,
         alignments=["left", "center", "center", "right", "right", "right", "center", "right", "center"],
     )
-    notes = [f"  {C.DIM}Totals cover only the {len(players)} cataloged player contract(s); the catalog is partial, so this is not the team's full cap commitment.{C.RESET}"]
+    notes = []
+    if players:
+        notes.append(f"  {C.DIM}Totals cover only the {len(players)} cataloged player contract(s); the catalog is partial, so this is not the team's full cap commitment.{C.RESET}")
     if coaches:
         notes.append(f"  {C.DIM}Coach pay is listed separately and is not included in the player totals.{C.RESET}")
     return f"\n{tbl}\n" + "\n".join(notes)
