@@ -55,6 +55,8 @@ EXCLUDE_REL_PATHS = {
     "pro_football_slm/legacy_compat.py",
     "pro_football_slm/_legacy_env.py",
     "nfl_stat_cli/legacy_compat.py",  # pre-rename path, just in case
+    # Rebrand tests intentionally exercise legacy env names / migration paths.
+    "tests/test_rebrand.py",
 }
 
 # Directory / file moves: (old_rel, new_rel). Applied in order; parents first.
@@ -77,6 +79,7 @@ CONTENT_SUBS: List[Tuple[str, str]] = [
     ("nfl-stat-error-triage", "pro-football-slm-error-triage"),
     ("reload_nfl_stat_cli", "reload_pro_football_slm"),
     ("nfl_stat_cli", "pro_football_slm"),
+    ("NFL-STAT-CLI", "Pro Football SLM"),  # old banner / loading brand string
     ("nfl-stat-cli", "pro-football-slm"),
     ("NFL_STAT_", "PFSLM_"),
     (".nfl_stat_cli", ".pro_football_slm"),
