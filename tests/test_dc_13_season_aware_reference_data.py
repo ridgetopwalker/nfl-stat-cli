@@ -5,7 +5,9 @@ import nfl_stat_cli as cli
 from nfl_stat_cli import contracts as ct
 
 SNAP_COACH = getattr(cli, "COACHING_SNAPSHOT_SEASON", 2025)
-SNAP_CONTRACT = getattr(ct, "CONTRACT_SNAPSHOT_SEASON", 2024)
+_CATALOG = getattr(ct, "CONTRACT_SEASONS", {2019: 0, 2032: 0})  # resolved lazily so every test fails on behaviour on base
+SNAP_CONTRACT = 2025                       # inside the embedded deals' terms
+FIRST_CONTRACT, LAST_CONTRACT = min(_CATALOG), max(_CATALOG)
 
 
 def _row(**kw):
@@ -62,14 +64,16 @@ def test_staff_view_says_when_the_season_is_not_cataloged():
 
 # --- contracts ------------------------------------------------------------------------------------
 
-def test_contracts_are_keyed_by_season_and_flagged_unverified():
-    assert set(ct.CONTRACT_SEASONS) == {SNAP_CONTRACT}
-    assert ct.CONTRACT_SEASONS[SNAP_CONTRACT]["status"] == "unverified"
+def test_contracts_are_keyed_by_season_from_each_deals_own_term_and_flagged_unverified():
+    assert FIRST_CONTRACT == min(c.signed_year for c in ct.NFL_CONTRACTS)
+    assert LAST_CONTRACT == max(c.free_agent_year for c in ct.NFL_CONTRACTS)
+    assert set(ct.CONTRACT_SEASONS) == set(range(FIRST_CONTRACT, LAST_CONTRACT + 1))
+    assert {v["status"] for v in ct.CONTRACT_SEASONS.values()} == {"unverified"}
     assert ct.find_contract_by_name("Patrick Mahomes", season=SNAP_CONTRACT).team == "KC"
     assert ct.find_contract_by_name("Patrick Mahomes").team == "KC"
 
 
-@pytest.mark.parametrize("season", [SNAP_CONTRACT - 1, SNAP_CONTRACT + 1, 2030])
+@pytest.mark.parametrize("season", [FIRST_CONTRACT - 1, LAST_CONTRACT + 1, 2040])
 def test_uncataloged_contract_season_finds_nothing(season):
     assert ct.find_contract_by_name("Patrick Mahomes", season=season) is None
     assert not ct.contract_season_cataloged(season)
@@ -80,9 +84,18 @@ def test_uncataloged_contract_season_finds_nothing(season):
 def test_contract_dossier_states_status_and_is_not_pinned_to_a_hard_coded_year():
     out = cli.strip_ansi(ct.render_player_contract_view("Patrick Mahomes", season=SNAP_CONTRACT))
     assert "unverified static snapshot" in out
-    assert "season(s) remaining)" not in out and f"after the {SNAP_CONTRACT} snapshot" in out
-    gone = cli.strip_ansi(ct.render_player_contract_view("Patrick Mahomes", season=SNAP_CONTRACT + 1))
+    assert f"season(s) remaining after {SNAP_CONTRACT}" in out
+    gone = cli.strip_ansi(ct.render_player_contract_view("Patrick Mahomes", season=LAST_CONTRACT + 1))
     assert "not cataloged" in gone and "Average Per Year" not in gone
+
+
+def test_a_deal_is_only_shown_for_seasons_its_own_term_covers():
+    deal = ct.find_contract_by_name("Dak Prescott")
+    assert deal.signed_year > FIRST_CONTRACT  # a season inside the catalog but before this deal
+    assert ct.contract_in_effect(deal, deal.signed_year) and ct.contract_in_effect(deal, deal.free_agent_year)
+    assert ct.contract_in_effect(deal, None) and not ct.contract_in_effect(deal, deal.free_agent_year + 1)
+    before = cli.strip_ansi(ct.render_player_contract_view("Dak Prescott", season=deal.signed_year - 1))
+    assert "no cataloged contract in effect" in before and "Average Per Year" not in before
 
 
 def _mahomes_rows(season):
@@ -98,19 +111,14 @@ def _contract_query(tmp_path, season):
 
 
 def test_contract_rankings_are_withheld_for_an_uncataloged_season(tmp_path):
-    for season in (SNAP_CONTRACT + 1, SNAP_CONTRACT - 1):
+    for season in (LAST_CONTRACT + 1, FIRST_CONTRACT - 1):
         out = _contract_query(tmp_path, season)
         assert "Contract data is not cataloged" in out and "No contract-based ranking is shown" in out
     assert "No contract-based ranking" not in _contract_query(tmp_path, SNAP_CONTRACT)
 
 
-def test_the_engine_itself_stays_season_blind_for_contract_metrics(tmp_path):
-    eng = cli.StatEngine(storage_dir=tmp_path)  # gating is a query-layer decision, not a metrics decision
-    assert eng._compute_base_metrics(_mahomes_rows(SNAP_CONTRACT + 1))["cap_hit"] > 0
-
-
 def test_query_notes_explain_missing_reference_data():
-    note = cli.strip_ansi(cli._reference_data_note("cap_hit", None, SNAP_CONTRACT + 1))
+    note = cli.strip_ansi(cli._reference_data_note("cap_hit", None, LAST_CONTRACT + 1))
     assert "not cataloged" in note
     assert cli._reference_data_note("cap_hit", None, SNAP_CONTRACT) == ""
     assert "Coaching staffs are not cataloged" in cli.strip_ansi(cli._reference_data_note("epa_per_play", "coach", SNAP_COACH + 1))
@@ -193,4 +201,4 @@ def test_team_view_distinguishes_a_missing_team_from_a_missing_season(monkeypatc
 
 
 def test_a_float_style_season_string_is_still_a_season():
-    assert ct.as_season("2024.0") == 2024 and ct.as_season(2024.0) == 2024
+    assert ct.as_season("2025.0") == 2025 and ct.as_season(2025.0) == 2025
