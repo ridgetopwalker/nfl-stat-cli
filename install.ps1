@@ -4,12 +4,24 @@
     Usage:
       .\install.ps1        Compact UI (ASCII Art + Full-Width Progress Bar + 1-Line Live Command)
       .\install.ps1 -v     Verbose mode (full command and pip output)
+
+    Options:
+      -SkipLivePackages     Explicit sample mode: skip the live NFL data packages. nfl-stat then
+                            runs on the small built-in SAMPLE dataset.
+      -WithLegacyNflDataPy  Also install the deprecated nfl_data_py fallback loader (only useful
+                            on Python 3.9, where nflreadpy is unavailable).
+      -WithSLM              Pull a small local model through Ollama (optional).
+
+    Failures are not swallowed: if a required step fails the installer stops with a non-zero
+    exit code and shows the end of the install log. Live-data packages are required unless
+    -SkipLivePackages is passed explicitly.
 #>
 param(
     [Alias("v")]
     [switch]$VerboseMode = $false,
     [switch]$WithSLM = $false,
-    [switch]$SkipLivePackages = $false
+    [switch]$SkipLivePackages = $false,
+    [switch]$WithLegacyNflDataPy = $false
 )
 
 $ErrorActionPreference = "Continue"
@@ -17,6 +29,36 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $ProjectRoot
 $LogFile = Join-Path $env:TEMP "nfl_stat_cli_install.log"
 "" | Set-Content -Path $LogFile -Encoding UTF8 -ErrorAction SilentlyContinue
+
+# Python installer fallback (used only when winget is unavailable). The SHA-256 below was
+# computed from the python.org download of this exact file; update both values together.
+$PythonInstallerVersion = "3.13.17"
+$PythonInstallerSha256 = "5da012101ba2e17113a9a1cd901e9ce1441086f2b7ecb5de06ec94163899a190"
+$script:InstallWarnings = New-Object System.Collections.Generic.List[string]
+
+function Add-InstallWarning([string]$Message) {
+    $script:InstallWarnings.Add($Message)
+}
+
+function Stop-Install([string]$Message, [int]$Code = 1) {
+    Write-Host ""
+    Write-Host "ERROR: $Message" -ForegroundColor Red
+    if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 0)) {
+        Write-Host "Last lines of the install log ($LogFile):" -ForegroundColor Yellow
+        Get-Content -Path $LogFile -Tail 25 | ForEach-Object { Write-Host $_ }
+    }
+    exit $Code
+}
+
+function Write-InstallWarnings {
+    if ($script:InstallWarnings.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Warnings:" -ForegroundColor Yellow
+        foreach ($w in $script:InstallWarnings) { Write-Host "  - $w" -ForegroundColor Yellow }
+    }
+}
+
+$LiveHint = "Live NFL data packages (pandas, pyarrow, polars, nflreadpy) could not be installed. nflreadpy needs Python 3.10+. Re-run with -SkipLivePackages to accept the built-in sample dataset on purpose."
 
 function Find-RealPython {
     $MachinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -30,7 +72,7 @@ function Find-RealPython {
         if ($found -and $found.Source -notmatch "WindowsApps") {
             try {
                 $ver = & $found.Source -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-                if ($LASTEXITCODE -eq 0 -and $ver -match "^3\.") {
+                if ($LASTEXITCODE -eq 0 -and $ver -match "^3\.(\d+)$" -and [int]$Matches[1] -ge 9) {
                     return $found.Source
                 }
             } catch {}
@@ -90,30 +132,38 @@ if ($VerboseMode) {
 # 1. Ensure Python 3 is installed
 $PythonExe = Find-RealPython
 if (-not $PythonExe) {
-    if ($VerboseMode) { Write-Host "[1/5] Python 3 not found. Installing Python 3.12..." -ForegroundColor Yellow }
-    else { Update-CompactUI 10 "winget install -e --id Python.Python.3.12" }
+    if ($VerboseMode) { Write-Host "[1/5] Python 3 not found. Installing Python 3.13..." -ForegroundColor Yellow }
+    else { Update-CompactUI 10 "winget install -e --id Python.Python.3.13" }
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget) {
         if ($VerboseMode) {
-            & winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
+            & winget install -e --id Python.Python.3.13 --scope user --accept-package-agreements --accept-source-agreements
         } else {
-            & winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements >>$LogFile 2>&1
+            & winget install -e --id Python.Python.3.13 --scope user --accept-package-agreements --accept-source-agreements >>$LogFile 2>&1
         }
     }
     $PythonExe = Find-RealPython
     if (-not $PythonExe) {
-        if (-not $VerboseMode) { Update-CompactUI 15 "Downloading python-3.12.8-amd64.exe from python.org..." }
-        $installerUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe"
-        $installerPath = Join-Path $env:TEMP "python-3.12.8-amd64.exe"
-        Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
+        $installerName = "python-$PythonInstallerVersion-amd64.exe"
+        if (-not $VerboseMode) { Update-CompactUI 15 "Downloading $installerName from python.org..." }
+        $installerUrl = "https://www.python.org/ftp/python/$PythonInstallerVersion/$installerName"
+        $installerPath = Join-Path $env:TEMP $installerName
+        try {
+            Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+        } catch {
+            Stop-Install "Could not download $installerName from python.org: $($_.Exception.Message). Install Python 3.9+ manually from https://www.python.org/downloads/ and re-run."
+        }
+        $actualHash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $PythonInstallerSha256) {
+            Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+            Stop-Install "SHA-256 mismatch for the downloaded $installerName (expected $PythonInstallerSha256, got $actualHash). The installer was deleted and NOT run."
+        }
         Start-Process -FilePath $installerPath -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_test=0" -Wait
         Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
         $PythonExe = Find-RealPython
     }
     if (-not $PythonExe) {
-        Write-Host ""
-        Write-Host "ERROR: Could not automatically install Python 3." -ForegroundColor Red
-        exit 1
+        Stop-Install "Could not automatically install Python 3.9 or newer. Install it from https://www.python.org/downloads/ and re-run."
     }
 }
 if ($VerboseMode) { Write-Host "[1/5] Using Python: $PythonExe" -ForegroundColor Green }
@@ -126,6 +176,10 @@ if (-not (Test-Path $VenvPy)) {
     if ($VerboseMode) { Write-Host "[2/5] Creating virtual environment in .venv..." -ForegroundColor Cyan }
     else { Update-CompactUI 25 "$PythonExe -m venv .venv" }
     & $PythonExe -m venv $VenvDir >>$LogFile 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
+        Add-InstallWarning "Could not create a .venv; installing into the system Python instead."
+    }
 }
 if (Test-Path $VenvPy) {
     & $VenvPy -m pip --version >>$LogFile 2>&1
@@ -133,6 +187,7 @@ if (Test-Path $VenvPy) {
         $PythonExe = $VenvPy
     } else {
         Remove-Item $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
+        Add-InstallWarning "The existing .venv had no working pip and was removed; installing into the system Python instead."
     }
 }
 
@@ -142,24 +197,31 @@ else { Update-CompactUI 28 "$PythonExe -m pip --version" }
 if ($LASTEXITCODE -ne 0) {
     if (-not $VerboseMode) { Update-CompactUI 32 "$PythonExe -m ensurepip --upgrade" }
     & $PythonExe -m ensurepip --upgrade >>$LogFile 2>&1
+    if ($LASTEXITCODE -ne 0) { Stop-Install "pip is not available and ensurepip failed. Reinstall Python with pip included and re-run." }
 }
 if (-not $VerboseMode) { Update-CompactUI 40 "$PythonExe -m pip install --upgrade pip setuptools wheel" }
 & $PythonExe -m pip install --upgrade pip setuptools wheel --quiet >>$LogFile 2>&1
+if ($LASTEXITCODE -ne 0) { Add-InstallWarning "Could not upgrade pip/setuptools/wheel; continuing with the installed versions." }
 
 # 3. Install required Python packages & nfl-stat-cli
-if (-not $SkipLivePackages) {
+$RequirementsLive = Join-Path $ProjectRoot "requirements-live.txt"
+if ($SkipLivePackages) {
+    Add-InstallWarning "-SkipLivePackages: nfl-stat will use the built-in SAMPLE dataset, not live NFL data."
+    if ($VerboseMode) { Write-Host "[3/5] -SkipLivePackages: skipping live NFL data packages (sample dataset only)." -ForegroundColor DarkYellow }
+} else {
+    if (-not (Test-Path $RequirementsLive)) { Stop-Install "requirements-live.txt not found next to install.ps1." }
     if ($VerboseMode) {
-        Write-Host "[3/5] Installing NFL analytics Python packages (pandas, pyarrow, polars, nfl_data_py, nflreadpy)..." -ForegroundColor Cyan
-        & $PythonExe -m pip install --only-binary=:all: pandas pyarrow polars
-        & $PythonExe -m pip install nfl_data_py
-        & $PythonExe -m pip install --only-binary=:all: nflreadpy >>$LogFile 2>&1
+        Write-Host "[3/5] Installing live NFL data packages from requirements-live.txt (pandas, pyarrow, polars, nflreadpy)..." -ForegroundColor Cyan
+        & $PythonExe -m pip install --only-binary=:all: -r $RequirementsLive
     } else {
-        Update-CompactUI 55 "pip install --only-binary=:all: pandas pyarrow polars"
-        & $PythonExe -m pip install --only-binary=:all: pandas pyarrow polars --quiet >>$LogFile 2>&1
-        Update-CompactUI 75 "pip install nfl_data_py"
-        & $PythonExe -m pip install nfl_data_py --quiet >>$LogFile 2>&1
-        Update-CompactUI 82 "pip install --only-binary=:all: nflreadpy"
-        & $PythonExe -m pip install --only-binary=:all: nflreadpy >>$LogFile 2>&1
+        Update-CompactUI 55 "pip install --only-binary=:all: -r requirements-live.txt"
+        & $PythonExe -m pip install --only-binary=:all: -r $RequirementsLive --quiet >>$LogFile 2>&1
+    }
+    if ($LASTEXITCODE -ne 0) { Stop-Install $LiveHint }
+    if ($WithLegacyNflDataPy) {
+        if (-not $VerboseMode) { Update-CompactUI 80 "pip install nfl_data_py (legacy, requested)" }
+        & $PythonExe -m pip install "nfl_data_py>=0.3.0,<0.4" --quiet >>$LogFile 2>&1
+        if ($LASTEXITCODE -ne 0) { Stop-Install "Could not install the requested legacy nfl_data_py." }
     }
 }
 
@@ -170,12 +232,18 @@ if ($VerboseMode) {
     Update-CompactUI 90 "pip install -e . --no-build-isolation"
     & $PythonExe -m pip install -e . --no-build-isolation >>$LogFile 2>&1
 }
+if ($LASTEXITCODE -ne 0) {
+    # Retry with build isolation (needs network) before giving up.
+    & $PythonExe -m pip install -e . >>$LogFile 2>&1
+    if ($LASTEXITCODE -ne 0) { Stop-Install "Could not install nfl-stat-cli itself (pip install -e . failed)." }
+}
 
 # 4. Optional R & Optional Local SLM (Ollama)
 $rscript = Get-Command Rscript -ErrorAction SilentlyContinue
 if ($rscript) {
     if (-not $VerboseMode) { Update-CompactUI 94 "Rscript -e install.packages('nflreadr')" }
     & Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" >>$LogFile 2>&1
+    if ($LASTEXITCODE -ne 0) { Add-InstallWarning "Could not install the optional R package nflreadr (the R data bridge will be unavailable)." }
 }
 
 if ($WithSLM) {
@@ -184,6 +252,7 @@ if ($WithSLM) {
         if ($VerboseMode) { Write-Host "[4/5] Pulling local SLM model (qwen2.5:1.5b) via Ollama..." -ForegroundColor Cyan }
         else { Update-CompactUI 96 "ollama pull qwen2.5:1.5b" }
         & ollama pull qwen2.5:1.5b >>$LogFile 2>&1
+        if ($LASTEXITCODE -ne 0) { Add-InstallWarning "'ollama pull qwen2.5:1.5b' failed; the local language model is unavailable." }
     } elseif ($VerboseMode) {
         Write-Host "[4/5] Note: Ollama not found on PATH; skipping local SLM model pull." -ForegroundColor DarkYellow
     }
@@ -229,6 +298,20 @@ if ($VerboseMode) {
         exit $VerifyCode
     }
 }
+
+# A "successful" install must not silently leave the user on the built-in sample dataset.
+if (-not $SkipLivePackages) {
+    & $PythonExe -c "import nflreadpy" 2>$null
+    $LiveOk = ($LASTEXITCODE -eq 0)
+    if (-not $LiveOk -and $WithLegacyNflDataPy) {
+        & $PythonExe -c "import nfl_data_py" 2>$null
+        $LiveOk = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $LiveOk) {
+        Stop-Install "Installation finished but no live data loader can be imported, so nfl-stat would silently fall back to SAMPLE data. $LiveHint"
+    }
+}
+Write-InstallWarnings
 
 if ($VerifyCode -eq 0 -and [Environment]::UserInteractive) {
     $ans = Read-Host "? Add 'nfl-stat' to your PATH so you can run it from anywhere? [y/N]"

@@ -7,5 +7,6 @@ include custom_stats_export.json
 include install.sh
 include install.bat
 include install.ps1
+include requirements-live.txt
 global-exclude *.py[cod] __pycache__ *.so *.dylib .DS_Store *.docx *.zip
 include nfl_stat_cli.py

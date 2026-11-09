@@ -1,0 +1,9 @@
+# Live nflverse data packages used by install.sh / install.ps1.
+# Without these nfl-stat falls back to the small built-in SAMPLE dataset.
+# Lower bounds match the `live` extra in pyproject.toml; upper bounds stop a new major
+# release from silently changing behaviour -- raise them deliberately after testing.
+# nflreadpy (the maintained nflverse loader) requires Python 3.10+.
+pandas>=2.0.0,<4
+polars>=0.20.0,<3
+pyarrow>=14.0.0,<28
+nflreadpy>=0.1.0,<0.2
