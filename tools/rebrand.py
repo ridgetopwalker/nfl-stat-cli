@@ -69,7 +69,7 @@ PATH_MOVES: List[Tuple[str, str]] = [
 
 # Placeholders so we never rewrite the GitHub repo URL.
 _GH_REPO = "github.com/ridgetopwalker/nfl-stat-cli"
-_GH_PLACEHOLDER = "<<<GH_REPO_NFL_STAT_CLI>>>"
+_GH_PLACEHOLDER = "<<<GITHUB_REPO_URL_DO_NOT_EDIT>>>"
 
 # Ordered text substitutions applied to file contents (after URL protect).
 # Longer / more specific patterns first.
