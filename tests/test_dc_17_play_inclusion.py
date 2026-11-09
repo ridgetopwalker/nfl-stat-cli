@@ -32,7 +32,14 @@ def test_declined_penalty_on_a_non_scrimmage_play_is_not_playable(pt):
     desc = "play result. PENALTY on ZZZ-X.Player, Offside, 5 yards, declined."
     assert not cli._pbp_row_is_playable(_raw(play_type=pt, desc=desc))                 # flag missing
     assert not cli._pbp_row_is_playable(_raw(play_type=pt, desc=desc, penalty=0))      # explicit 0 wins
-    assert not cli._pbp_row_is_playable(_raw(play_type=pt, desc=desc, penalty=1))      # declined is still declined
+
+
+@pytest.mark.parametrize("pt", ["punt", "qb_kneel"])
+def test_an_explicit_penalty_flag_is_trusted_and_mixed_accepted_text_is_kept(pt):
+    mixed = "PENALTY on ZZZ-A, Holding, declined. PENALTY on YYY-B, Offside, 5 yards, enforced."
+    assert cli._pbp_row_is_playable(_raw(play_type=pt, desc="play. PENALTY on ZZZ-A, Offside, declined.", penalty=1))
+    assert cli._pbp_row_is_playable(_raw(play_type=pt, desc=mixed))
+    assert cli._pbp_row_is_playable(_raw(play_type=pt, desc=mixed, penalty=1))
 
 
 @pytest.mark.parametrize("pt", ["punt", "kickoff", "qb_kneel", "qb_spike"])
@@ -107,6 +114,24 @@ def test_return_touchdowns_are_not_offense_touchdowns(tmp_path):
     assert m["td_rate"] == pytest.approx(1.0 / 4.0)
     assert _pick_six()["touchdown"] == 1                      # the raw flag stays, for D/ST scoring
     assert _pick_six()["td_team"] == "YYY"
+    assert _pick_six()["pass_touchdown"] == 0 and m["pass_touchdowns"] == 0.0   # not a passing TD either
+
+
+def test_defensive_return_is_not_a_rushing_td_and_explicit_columns_win():
+    fumble_six = _norm(play_type="run", rush_attempt=1, touchdown=1, td_team="YYY", fumble_lost=1)
+    assert fumble_six["rush_touchdown"] == 0
+    explicit = _norm(play_type="run", rush_attempt=1, touchdown=1, td_team="YYY", rush_touchdown=1)
+    assert explicit["rush_touchdown"] == 1
+
+
+def test_csv_style_string_values_work_and_the_r_bridge_exports_the_columns():
+    from pathlib import Path
+    row = _norm(play_type="pass", pass_attempt="1", interception="1", touchdown="1", td_team="YYY", return_touchdown="1")
+    assert row["return_touchdown"] == 1 and row["td_team"] == "YYY" and row["pass_touchdown"] == 0
+    root = Path(__file__).resolve().parent.parent
+    for script in (root / "nfl_stat_cli" / "nflverse_bridge.R", root / "nflverse_bridge.R"):
+        text = script.read_text(encoding="utf-8")
+        assert '"td_team"' in text and '"return_touchdown"' in text
 
 
 def test_return_touchdown_flag_is_enough_when_td_team_is_missing(tmp_path):
@@ -130,10 +155,24 @@ def test_explicit_success_columns_are_kept_apart():
     assert row["success"] == 0 and row["series_success"] == 1
 
 
-def test_success_rate_counts_positive_epa_plays(tmp_path):
-    rows = [_norm(play_type="run", rush_attempt=1, epa=0.4, yards_gained=2.0, first_down=0),
-            _norm(play_type="run", rush_attempt=1, epa=-0.2, yards_gained=11.0, ydstogo=10, first_down=1)]
+def test_success_rate_counts_positive_epa_plays_not_first_downs(tmp_path):
+    # only series_success is present (a first down with negative EPA): success (EPA > 0) must not read it
+    rows = [_norm(play_type="run", rush_attempt=1, epa=-0.2, yards_gained=11.0, ydstogo=10, first_down=1,
+                  series_success=1),
+            _norm(play_type="run", rush_attempt=1, epa=0.4, yards_gained=2.0, first_down=0, series_success=0)]
     assert _metrics(rows, tmp_path)["success_rate"] == pytest.approx(0.5)
+    only_first_down = rows[:1]
+    assert _metrics(only_first_down, tmp_path)["success_rate"] == 0.0
+
+
+def test_first_downs_and_touchdowns_on_no_play_rows_do_not_feed_the_rates(tmp_path):
+    odd = [_norm(play_type="no_play", penalty=1, first_down=1, touchdown=1, yards_gained=25.0, epa=0.5,
+                 desc="defensive holding, automatic first down")]
+    base = _metrics(_downs(), tmp_path)
+    mixed = _metrics(_downs() + odd, tmp_path)
+    for key in ("first_downs", "first_down_rate", "explosive_plays", "explosive_play_rate", "td_rate", "touchdowns",
+                "success_rate"):
+        assert mixed[key] == pytest.approx(base[key]), key
 
 
 # --- no fabricated season / game id ---------------------------------------------------------------
