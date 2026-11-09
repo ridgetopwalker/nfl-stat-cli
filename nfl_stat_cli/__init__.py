@@ -8431,6 +8431,35 @@ def wait_for_resolution(
         time.sleep(poll_interval)
 
 
+def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
+    """
+    Cleanly reload nfl-stat-cli and all its submodules in-place.
+    Optionally pulls git updates first.
+    Purges cached submodules from sys.modules to ensure fresh imports.
+    """
+    import sys
+    import importlib
+
+    if pull_git:
+        try:
+            import subprocess
+            subprocess.run(["git", "pull"], capture_output=True, text=True, timeout=25)
+        except Exception:
+            pass
+
+    # Purge cached submodules so fresh code is loaded from disk
+    for m in list(sys.modules.keys()):
+        if m.startswith("nfl_stat_cli."):
+            try:
+                del sys.modules[m]
+            except KeyError:
+                pass
+
+    import nfl_stat_cli as _cur_mod
+    return importlib.reload(_cur_mod)
+
+
+
 def render_slash_help() -> str:
     return f"""
 {C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
@@ -8915,9 +8944,7 @@ def interactive_tui(
                                 print(f"  {C.BOLD}Fix Details:{C.RESET} {res.get('summary')}")
                             print(f"  {C.CYAN}🔄 Reloading programming and re-evaluating query...{C.RESET}\n")
                             try:
-                                import importlib
-                                import nfl_stat_cli as _cur_mod
-                                importlib.reload(_cur_mod)
+                                _cur_mod = reload_nfl_stat_cli(pull_git=False)
                                 engine = _cur_mod.StatEngine()
                                 re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
                                     last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
@@ -8931,9 +8958,7 @@ def interactive_tui(
                 elif cmd_token in ("/reload", "/update", "/refresh"):
                     print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place...{C.RESET}")
                     try:
-                        import importlib
-                        import nfl_stat_cli as _cur_mod
-                        importlib.reload(_cur_mod)
+                        _cur_mod = reload_nfl_stat_cli(pull_git=True)
                         engine = _cur_mod.StatEngine()
                         ipc_dir = get_ipc_dir()
                         latest_res_p = ipc_dir / "resolved" / "latest.json"

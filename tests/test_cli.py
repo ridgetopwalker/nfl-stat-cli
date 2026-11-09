@@ -1724,6 +1724,17 @@ def test_fantasy_dst_team_defense_scoring_and_error_regression():
     assert "(No matching records found)" not in out
 
 
+def test_reload_nfl_stat_cli_purges_submodules():
+    import sys
+    # Verify reload_nfl_stat_cli reloads all submodules cleanly
+    reloaded = cli.reload_nfl_stat_cli(pull_git=False)
+    assert hasattr(reloaded, "calculate_dst_points_allowed_score")
+    assert hasattr(reloaded, "compute_team_dst_fantasy_leaders")
+    assert hasattr(reloaded, "render_team_dst_fantasy_profile_view")
+    assert "nfl_stat_cli.fantasy" in sys.modules
+
+
+
 
 
 
