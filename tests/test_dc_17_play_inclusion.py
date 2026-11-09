@@ -171,8 +171,35 @@ def test_first_downs_and_touchdowns_on_no_play_rows_do_not_feed_the_rates(tmp_pa
     base = _metrics(_downs(), tmp_path)
     mixed = _metrics(_downs() + odd, tmp_path)
     for key in ("first_downs", "first_down_rate", "explosive_plays", "explosive_play_rate", "td_rate", "touchdowns",
-                "success_rate"):
+                "success_rate", "yards_per_play", "epa_per_play", "total_yards", "total_epa"):
         assert mixed[key] == pytest.approx(base[key]), key
+
+
+@pytest.mark.parametrize("pt,flag", [("qb_kneel", "rush_attempt"), ("qb_spike", "pass_attempt"), ("punt", "")])
+def test_clock_plays_and_special_teams_never_feed_the_rates_even_with_attempt_flags(tmp_path, pt, flag):
+    extra = {flag: 1} if flag else {"penalty": 1}
+    row = _norm(play_type=pt, yards_gained=-1.0 if pt != "punt" else 45.0, epa=0.7, desc="kept for a flag", **extra)
+    base = _metrics(_downs(), tmp_path)
+    mixed = _metrics(_downs() + [row], tmp_path)
+    assert mixed["plays"] == 2.0
+    for key in ("yards_per_play", "epa_per_play", "success_rate", "total_epa"):
+        assert mixed[key] == pytest.approx(base[key]), key
+
+
+def test_first_down_and_series_success_fallbacks_ignore_defensive_scores():
+    six = _norm(play_type="pass", pass_attempt=1, interception=1, touchdown=1, td_team="YYY", ydstogo=10,
+                yards_gained=0.0)
+    assert six["first_down"] == 0 and six["series_success"] == 0
+    own = _norm(play_type="run", rush_attempt=1, touchdown=1, td_team="ZZZ", ydstogo=10, yards_gained=3.0)
+    assert own["first_down"] == 1 and own["series_success"] == 1
+
+
+def test_success_rate_falls_back_to_epa_for_legacy_rows_without_a_success_column(tmp_path):
+    legacy = [{"play_type": "run", "rush_attempt": 1, "epa": 0.5, "series_success": 1, "posteam": "ZZZ",
+               "game_id": "g"},
+              {"play_type": "run", "rush_attempt": 1, "epa": -0.5, "series_success": 1, "posteam": "ZZZ",
+               "game_id": "g"}]
+    assert _metrics(legacy, tmp_path)["success_rate"] == pytest.approx(0.5)
 
 
 # --- no fabricated season / game id ---------------------------------------------------------------
