@@ -143,6 +143,16 @@ class C:
             if attr.isupper() and not attr.startswith("_"):
                 setattr(cls, attr, "")
 
+    @classmethod
+    def snapshot(cls) -> Dict[str, str]:
+        """Current colour codes, so a caller that disables colour temporarily can put them back with restore()."""
+        return {a: getattr(cls, a) for a in dir(cls) if a.isupper() and not a.startswith("_")}
+
+    @classmethod
+    def restore(cls, saved: Dict[str, str]) -> None:
+        for attr, value in saved.items():
+            setattr(cls, attr, value)
+
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -5095,7 +5105,9 @@ class NaturalLanguageStatAssistant:
         or the deterministic rule/AST parser.
         Never forces an ASCII field when the user is asking for an average or leaderboard across the year!
         """
-        effective_mode = (slm_model or "auto").strip().lower()
+        # Library default is "off": no localhost probe and no model call unless the caller opts in with
+        # slm_model="auto" or a model name (the CLI and TUI pass "auto" explicitly).
+        effective_mode = (slm_model or "off").strip().lower()
         if engine is not None and effective_mode not in ("none", "off", "disable", "disabled"):
             detected = pre_detected_model or cls.detect_ollama_model(slm_model)
             if detected:
@@ -6130,6 +6142,7 @@ def render_general_stat_view(
     qtr: Optional[int] = None,
     limit: Optional[int] = None,
     position: Optional[str] = None,
+    board_sink: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     if stat_name not in engine.stats:
         matches = difflib.get_close_matches(stat_name, list(engine.stats.keys()), n=3, cutoff=0.5)
@@ -6141,6 +6154,8 @@ def render_general_stat_view(
         stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr, position=position
     )
     display_board = board[:limit] if (limit and limit > 0) else board
+    if board_sink is not None:
+        board_sink.extend(_leaderboard_record(r) for r in display_board)
 
     out: List[str] = []
     if _should_show_table(view_mode, is_play_query=False):
@@ -6729,6 +6744,11 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
+def _leaderboard_record(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A leaderboard row as plain JSON-safe data (drops the bulky best_play / metrics payloads)."""
+    return {k: v for k, v in row.items() if k not in ("best_play", "metrics")}
+
+
 def handle_nl_query_result(
     parsed: Dict[str, Any],
     engine: StatEngine,
@@ -6736,6 +6756,7 @@ def handle_nl_query_result(
     view_override: str = "auto",
     camera_override: Optional[str] = None,
     interactive: bool = False,
+    board_sink: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     intent = parsed.get("intent", "stat_query")
     if intent == "ambiguous":
@@ -7017,7 +7038,70 @@ def handle_nl_query_result(
         qtr=qtr,
         limit=parsed.get("limit"),
         position=parsed.get("position"),
+        board_sink=board_sink,
     )
+
+
+# Intents that only read data. answer_query() refuses everything else (create/delete/export/stat-page refresh write files).
+LIBRARY_READ_ONLY_INTENTS = frozenset({
+    "stat_query", "qb_wins_report", "specific_play", "team_drilldown", "player_drilldown", "coaching_staff",
+    "dataset_info", "fantasy_report", "sportsbook_report", "contract_report", "ambiguous",
+})
+
+
+@dataclass
+class QueryResult:
+    """Structured answer to a natural-language question; contains no ANSI codes and is JSON-serialisable."""
+    query: str
+    intent: str
+    answered: bool
+    text: str
+    stat_name: Optional[str] = None
+    title: Optional[str] = None
+    unit: Optional[str] = None
+    season: Optional[int] = None
+    records: List[Dict[str, Any]] = field(default_factory=list)
+    parsed: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def answer_query(
+    query: str,
+    engine: StatEngine,
+    plays: List[Dict[str, Any]],
+    slm_model: Optional[str] = "off",
+    default_season: int = CURRENT_SEASON,
+    limit: Optional[int] = None,
+) -> QueryResult:
+    """
+    Library/web entry point: answer a question and return a QueryResult instead of an ANSI-coloured string.
+    Never changes the process-wide colour setting (the text is stripped of ANSI codes), never prompts, never writes
+    files, and uses no local model unless ``slm_model`` is "auto" or a model name.
+    """
+    parsed = NaturalLanguageStatAssistant.interpret_query(query, engine=engine, slm_model=slm_model, default_season=default_season)
+    intent = str(parsed.get("intent", "stat_query"))
+    safe_parsed = json.loads(json.dumps(parsed, default=str))
+    if intent not in LIBRARY_READ_ONLY_INTENTS:
+        return QueryResult(
+            query=query, intent=intent, answered=False, parsed=safe_parsed,
+            text="This question would change saved data or files, which the library API does not do. Use the CLI for it.",
+        )
+    sink: List[Dict[str, Any]] = []
+    text = handle_nl_query_result(parsed, engine, plays, view_override="table", interactive=False, board_sink=sink)
+    result = QueryResult(
+        query=query, intent=intent, answered=intent != "ambiguous", text=strip_ansi(text).strip(),
+        season=parsed.get("season") if isinstance(parsed.get("season"), int) else None, parsed=safe_parsed,
+    )
+    if sink:
+        stat_name = parsed.get("stat_name") or "yards_per_play"
+        if stat_name not in engine.stats:
+            stat_name = "yards_per_play"
+        sdef = engine.stats[stat_name]
+        result.stat_name, result.title, result.unit = stat_name, strip_ansi(sdef.title), strip_ansi(sdef.unit or "")
+        result.records = json.loads(json.dumps(sink[: limit if (limit and limit > 0) else None], default=str))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -9683,6 +9767,7 @@ def interactive_tui(
     readline-safe prompt wrapping so multi-line inputs can backspace across line wraps.
     """
     is_interactive = hasattr(sys.stdout, "isatty") and sys.stdout.isatty() and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    slm_model = slm_model or "auto"  # the interactive CLI keeps auto-detection unless told otherwise
     active_season = default_season
     seasons_to_load = sorted({active_season - 1, active_season})
     show_startup_loading(is_interactive=is_interactive, seasons=seasons_to_load)
@@ -10255,6 +10340,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    colour_snapshot = C.snapshot()
+    try:
+        return _main_impl(args, parser)
+    finally:
+        C.restore(colour_snapshot)  # --no-color applies to this invocation only, never to the embedding process
+
+
+def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.no_color:
         C.disable()
 
@@ -10303,7 +10396,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if cmd == "ask":
-            parsed = NaturalLanguageStatAssistant.interpret_query(args.query, engine=engine, slm_model=args.slm_model, default_season=args.season)
+            parsed = NaturalLanguageStatAssistant.interpret_query(args.query, engine=engine, slm_model=args.slm_model or "auto", default_season=args.season)
             if parsed.get("intent") == "ambiguous":
                 print(AsciiArtRenderer.banner())
                 print(handle_nl_query_result(parsed, engine, []))
