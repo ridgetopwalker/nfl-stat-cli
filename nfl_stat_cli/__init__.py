@@ -6823,6 +6823,71 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
+_NL_NON_NAME_WORDS = frozenset("""
+a about above across after against all also am an and any are as at average avg be been before behind below best better between both but by
+can compare compared comparison could coverage did diagram do does down draw each early either epa every exactly explain fewer field first
+for found four from game games get give goff good greatest had has have he her here highest him his how however if in into is it its just
+last late latest least less like list lists longest lowest make many me more most much my need next no not now of off on one only or other our
+out over per play plays please pro rank ranked ranking rankings rate rating ratings recent rush rushing same say season second see
+several short shortest show shows since so some stat stats still table tell than that the their them then there these they third this those
+three through to top total totals touchdown touchdowns two under until up us use using vs versus was we week weeks well were what when where
+which while who whom whose why will with without worst would year years yes you your yards yard passing passer passers receiving receiver
+receivers rusher rushers kicker kickers punter punters offense defense offensive defensive special teams team conference division
+afc nfc nfl east west north south regular postseason playoffs playoff quarter quarters half halftime overtime red zone third fourth
+fifth screen deep sack sacks interception interceptions fumble fumbles penalty penalties blitz pressure pressures completion completions
+attempt attempts catch catches reception receptions target targets win wins loss losses lead leads leader leaders leaderboard
+quarterback quarterbacks running back backs wide receivers tight end ends line linebacker linebackers safety safeties cornerback cornerbacks
+january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday
+export save load reload help delete create custom example page coaches coach head coordinator staff contract contracts salary payroll
+spread odds line lines bets betting favorite favorites underdog underdogs power""".split())
+
+
+def _unknown_name_tokens(query: str, all_plays: List[Dict[str, Any]], engine: "StatEngine") -> List[str]:
+    """
+    Capitalised words in the user's text that look like a person's name but match nothing we know
+    (no team, known player, stat term, or player in the loaded play data). Used so a leaderboard-style
+    question about an unknown player gets an explicit can't-answer instead of an unrelated answer.
+    Lower-case input is never treated as a name (we cannot tell it from an ordinary word).
+    """
+    known_players = {k.lower() for k in NaturalLanguageStatAssistant.KNOWN_PLAYERS}
+    team_words = {w.lower() for name in TEAM_FULL_NAMES.values() for w in re.split(r"\W+", name) if w}
+
+    def _is_ordinary(low: str, tok: str) -> bool:
+        if low in _NL_NON_NAME_WORDS or low.rstrip("s") in _NL_NON_NAME_WORDS or low in team_words:
+            return True
+        if low in TEAM_NICKNAMES_TO_ABBR or low in STATE_AND_REGION_TEAMS or tok.upper() in TEAM_DIVISIONS:
+            return True
+        if any(low in str(sid).lower().split("_") for sid in engine.stats):
+            return True
+        if any(low in re.split(r"\W+", str(getattr(sd, "title", "")).lower()) for sd in engine.stats.values()):
+            return True
+        return any(re.search(pat, low) for pat, _n, _g in NaturalLanguageStatAssistant.STAT_SYNONYM_MAP)
+
+    # Group consecutive name-like words ("Josh Allen") so a full name is checked as a full name.
+    runs: List[List[str]] = []
+    cur: List[str] = []
+    for tok in re.findall(r"[A-Za-z][A-Za-z'\u2019.-]*", str(query or "")):
+        core = re.sub(r"(?:'|\u2019)s$", "", tok.strip(".'-\u2019"), flags=re.IGNORECASE)
+        low = core.lower().replace("\u2019", "'")
+        if len(core) >= 3 and core[0].isupper() and core[1:2].islower() and not _is_ordinary(low, core):
+            cur.append(core)
+        else:
+            if cur:
+                runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+
+    out: List[str] = []
+    for run in runs:
+        if len(run) == 1 and run[0].lower() in known_players:
+            continue
+        if find_player_plays(all_plays, " ".join(run)):
+            continue
+        out.append(" ".join(run).lower())
+    return out
+
+
 def _render_unanswered(parsed: Dict[str, Any], reason: str, engine: StatEngine) -> str:
     """Render the explicit can't-answer response for a parsed query that cannot be completed safely."""
     p = dict(parsed)
@@ -7102,6 +7167,9 @@ def handle_nl_query_result(
             game_id=parsed.get("game_id"),
         )
 
+    _unknown_names = _unknown_name_tokens(str(parsed.get("query", "")), all_plays, engine)
+    if _unknown_names:
+        return _render_unanswered(parsed, f"I don't know a player or team named '{_unknown_names[0].title()}' in the loaded data; check the spelling or use the full name.", engine)
     if player:
         p_low = str(player).lower()
         player_filtered = [
@@ -7114,8 +7182,12 @@ def handle_nl_query_result(
             or p_low in str(p.get("punter_player_name", "")).lower()
             or p_low in str(p.get("desc", "")).lower()
         ]
+        if not player_filtered:
+            player_filtered = find_player_plays(s_plays, str(player))
         if player_filtered:
             s_plays = player_filtered
+        else:
+            return _render_unanswered(parsed, f"no plays were found for '{_one_line_text(player, 60)}' in the {season} data, so I won't answer from other players' numbers.", engine)
 
     if intent == "qb_wins_report":
         return header + "\n" + render_qb_meaningful_wins_view(engine, s_plays, season, conf, view_mode=view_override, camera=camera, team=team)
@@ -7746,23 +7818,30 @@ def render_player_drilldown_view(
     # If the user queried a name that matches multiple distinct players (e.g. /player McCaffrey -> Christian vs Luke)
     candidates = find_matching_player_candidates(s_plays, player_name, season=season)
     if len(candidates) > 1:
+        def _cand_label(cand: Dict[str, Any]) -> str:
+            pos = cand.get("position")
+            bits = ", ".join(str(x) for x in (cand.get("team"), pos, f"{cand['play_count']} plays") if x)
+            return f"{_one_line_text(cand['name'], 60)} ({bits})"
+
+        selected_cand = None
         if interactive and sys.stdin.isatty():
-            print(f"\n  {C.BOLD}{C.CYAN}Multiple players matched '{player_name}':{C.RESET}")
+            print(f"\n  {C.BOLD}{C.CYAN}Multiple players matched '{_one_line_text(player_name, 60)}':{C.RESET}")
             for idx, cand in enumerate(candidates, 1):
-                pos = cand.get("position") or "Unknown"
-                pos_str = f" - {pos}" if pos else ""
-                t_str = f" ({cand['team']}{pos_str}, {cand['play_count']} plays)" if cand.get("team") else f" ({cand['play_count']} plays)"
-                print(f"    [{idx}] {cand['name']}{t_str}")
+                print(f"    [{idx}] {_cand_label(cand)}")
             try:
-                sel = prompt_input(f"  Select player [1-{len(candidates)}] (default: 1): ").strip()
+                sel = prompt_input(f"  Select player [1-{len(candidates)}]: ").strip()
                 if sel.isdigit() and 1 <= int(sel) <= len(candidates):
                     selected_cand = candidates[int(sel) - 1]
-                else:
-                    selected_cand = candidates[0]
             except (EOFError, KeyboardInterrupt):
-                selected_cand = candidates[0]
-        else:
-            selected_cand = candidates[0]
+                selected_cand = None
+        if selected_cand is None:
+            # Never silently pick the first match: list the candidates and ask for a specific one.
+            opts = "\n".join(f"    - {_cand_label(c)}" for c in candidates[:10])
+            return (
+                f"\n{C.BOLD}{C.RED}\u2716 I can't answer that:{C.RESET} '{_one_line_text(player_name, 60)}' matches several players.\n"
+                f"{opts}\n"
+                f"  {C.DIM}Ask again with the full name (for example `{_one_line_text(candidates[0]['name'], 60)}`).{C.RESET}"
+            )
         player_name = selected_cand["search_name"]
 
     matching_plays = find_player_plays(s_plays, player_name, season=season)
@@ -7774,7 +7853,7 @@ def render_player_drilldown_view(
                 f"\n{C.YELLOW}⚠ No plays found for player '{player_name}' in the {season} season.{C.RESET}\n"
                 f"  💡 That player has data in season(s): {', '.join(map(str, seasons_found))}. Try `/season {seasons_found[-1]}`."
             )
-        return f"\n{C.RED}✖ No plays found for player '{player_name}'.{C.RESET}"
+        return f"\n{C.RED}✖ I can't answer that: no player matching '{_one_line_text(player_name, 60)}' was found in the loaded data.{C.RESET}"
 
     # SMART TEAM DETECTION:
     # "If the user picks a player be smart enough to list the teams they played for
@@ -8114,16 +8193,20 @@ def render_team_drilldown_view(
             for idx, t in enumerate(team_matches, 1):
                 full_n = TEAM_FULL_NAMES.get(t, t)
                 print(f"    [{idx}] {full_n} ({t})")
+            team_abbr = None
             try:
-                sel = prompt_input(f"  Select team [1-{len(team_matches)}] (default: 1): ").strip()
+                sel = prompt_input(f"  Select team [1-{len(team_matches)}]: ").strip()
                 if sel.isdigit() and 1 <= int(sel) <= len(team_matches):
                     team_abbr = team_matches[int(sel) - 1]
-                else:
-                    team_abbr = team_matches[0]
             except (EOFError, KeyboardInterrupt):
-                team_abbr = team_matches[0]
+                team_abbr = None
         else:
-            team_abbr = team_matches[0]
+            team_abbr = None
+        if team_abbr is None:
+            return (
+                f"\n{C.BOLD}{C.RED}\u2716 I can't answer that:{C.RESET} '{_one_line_text(team, 60)}' matches several teams "
+                f"({', '.join(team_matches)}). Ask again with the team abbreviation or full name."
+            )
     elif len(team_matches) == 1:
         team_abbr = team_matches[0]
     else:
@@ -10555,8 +10638,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 position=getattr(args, "position", None),
             ))
         elif cmd == "team":
-            resolved_t = resolve_team_abbr(args.team_name) or args.team_name or "KC"
-            print(render_team_drilldown_view(engine, season_plays, season=args.season, team=resolved_t))
+            # Pass the raw name so an ambiguous one ("New York") is listed instead of silently using the first match.
+            print(render_team_drilldown_view(engine, season_plays, season=args.season, team=args.team_name or "KC"))
         elif cmd == "player":
             print(render_player_drilldown_view(engine, season_plays, season=args.season, player_name=args.player_name, team=args.team, interactive=False))
         elif cmd == "play":
