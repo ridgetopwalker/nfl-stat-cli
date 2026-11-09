@@ -4624,6 +4624,10 @@ class NaturalLanguageStatAssistant:
         week_m = re.search(r"\b(?:week|wk|w)\s*(\d{1,2})\b", ql)
         if week_m:
             week = int(week_m.group(1))
+        is_latest_week = any(phrase in ql for phrase in (
+            "this week", "latest week", "current week", "most recent week",
+            "last week", "in the latest week", "for the week"
+        ))
 
         # 3. Quarter detection
         qtr: Optional[int] = None
@@ -5019,6 +5023,7 @@ class NaturalLanguageStatAssistant:
                     "position": position,
                     "season": season,
                     "week": week,
+                    "latest_week": is_latest_week,
                     "scoring_format": scoring_fmt,
                     "limit": lim_val,
                     "show_field": False,
@@ -5032,10 +5037,11 @@ class NaturalLanguageStatAssistant:
                 "position": position,
                 "season": season,
                 "week": week,
+                "latest_week": is_latest_week,
                 "scoring_format": scoring_fmt,
                 "limit": lim_val,
                 "show_field": False,
-                "explanation": f"Fantasy Football {scoring_fmt.upper()} leaderboard for {position or 'all positions'} ({season}).",
+                "explanation": f"Fantasy Football {scoring_fmt.upper()} leaderboard for {position or 'all positions'} ({'Week ' + str(week) if week else ('this week' if is_latest_week else season)}).",
             }
 
         # Check if user is asking about SPORTSBOOK HANDICAPPING / BETTING ODDS
@@ -6126,6 +6132,11 @@ def handle_nl_query_result(
         div_filtered = [p for p in s_plays if str(p.get("division", "")).strip().lower() == div_low]
         if div_filtered:
             s_plays = div_filtered
+    if week is None and parsed.get("latest_week") and s_plays:
+        avail_weeks = [int(p["week"]) for p in s_plays if p.get("week") is not None and str(p.get("week")).isdigit()]
+        if avail_weeks:
+            week = max(avail_weeks)
+
     if week is not None:
         w_filtered = [p for p in s_plays if int(p.get("week", -999)) == int(week)]
         if w_filtered:
@@ -6206,7 +6217,7 @@ def handle_nl_query_result(
         if subq == "player" and target_p:
             return header + "\n" + render_player_fantasy_profile_view(target_p, s_plays, season=season)
         pos = parsed.get("position")
-        w_filter = parsed.get("week")
+        w_filter = week if week is not None else parsed.get("week")
         lim = parsed.get("limit") or 15
         return header + "\n" + render_fantasy_leaderboard_view(
             s_plays, season=season, scoring_format=scoring, position=pos, week=w_filter, limit=lim

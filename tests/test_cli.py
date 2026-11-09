@@ -1615,6 +1615,25 @@ def test_slash_help_includes_new_commands():
     assert "/contract" in help_text
 
 
+def test_fantasy_points_this_week_error_regression():
+    engine = cli.StatEngine()
+
+    # Reported query: "which player had the most fantasy points this week"
+    q = "which player had the most fantasy points this week"
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(q, engine=engine, slm_model="off")
+    assert parsed["intent"] == "fantasy_report"
+    assert parsed["subquery"] == "leaderboard"
+    assert parsed["latest_week"] is True
+    assert parsed["scoring_format"] == "ppr"
+
+    # Execution must resolve latest week and complete in milliseconds without hanging
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS))
+    assert "Fantasy Football Scoring Leaders" in out
+    assert "Week 3" in out
+    assert "L.Jackson" in out
+
+
+
 
 
 
