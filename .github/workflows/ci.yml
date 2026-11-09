@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest pytest-cov pyyaml
+      - name: "Run tests (hermetic - temp HOME/IPC, no network, no Ollama)"
+        if: matrix.python-version != '3.13'
+        run: python -m pytest -q
+      - name: "Run tests with coverage report (hermetic - temp HOME/IPC, no network, no Ollama)"
+        if: matrix.python-version == '3.13'
+        run: python -m pytest -q --cov=nfl_stat_cli --cov-report=term-missing
+
+  build:
+    name: build wheel and sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Wheel must ship the package R bridge and no stray archives
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert "nfl_stat_cli/nflverse_bridge.R" in names, names
+          assert not [n for n in names if n.endswith(".zip")], names
+          print("wheel ok:", wheel)
+          PY
+      - name: Install the built wheel in a clean venv and smoke test it
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/python -m pip install dist/*.whl
+          cd "$(mktemp -d)"
+          /tmp/wheel-venv/bin/nfl-stat --version
+          /tmp/wheel-venv/bin/python -c "import importlib.resources as r, nfl_stat_cli; assert r.files(nfl_stat_cli).joinpath('nflverse_bridge.R').is_file()"
