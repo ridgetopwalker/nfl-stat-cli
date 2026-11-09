@@ -45,10 +45,11 @@ def test_end_to_end_ratings_to_total_respects_defence_strength():
                 "posteam": team, "defteam": opp, "epa": epa, "series_success": 0,
                 "home_score": 0, "away_score": 0}
 
-    # STR's defence allows -0.3 EPA/play to OFF; WEK's allows +0.3. Their own offences are neutral (0.0).
+    # STR's defence allows -0.15 EPA/play to OFF; WEK's allows +0.15 (keeps both totals inside the 37-56 clamp).
+    # Their own offences are neutral (0.0). The ratings code has no minimum-plays filter.
     plays = [
-        play("OFF", "STR", -0.3, 1), play("STR", "XXX", 0.0, 2),
-        play("OFF", "WEK", 0.3, 3), play("WEK", "XXX", 0.0, 4),
+        play("OFF", "STR", -0.15, 1), play("STR", "XXX", 0.0, 2),
+        play("OFF", "WEK", 0.15, 3), play("WEK", "XXX", 0.0, 4),
     ]
     ratings = sb.compute_team_power_ratings(plays, 2025)
     assert ratings["STR"]["def_epa"] < ratings["WEK"]["def_epa"]
