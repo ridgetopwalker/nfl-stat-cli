@@ -135,3 +135,26 @@ def test_leaderboard_scores_match_roles(plays):
     assert board[WR]["pass_yards"] == 0
     assert board[QB]["points_ppr"] == pytest.approx(3.2)
     assert board[QB]["receptions"] == 0
+
+
+def test_bare_player_name_still_gets_catch_or_carry_when_only_qb_name_is_filled():
+    # the fallback is suppressed per role by that role's own field, not by an unrelated populated field
+    catch = [_play(1, qb_name=QB, player_name=WR, pass_attempt=1, complete_pass=1, yards_gained=11.0)]
+    run = [_play(2, play_type="run", qb_name=QB, player_name=RB, rush_attempt=1, yards_gained=4.0)]
+    assert _profile(WR, catch)["rec_yards"] == 11.0 and _profile(WR, catch)["pass_yards"] == 0
+    assert _board(catch)[WR]["rec_yards"] == 11.0
+    assert _profile(RB, run)["rush_yards"] == 4.0
+    assert _board(run)[RB]["rush_yards"] == 4.0
+    # a bare name on an incomplete pass with a QB present is not the passer
+    miss = [_play(3, qb_name=QB, player_name=WR, pass_attempt=1)]
+    assert _profile(WR, miss)["pass_yards"] == 0 and _profile(WR, miss)["interceptions"] == 0
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), "", "NA"])
+def test_leaderboard_treats_nan_role_fields_as_blank(bad):
+    plays = [_play(1, play_type="run", rusher_player_name=bad, passer_player_name=bad, qb_name=bad,
+                   receiver_player_name=bad, player_name=RB, rush_attempt=1, yards_gained=6.0,
+                   reception=bad, sack=bad)]
+    board = _board(plays)
+    assert set(board) == {RB}
+    assert board[RB]["rush_yards"] == 6.0

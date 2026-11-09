@@ -113,9 +113,6 @@ def calculate_player_fantasy_points(
     return round(pts, 2)
 
 
-_ROLE_FIELDS = ("qb_name", "passer_player_name", "rusher_player_name", "receiver_player_name")
-
-
 def _role_flag(p: Dict[str, Any], key: str) -> int:
     """0/1 flag from a play dict; missing, None, NaN or non-numeric values count as 0."""
     try:
@@ -124,31 +121,32 @@ def _role_flag(p: Dict[str, Any], key: str) -> int:
         return 0
 
 
+def _clean_name(v: Any) -> str:
+    """A name field as plain text; None, NaN and "nan"/"none"/"na" placeholders become ""."""
+    t = str(v or "").strip()
+    return "" if t.lower() in ("nan", "none", "na") else t
+
+
 def _player_name_fallback_role(p: Dict[str, Any]) -> Optional[str]:
     """
     Role ("pass", "rush" or "rec") that a bare ``player_name`` plays on this play, or None.
 
     ``player_name`` is a generic "main player" column (normalized rows set it to the receiver on pass plays),
-    so it must never earn QB points on top of a named receiver. It is only used when the play has no
-    passer/rusher/receiver field at all, and then it gets exactly one role.
+    so it must never earn QB points on top of a named receiver. It is only used for a role whose own field is
+    blank, and then it gets exactly one role: a catch needs a blank receiver field, a carry a blank rusher
+    field, and a pass attempt a blank passer, QB and receiver field. (The field names mirror
+    _normalize_row in __init__.py, the source of truth for those columns.)
     """
-    def _named(v: Any) -> bool:
-        # str(NaN) is "nan", so treat NaN like a blank field
-        t = str(v or "").strip()
-        return bool(t) and t.lower() not in ("nan", "none", "na")
-
-    if not _named(p.get("player_name")):
-        return None
-    if any(_named(p.get(k)) for k in _ROLE_FIELDS):
+    if not _clean_name(p.get("player_name")):
         return None
     pt = str(p.get("play_type", "")).lower()
     # A completion is a catch when either flag says so (the profile and the leaderboard both count it the same way)
     if _role_flag(p, "reception") == 1 or _role_flag(p, "complete_pass") == 1:
-        return "rec"
+        return None if _clean_name(p.get("receiver_player_name")) else "rec"
     if _role_flag(p, "rush_attempt") == 1 or pt == "run":
-        return "rush"
+        return None if _clean_name(p.get("rusher_player_name")) else "rush"
     if _role_flag(p, "pass_attempt") == 1 or pt == "pass":
-        return "pass"
+        return None if any(_clean_name(p.get(k)) for k in ("qb_name", "passer_player_name", "receiver_player_name")) else "pass"
     return None
 
 
@@ -833,8 +831,8 @@ def compute_all_fantasy_leaders(
 
         # 1. Passing
         fallback_role = _player_name_fallback_role(p)
-        fallback_name = str(p.get("player_name") or "").strip()
-        qb = str(p.get("passer_player_name") or p.get("qb_name") or (fallback_name if fallback_role == "pass" else "") or "").strip()
+        fallback_name = _clean_name(p.get("player_name"))
+        qb = _clean_name(p.get("passer_player_name")) or _clean_name(p.get("qb_name")) or (fallback_name if fallback_role == "pass" else "")
         if qb and qb.lower() not in ("unknown qb", "unknown player", "none", ""):
             is_pass = int(p.get("pass_attempt", 0)) == 1 or pt == "pass"
             is_sack = int(p.get("sack", 0)) == 1
@@ -858,7 +856,7 @@ def compute_all_fantasy_leaders(
                 rec["interceptions"] += 1
 
         # 2. Rushing
-        rusher = str(p.get("rusher_player_name") or (fallback_name if fallback_role == "rush" else "") or "").strip()
+        rusher = _clean_name(p.get("rusher_player_name")) or (fallback_name if fallback_role == "rush" else "")
         if rusher and rusher.lower() not in ("unknown player", "unknown rusher", "none", ""):
             is_rush = int(p.get("rush_attempt", 0)) == 1 or pt == "run"
             if is_rush:
@@ -877,7 +875,7 @@ def compute_all_fantasy_leaders(
                 rec["rush_tds"] += r_td
 
         # 3. Receiving
-        receiver = str(p.get("receiver_player_name") or (fallback_name if fallback_role == "rec" else "") or "").strip()
+        receiver = _clean_name(p.get("receiver_player_name")) or (fallback_name if fallback_role == "rec" else "")
         if receiver and receiver.lower() not in ("unknown player", "unknown receiver", "none", ""):
             rec = get_record(receiver)
             c_name = rec["player"]
