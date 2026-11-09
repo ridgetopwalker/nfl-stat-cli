@@ -223,6 +223,72 @@ LAST_RAW_OUTPUT: str = ""
 LAST_RESULT_RECORDS: Optional[List[Dict[str, Any]]] = None
 
 
+class ExportPathError(ValueError):
+    """Raised when a user-supplied export path is unsafe or unsupported."""
+
+
+EXPORT_ALLOWED_SUFFIXES: Tuple[str, ...] = (".csv", ".json")
+
+
+def get_export_dir() -> Path:
+    """Directory that user-requested exports are confined to (override with NFL_STAT_EXPORT_DIR)."""
+    override = os.environ.get("NFL_STAT_EXPORT_DIR", "").strip()
+    return Path(override).expanduser() if override else Path.home() / ".nfl_stat_cli" / "exports"
+
+
+def resolve_export_path(
+    user_path: Union[str, Path],
+    base_dir: Optional[Union[str, Path]] = None,
+    default_suffix: str = ".csv",
+    allowed_suffixes: Tuple[str, ...] = EXPORT_ALLOWED_SUFFIXES,
+) -> Path:
+    """
+    Map a user-supplied export filename to a safe path inside ``base_dir`` (default: the exports dir).
+
+    Rejects empty/NUL-containing names, absolute paths (POSIX, Windows drive, UNC), home (`~`) paths,
+    any `..` component, unsupported extensions (only .csv/.json), and anything whose fully resolved
+    location (following symlinks) escapes ``base_dir``. A missing extension gets ``default_suffix``.
+    """
+    raw = str(user_path).strip()
+    if not raw:
+        raise ExportPathError("Export path must be a non-empty file name.")
+    if any(unicodedata.category(ch).startswith("C") or ch in "\u2028\u2029" for ch in raw):
+        raise ExportPathError("Export path may not contain control characters.")
+    if raw.startswith(("/", "\\", "~")) or re.match(r"^[A-Za-z]:", raw):
+        raise ExportPathError("Export path must be a relative file name inside the exports folder (no absolute or home paths).")
+    parts = [seg for seg in re.split(r"[\\/]+", raw) if seg not in ("", ".")]
+    if not parts:
+        raise ExportPathError("Export path must be a non-empty file name.")
+    if any(seg == ".." for seg in parts):
+        raise ExportPathError("Export path may not contain `..`.")
+    rel = Path(*parts)
+    if not rel.suffix:
+        rel = rel.with_suffix(default_suffix)
+    if rel.suffix.lower() not in allowed_suffixes:
+        raise ExportPathError(f"Unsupported export file type `{rel.suffix}`; allowed: {', '.join(allowed_suffixes)}.")
+    base = Path(base_dir) if base_dir is not None else get_export_dir()
+    base_resolved = base.resolve()
+    candidate = (base_resolved / rel).resolve()
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError:
+        raise ExportPathError("Export path escapes the exports folder.") from None
+    return candidate
+
+
+def _confirm_overwrite(path: Path, interactive: bool) -> bool:
+    """Existing files are only replaced after an explicit y/N confirmation (never in non-interactive mode)."""
+    if not path.exists():
+        return True
+    if not interactive:
+        return False
+    try:
+        answer = prompt_input(f"  {path.name} already exists. Overwrite? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in ("y", "yes")
+
+
 def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
     """
     Export the data rows from the last executed query or stat result to CSV or JSON.
@@ -6753,14 +6819,29 @@ def handle_nl_query_result(
 
     if intent == "export_data":
         target = parsed.get("target_file") or "last_query_result.csv"
-        ok, msg = export_last_result(target)
+        try:
+            safe_target = resolve_export_path(target, default_suffix=".csv")
+            if not _confirm_overwrite(safe_target, interactive=interactive):
+                ok, msg = False, f"Refusing to overwrite existing export `{safe_target.name}`; choose a different file name."
+            else:
+                safe_target.parent.mkdir(parents=True, exist_ok=True)
+                ok, msg = export_last_result(safe_target)
+        except (ExportPathError, OSError) as exc:
+            ok, msg = False, f"Export blocked: {exc}"
         status_color = C.GREEN if ok else C.RED
         status_icon = "✔" if ok else "✖"
         return header + f"\n  {status_color}{status_icon} {msg}{C.RESET}"
 
     if intent == "export_stats":
         target = parsed.get("target_file") or "custom_stats_export.json"
-        out_p = engine.export_custom_stats_json(Path(target))
+        try:
+            safe_target = resolve_export_path(target, default_suffix=".json", allowed_suffixes=(".json",))
+            if not _confirm_overwrite(safe_target, interactive=interactive):
+                raise ExportPathError(f"Refusing to overwrite existing export `{safe_target.name}`; choose a different file name.")
+            safe_target.parent.mkdir(parents=True, exist_ok=True)
+            out_p = engine.export_custom_stats_json(safe_target)
+        except (ExportPathError, OSError) as exc:
+            return header + f"\n  {C.RED}✖ Export blocked: {exc}{C.RESET}"
         return header + f"\n  {C.GREEN}✔ Exported custom stats catalog to {out_p.resolve()}{C.RESET}"
 
     if intent == "dataset_info":
@@ -10087,15 +10168,31 @@ def interactive_tui(
                     path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename for custom stats (default: custom_stats_export.json): ").strip() or "custom_stats_export.json")
                     if _GLOBAL_COMPLETER:
                         _GLOBAL_COMPLETER.set_context(None)
-                    out_p = engine.export_custom_stats_json(Path(path_str))
-                    print(f"  {C.GREEN}✔ Exported custom stats catalog to {out_p.resolve()}{C.RESET}")
+                    try:
+                        safe_target = resolve_export_path(path_str, default_suffix=".json", allowed_suffixes=(".json",))
+                        if not _confirm_overwrite(safe_target, interactive=is_interactive):
+                            print(f"  {C.YELLOW}Export cancelled: `{safe_target.name}` already exists and was not overwritten.{C.RESET}")
+                        else:
+                            safe_target.parent.mkdir(parents=True, exist_ok=True)
+                            out_p = engine.export_custom_stats_json(safe_target)
+                            print(f"  {C.GREEN}✔ Exported custom stats catalog to {out_p.resolve()}{C.RESET}")
+                    except (ExportPathError, OSError) as exc:
+                        print(f"  {C.RED}✖ Export blocked: {exc}{C.RESET}")
                 elif cmd_token in ("/export", "/export-data", "/savedata"):
                     if _GLOBAL_COMPLETER:
                         _GLOBAL_COMPLETER.set_context("file")
                     path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename for last result data [.csv/.json] (default: last_query_result.csv): ").strip() or "last_query_result.csv")
                     if _GLOBAL_COMPLETER:
                         _GLOBAL_COMPLETER.set_context(None)
-                    ok, msg = export_last_result(path_str)
+                    try:
+                        safe_target = resolve_export_path(path_str, default_suffix=".csv")
+                        if not _confirm_overwrite(safe_target, interactive=is_interactive):
+                            ok, msg = False, f"Export cancelled: `{safe_target.name}` already exists and was not overwritten."
+                        else:
+                            safe_target.parent.mkdir(parents=True, exist_ok=True)
+                            ok, msg = export_last_result(safe_target)
+                    except (ExportPathError, OSError) as exc:
+                        ok, msg = False, f"Export blocked: {exc}"
                     if ok:
                         print(f"  {C.GREEN}✔ {msg}{C.RESET}")
                     else:
