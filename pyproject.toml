@@ -78,5 +78,5 @@ nfl-stat = "pro_football_slm.shim:main"
 
 [tool.setuptools]
 packages = ["pro_football_slm"]
-package-data = {"pro_football_slm" = ["*.R", "*.json"]}
+package-data = {"pro_football_slm" = ["*.R", "*.json", "NOTICE.txt"]}
 include-package-data = true

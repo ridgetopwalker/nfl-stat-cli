@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {
     ".py", ".md", ".R", ".r", ".sh", ".bash", ".bat", ".cmd", ".ps1",
     ".toml", ".cfg", ".ini", ".json", ".txt", ".yml", ".yaml",
-    ".in", ".rst", ".toml",
+    ".in", ".rst",
 }
 # Extensionless path basenames we still rewrite (launchers, etc.)
 TEXT_BASENAMES = {
@@ -70,8 +69,8 @@ PATH_MOVES: List[Tuple[str, str]] = [
 ]
 
 # Placeholders so we never rewrite the GitHub repo URL.
-_GH_REPO = "github.com/ridgetopwalker/nfl-stat-cli"
-_GH_PLACEHOLDER = "<<<GITHUB_REPO_URL_DO_NOT_EDIT>>>"
+_GH_REPO_SLUG = "ridgetopwalker/nfl-stat-cli"
+_GH_PLACEHOLDER = "<<<GITHUB_REPO_SLUG_DO_NOT_EDIT>>>"
 
 # Ordered text substitutions applied to file contents (after URL protect).
 # Longer / more specific patterns first.
@@ -183,11 +182,12 @@ def git_mv(src: Path, dst: Path, dry_run: bool) -> str:
 
 
 def protect_github(text: str) -> str:
-    return text.replace(_GH_REPO, _GH_PLACEHOLDER)
+    # Protect the repo slug in https, ssh, raw, api, and badge URLs.
+    return text.replace(_GH_REPO_SLUG, _GH_PLACEHOLDER)
 
 
 def restore_github(text: str) -> str:
-    return text.replace(_GH_PLACEHOLDER, _GH_REPO)
+    return text.replace(_GH_PLACEHOLDER, _GH_REPO_SLUG)
 
 
 def transform_text(text: str) -> str:
@@ -233,11 +233,18 @@ def apply_moves(dry_run: bool) -> List[str]:
                 continue
             # Target already present (idempotent or prior partial run).
             if old_s.endswith(".bat") and new_s.endswith(".bat"):
-                if dry_run:
-                    actions.append(f"remove duplicate launcher: {old_s} (target {new_s} exists)")
+                try:
+                    same = old.read_bytes() == new.read_bytes()
+                except OSError:
+                    same = False
+                if same:
+                    if dry_run:
+                        actions.append(f"remove duplicate launcher: {old_s} (identical to {new_s})")
+                    else:
+                        old.unlink()
+                        actions.append(f"removed duplicate launcher: {old_s}")
                 else:
-                    old.unlink()
-                    actions.append(f"removed duplicate launcher: {old_s}")
+                    actions.append(f"skip (differs): {old_s} vs {new_s}")
                 continue
             actions.append(f"skip (target exists): {old_s} -> {new_s}")
             continue
@@ -302,6 +309,8 @@ def check_remaining() -> List[str]:
                     continue
                 problems.append(f"{label} in {r}")
                 break  # one problem per file is enough
+        if "github.com/ridgetopwalker/pro-football-slm" in scrubbed or "ridgetopwalker/pro-football-slm.git" in scrubbed:
+            problems.append(f"GitHub repo slug wrongly rewritten in {r}")
     return problems
 
 
@@ -314,7 +323,7 @@ def print_summary(moves: Sequence[str], edits: Sequence[str], mode: str) -> None
     print(f"edits: {len(edits)}")
     for e in edits:
         print(f"  {e}")
-    print(f"github.com/ridgetopwalker/nfl-stat-cli left untouched: yes")
+    print(f"ridgetopwalker/nfl-stat-cli repo slug left untouched: yes")
     print(f"excluded: {', '.join(sorted(EXCLUDE_REL_PATHS))}")
 
 

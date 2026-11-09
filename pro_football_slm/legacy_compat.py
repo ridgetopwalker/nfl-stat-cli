@@ -38,10 +38,14 @@ def _emit_env_deprecation(old_name: str, new_name: str) -> None:
         f"{old_name} is deprecated; use {new_name}. "
         f"The old name still works for one release."
     )
-    warnings.warn(msg, DeprecationWarning, stacklevel=3)
     try:
         sys.stderr.write(f"pro-football-slm: {msg}\n")
     except Exception:
+        pass
+    try:
+        warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    except Exception:
+        # e.g. filteractions('error') — stderr notice already emitted
         pass
 
 
@@ -90,8 +94,8 @@ def maybe_migrate_data_dir(old_dir: Path, new_dir: Path) -> Dict[str, str]:
     One-time migration of cache/ and error_ipc/ from the old data dir.
 
     Rules: move only if the new dir is missing (or empty of those subtrees);
-    never overwrite existing targets; leave a marker file; safe under partial
-    / concurrent runs. Returns a small status dict for tests/logging.
+    never overwrite existing targets; leave a marker only after a clean pass;
+    best-effort if another process races (does not overwrite). Returns a small status dict for tests/logging.
     """
     global _migration_attempted
     status = {"action": "none", "old": str(old_dir), "new": str(new_dir)}
@@ -142,6 +146,10 @@ def maybe_migrate_data_dir(old_dir: Path, new_dir: Path) -> Dict[str, str]:
                 status["error"] = str(getattr(exc, "strerror", None) or exc)
                 # Leave marker noting partial migration; never delete the other side.
                 break
+        if "error" in status:
+            status["action"] = "partial"
+            status["moved"] = ",".join(moved)
+            return status
         marker = new_dir / MIGRATION_MARKER
         if not marker.exists():
             marker.write_text(

@@ -39,13 +39,21 @@ def test_rebrand_check_passes():
     assert "OK" in res.stdout
 
 
-def test_rebrand_script_idempotent():
-    dry1 = subprocess.run([sys.executable, str(REBRAND), "--dry-run"], cwd=str(ROOT), capture_output=True, text=True)
-    assert dry1.returncode == 0, dry1.stdout + dry1.stderr
-    assert "edits: 0" in dry1.stdout
-    dry2 = subprocess.run([sys.executable, str(REBRAND), "--dry-run"], cwd=str(ROOT), capture_output=True, text=True)
-    assert dry2.returncode == 0
-    assert "edits: 0" in dry2.stdout
+def test_rebrand_script_idempotent(tmp_path):
+    # Copy the already-rebranded tree and confirm a second apply is a no-op.
+    import shutil
+    dest = tmp_path / "tree"
+    shutil.copytree(
+        ROOT,
+        dest,
+        ignore=shutil.ignore_patterns(".git", ".venv", "venv", "__pycache__", ".pytest_cache", "*.pyc"),
+    )
+    apply1 = subprocess.run([sys.executable, str(dest / "tools" / "rebrand.py")], cwd=str(dest), capture_output=True, text=True)
+    assert apply1.returncode == 0, apply1.stdout + apply1.stderr
+    assert "idempotent: second pass is a no-op" in apply1.stdout
+    dry = subprocess.run([sys.executable, str(dest / "tools" / "rebrand.py"), "--dry-run"], cwd=str(dest), capture_output=True, text=True)
+    assert dry.returncode == 0
+    assert "\nedits: 0\n" in dry.stdout or dry.stdout.strip().endswith("edits: 0")
 
 
 def test_env_get_prefers_pfslm_over_legacy(monkeypatch):

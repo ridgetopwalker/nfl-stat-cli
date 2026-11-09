@@ -10276,10 +10276,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(PRODUCT_NAME)
         print(PRODUCT_TAGLINE)
         print(AFFILIATION_DISCLAIMER)
-        notice = Path(__file__).resolve().parent.parent / "NOTICE"
-        if notice.is_file():
+        notice_text = None
+        for candidate in (
+            Path(__file__).resolve().parent / "NOTICE.txt",
+            Path(__file__).resolve().parent.parent / "NOTICE",
+        ):
+            if candidate.is_file():
+                try:
+                    notice_text = candidate.read_text(encoding="utf-8").rstrip()
+                    break
+                except OSError:
+                    continue
+        if notice_text:
             print()
-            print(notice.read_text(encoding="utf-8").rstrip())
+            print(notice_text)
         return 0
 
     if args.no_color:
