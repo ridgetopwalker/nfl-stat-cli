@@ -168,8 +168,9 @@ def handicap_matchup(
         dog_label = "PK (Pick'em)"
 
     # Total (Over/Under) estimation:
-    # Baseline 44.0 + offensive EPA boost - defensive EPA suppression
-    epa_scoring_factor = (home_off_epa + away_off_epa - (home_def_epa + away_def_epa)) * 24.0
+    # Baseline 44.0 + offensive EPA/play + EPA/play *allowed* by each defence. def_epa is EPA allowed, so a
+    # stronger defence (lower, more negative) must lower the total and a weaker one must raise it.
+    epa_scoring_factor = (home_off_epa + away_off_epa + home_def_epa + away_def_epa) * 24.0
     raw_total = LEAGUE_AVERAGE_TOTAL + epa_scoring_factor
     total_line = round(round(max(37.0, min(56.0, raw_total)) * 2.0) / 2.0, 1)
 
