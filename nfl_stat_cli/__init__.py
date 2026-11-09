@@ -3030,10 +3030,13 @@ class StatEngine:
                             )
                 if rejected:
                     try:
-                        backup_path = self.custom_stats_file.with_suffix(".json.rejected")
-                        if backup_path.exists():
-                            backup_path = self.custom_stats_file.with_suffix(f".json.rejected-{dt.datetime.now().strftime('%Y%m%d%H%M%S')}")
-                        shutil.copy2(self.custom_stats_file, backup_path)
+                        current = self.custom_stats_file.read_bytes()
+                        existing = sorted(self.custom_stats_file.parent.glob(self.custom_stats_file.name + ".rejected*"))
+                        if not any(b.read_bytes() == current for b in existing):
+                            backup_path = self.custom_stats_file.with_suffix(".json.rejected")
+                            if backup_path.exists():
+                                backup_path = self.custom_stats_file.with_suffix(f".json.rejected-{dt.datetime.now().strftime('%Y%m%d%H%M%S%f')}")
+                            shutil.copy2(self.custom_stats_file, backup_path)
                     except Exception:
                         pass
             except Exception:

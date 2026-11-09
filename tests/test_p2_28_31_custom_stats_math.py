@@ -277,3 +277,10 @@ def test_warning_text_is_single_line_and_printable(tmp_path):
     assert eng.load_warnings
     for w in eng.load_warnings:
         assert "\n" not in w and "\x07" not in w and "\x1b" not in w
+
+
+def test_repeated_launches_with_the_same_rejected_file_keep_one_backup(tmp_path):
+    _write_state(tmp_path / "custom_stats.json", {"yards_per_play": _item("yards_per_play", "plays * 1000")})
+    for _ in range(4):
+        cli.StatEngine(storage_dir=tmp_path)
+    assert len(list(tmp_path.glob("custom_stats.json.rejected*"))) == 1
