@@ -1204,6 +1204,7 @@ def test_ipc_error_reporting_and_resolution():
     assert res_latest.exists()
     assert hist_file.exists()
     assert not pending_file.exists()
+    assert not (ipc_dir / "pending" / "latest.json").exists()
 
     # 3. Verify /help contains /error and /reload
     help_text = cli.render_slash_help()
