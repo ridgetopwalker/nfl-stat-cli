@@ -9949,7 +9949,7 @@ def _read_git_sha(start: Optional[Path] = None) -> Optional[str]:
             return head
         if head.startswith("ref:"):
             ref_name = head.split(":", 1)[1].strip()
-            if not ref_name.startswith("refs/") or ".." in ref_name.split("/"):
+            if not ref_name.startswith("refs/") or ".." in re.split(r"[\\/]", ref_name) or "\\" in ref_name:
                 return None
             ref_file = git_dir / ref_name
             if ref_file.is_file():

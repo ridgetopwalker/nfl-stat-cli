@@ -37,7 +37,7 @@ def main() -> int:
         return 1
     # A branch cut from a default branch with tracking would let a bare `git push` update that default branch.
     merge_ref = _git("config", "--get", f"branch.{branch}.merge")  # e.g. refs/heads/main
-    upstream = merge_ref.rsplit("/", 1)[-1] if merge_ref else ""
+    upstream = merge_ref[len("refs/heads/"):] if merge_ref.startswith("refs/heads/") else merge_ref
     if upstream in defaults:
         print(f"Refusing: '{branch}' tracks default branch '{upstream}'. Recreate it with `git switch -c {branch} --no-track` "
               "and push with an explicit refspec.", file=sys.stderr)

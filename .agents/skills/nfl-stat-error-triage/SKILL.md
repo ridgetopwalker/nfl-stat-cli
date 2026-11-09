@@ -53,7 +53,7 @@ description: Watch for /error reports filed from nfl-stat-cli (local, or a WSL c
 2. Reproduce **on the reported data, not on sample plays**. The `repro` block says what the user had: `git_sha` (only if it matches
    `^[0-9a-f]{40}$` and `git cat-file -e <sha>` succeeds locally; pass it as an argument, never through a shell), `data_source`, `is_sample`, `season`, `snapshot_id` (fingerprint of the loaded play ids; recompute
    with `data_snapshot_id()` to confirm you have the same data), `slm_model`/`parser`, and `result_title`/`result_headers`/`result_rows` (the table the answer showed, capped).
-   If `is_sample` is true the user was on the built-in sample, so replaying on `SAMPLE_PBP_PLAYS` is valid; if it is false and you
+   `is_sample: null` means the source is unknown: treat the report as **not reproducible** unless `snapshot_id` matches your data. If `is_sample` is true the user was on the built-in sample, so replaying on `SAMPLE_PBP_PLAYS` is valid; if it is false and you
    cannot load matching data (compare `snapshot_id`), say the report is **not reproducible** instead of guessing from sample plays.
    Then `NaturalLanguageStatAssistant.interpret_query(query, StatEngine(), slm_model="off")` and
    `handle_nl_query_result(parsed, engine, plays)`; compare with `response`.

@@ -80,3 +80,12 @@ def test_guard_refuses_a_branch_that_tracks_a_default_branch(tmp_path):
     assert res.returncode == 1 and "tracks default branch 'main'" in res.stderr and "--no-track" in res.stderr
     _git(tmp_path, "config", "branch.fix/error-abc.merge", "refs/heads/fix/error-abc")
     assert _guard(tmp_path).returncode == 0
+
+
+def test_guard_compares_the_full_upstream_name(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "x")
+    _git(tmp_path, "checkout", "-q", "-b", "fix/error-abc")
+    _git(tmp_path, "config", "branch.fix/error-abc.remote", "origin")
+    _git(tmp_path, "config", "branch.fix/error-abc.merge", "refs/heads/release/main")  # not the default branch "main"
+    assert _guard(tmp_path).returncode == 0

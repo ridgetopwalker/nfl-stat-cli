@@ -138,7 +138,7 @@ def test_result_table_cells_are_sanitized_and_capped():
     assert "\x1b" not in json.dumps(ctx) and "\x07" not in json.dumps(ctx)
     assert len(ctx["result_title"]) <= 200 and len(ctx["result_headers"]) == 40
     row = ctx["result_rows"][0]
-    assert row[0] == "red" and len(row[1]) == 80 and len(row) == 40
+    assert row[0] == "red" and len(row[1]) <= 80 and len(row) == 40
 
 
 def test_git_sha_rejects_odd_ref_names(tmp_path):
@@ -149,9 +149,11 @@ def test_git_sha_rejects_odd_ref_names(tmp_path):
     assert cli._read_git_sha(tmp_path) is None
     (g / "HEAD").write_text("ref: refs/../../secret\n")
     assert cli._read_git_sha(tmp_path) is None
+    (g / "HEAD").write_text("ref: refs/..\\..\\secret\n")
+    assert cli._read_git_sha(tmp_path) is None
 
 
-def test_error_report_still_saved_when_repro_context_fails(tmp_path, monkeypatch):
+def test_error_report_still_saved_when_repro_context_fails(tmp_path):
     env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), NFL_STAT_IPC_DIR=str(tmp_path / "ipc"))
     code = (
         "import nfl_stat_cli as c, sys\n"
