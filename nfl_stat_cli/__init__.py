@@ -9949,6 +9949,8 @@ def _read_git_sha(start: Optional[Path] = None) -> Optional[str]:
             return head
         if head.startswith("ref:"):
             ref_name = head.split(":", 1)[1].strip()
+            if not ref_name.startswith("refs/") or ".." in ref_name.split("/"):
+                return None
             ref_file = git_dir / ref_name
             if ref_file.is_file():
                 sha = ref_file.read_text(encoding="utf-8").strip()
@@ -9972,15 +9974,26 @@ def _read_git_sha(start: Optional[Path] = None) -> Optional[str]:
 
 
 def _is_sample_source(source: Optional[str]) -> bool:
+    """True for the built-in sample/offline dataset labels (real backends are labelled by library name)."""
     low = str(source or "").lower()
-    return "sample" in low or "offline" in low
+    return "sample" in low or "built-in" in low
 
 
 def data_snapshot_id(plays: List[Dict[str, Any]], season: Optional[int] = None) -> str:
-    """Stable fingerprint of the loaded play set (ids only, no stat values) so a report can be replayed on the same data."""
+    """Stable fingerprint of the loaded play set (play ids plus epa/wpa/yards) so a report can be replayed on the same data."""
     rows = [p for p in plays if season is None or _safe_int(p.get("season"), -1) == int(season)]
     h = hashlib.sha256()
-    for key in sorted((str(p.get("game_id", "")), str(p.get("play_id", ""))) for p in rows):
+    def _num(v: Any) -> str:
+        try:
+            return f"{float(v):.4f}"
+        except (TypeError, ValueError):
+            return ""
+
+    # ids plus a few value columns, because upstream data releases correct EPA/yardage for the same plays
+    for key in sorted(
+        (str(p.get("game_id", "")), str(p.get("play_id", "")), _num(p.get("epa")), _num(p.get("wpa")), _num(p.get("yards_gained")))
+        for p in rows
+    ):
         h.update("|".join(key).encode("utf-8", "replace") + b"\n")
     return f"{len(rows)}-{h.hexdigest()[:16]}"
 
@@ -10006,7 +10019,7 @@ def build_repro_context(
         "python": platform.python_version(),
         "platform": platform.system(),
         "data_source": source,
-        "is_sample": _is_sample_source(source),
+        "is_sample": _is_sample_source(source) if source else None,  # None = source unknown
         "season": season,
         "seasons_loaded": sorted({_safe_int(p.get("season"), 0) for p in plays if p.get("season") is not None}),
         "plays_loaded": len(plays),
@@ -10014,10 +10027,10 @@ def build_repro_context(
         "slm_model": (parsed or {}).get("slm_model_used") or None,
         "slm_requested": slm_requested or None,
         "parser": "slm" if (parsed or {}).get("slm_model_used") else "rule",
-        "result_title": _json_safe(table.get("title")) if table else None,
-        "result_headers": _json_safe(table.get("headers")) if table else None,
+        "result_title": sanitize_ipc_text(table.get("title"), 200) if table else None,
+        "result_headers": [sanitize_ipc_text(h, 60) for h in list(table.get("headers") or [])[:40]] if table else None,
         "result_row_count": len(rows),
-        "result_rows": _json_safe(rows[:IPC_MAX_REPRO_ROWS]),
+        "result_rows": [[sanitize_ipc_text(c, 80) for c in list(r)[:40]] for r in rows[:IPC_MAX_REPRO_ROWS] if isinstance(r, (list, tuple))],
     }
 
 
@@ -10682,13 +10695,17 @@ def interactive_tui(
                             continue
 
                     try:
+                        try:
+                            repro_ctx = build_repro_context(bridge, plays, active_season, last_parsed_nl, slm_requested=slm_model, result_table=last_result_table)
+                        except Exception:  # never lose a report because the extra context failed
+                            repro_ctx = {"git_sha": _read_git_sha(), "version": __version__, "repro_error": True}
                         rep = create_error_report(
                             query_raw=last_query_raw,
                             parsed_nl=last_parsed_nl,
                             user_explanation=user_notes,
                             season=active_season,
                             response_text=last_response_text,
-                            repro=build_repro_context(bridge, plays, active_season, last_parsed_nl, slm_requested=slm_model, result_table=last_result_table),
+                            repro=repro_ctx,
                         )
                     except OSError as save_err:
                         print(f"  {C.RED}✖ Could not save the error report: {sanitize_ipc_text(save_err, 200)}{C.RESET}")

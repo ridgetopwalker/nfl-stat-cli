@@ -3,8 +3,9 @@
 
 Run before committing: `python3 check_branch.py`. Exits 0 only when the current branch is a non-default
 working branch. Default branches are master, main, and whatever origin/HEAD points at.
-The triage flow is branch + pull request only: this script exists so an agent cannot commit or push
-to a default branch by accident.
+The triage flow is branch + pull request only. It also refuses a branch whose upstream is a default branch
+(a bare `git push` would then update that default branch). This is a guard rail, not enforcement: also protect
+the default branches on the server.
 """
 import subprocess
 import sys
@@ -30,8 +31,16 @@ def main() -> int:
     if not branch:
         print("Not on a named branch in a git checkout (detached HEAD?); refusing.", file=sys.stderr)
         return 1
-    if branch in default_branches():
+    defaults = default_branches()
+    if branch in defaults:
         print(f"Refusing: '{branch}' is a default branch. Create a working branch (e.g. fix/error-<id>) and open a PR.", file=sys.stderr)
+        return 1
+    # A branch cut from a default branch with tracking would let a bare `git push` update that default branch.
+    merge_ref = _git("config", "--get", f"branch.{branch}.merge")  # e.g. refs/heads/main
+    upstream = merge_ref.rsplit("/", 1)[-1] if merge_ref else ""
+    if upstream in defaults:
+        print(f"Refusing: '{branch}' tracks default branch '{upstream}'. Recreate it with `git switch -c {branch} --no-track` "
+              "and push with an explicit refspec.", file=sys.stderr)
         return 1
     print(f"OK: working branch '{branch}'")
     return 0

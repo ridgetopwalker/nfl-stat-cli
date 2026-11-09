@@ -48,6 +48,7 @@ def test_read_git_sha_handles_worktree_pointer_and_non_checkout(tmp_path):
 def test_sample_detection():
     assert cli._is_sample_source("built-in nflverse/sdv offline dataset")
     assert cli._is_sample_source("built-in-nflverse-sample")
+    assert not cli._is_sample_source("nflreadpy cache (offline copy)")  # a real cached source is not the sample
     assert not cli._is_sample_source("nflreadpy / nfl_data_py (Python)")
     assert not cli._is_sample_source("nflverse / nflreadr (R)")
 
@@ -75,7 +76,7 @@ def test_build_repro_context_fields_and_row_cap(monkeypatch):
     assert ctx["result_headers"] == ["qb", "v"] and ctx["result_title"] == "T" and ctx["result_rows"][0] == ["q0", "0"]
     assert ctx["git_sha"] is None or len(ctx["git_sha"]) == 40
     ctx2 = cli.build_repro_context(None, [], 2025, {}, None)
-    assert ctx2["parser"] == "rule" and ctx2["slm_model"] is None and ctx2["is_sample"] is False
+    assert ctx2["parser"] == "rule" and ctx2["slm_model"] is None and ctx2["is_sample"] is None  # unknown source
     assert ctx2["result_row_count"] == 0 and ctx2["result_rows"] == []
 
 
@@ -120,3 +121,47 @@ def test_report_after_refusal_does_not_reuse_the_previous_queries_table(tmp_path
     r = json.loads(next((tmp_path / "ipc" / "pending").glob("err_*.json")).read_text())
     assert r["query"] == "Zorblax passing yards"
     assert r["repro"]["result_row_count"] == 0 and r["repro"]["result_rows"] == []
+
+
+def test_snapshot_id_changes_when_epa_is_corrected_upstream():
+    a = [dict(p, epa=0.5, wpa=0.01, yards_gained=7) for p in _plays(4)]
+    b = [dict(p) for p in a]
+    b[2]["epa"] = 0.6
+    assert cli.data_snapshot_id(a, 2025) != cli.data_snapshot_id(b, 2025)
+    assert cli.data_snapshot_id(a, 2025) == cli.data_snapshot_id([dict(p) for p in a], 2025)
+
+
+def test_result_table_cells_are_sanitized_and_capped():
+    table = {"title": "\x1b[31mT\x1b]0;x\x07" + "t" * 500, "headers": ["\x1b[1mh\x1b[0m"] * 100,
+             "rows": [["\x1b[31mred\x1b[0m", "c" * 5000] + ["x"] * 100]}
+    ctx = cli.build_repro_context(None, [], 2025, {}, None, result_table=table)
+    assert "\x1b" not in json.dumps(ctx) and "\x07" not in json.dumps(ctx)
+    assert len(ctx["result_title"]) <= 200 and len(ctx["result_headers"]) == 40
+    row = ctx["result_rows"][0]
+    assert row[0] == "red" and len(row[1]) == 80 and len(row) == 40
+
+
+def test_git_sha_rejects_odd_ref_names(tmp_path):
+    g = tmp_path / ".git"
+    g.mkdir()
+    (tmp_path / "secret").write_text(SHA + "\n")
+    (g / "HEAD").write_text("ref: ../secret\n")
+    assert cli._read_git_sha(tmp_path) is None
+    (g / "HEAD").write_text("ref: refs/../../secret\n")
+    assert cli._read_git_sha(tmp_path) is None
+
+
+def test_error_report_still_saved_when_repro_context_fails(tmp_path, monkeypatch):
+    env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), NFL_STAT_IPC_DIR=str(tmp_path / "ipc"))
+    code = (
+        "import nfl_stat_cli as c, sys\n"
+        "def boom(*a, **k): raise RuntimeError('x')\n"
+        "c.build_repro_context = boom\n"
+        "sys.argv=['nfl-stat-cli','tui','--engine','offline','--season','2025']\n"
+        "raise SystemExit(c.main())\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], input="epa per play\n/error wrong\nn\nquit\n", capture_output=True,
+                         text=True, env=env, cwd=str(tmp_path), timeout=120)
+    assert res.returncode == 0, res.stderr
+    r = json.loads(next((tmp_path / "ipc" / "pending").glob("err_*.json")).read_text())
+    assert r["repro"]["repro_error"] is True

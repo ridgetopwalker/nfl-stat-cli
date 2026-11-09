@@ -28,7 +28,8 @@ def test_skill_has_no_default_branch_push_instructions():
     assert "master:main" not in text
     assert not re.search(r"(?i)\bpush(?:es|ing)? (?:origin )?(?:to )?(?:master|main)\b", text.replace("never push", "").replace("Never commit to, push to", ""))
     lowered = text.lower()
-    for must in ("branch + pull request only", "never commit to, push to, or force-push a default branch", "human",
+    for must in ("--no-track", "explicit refspec", "server-side branch protection", "human's ok", "repro` block",
+                 "^[0-9a-f]{40}$", "branch + pull request only", "never commit to, push to, or force-push a default branch", "human",
                  "untrusted data", "no hot reload", "check_branch.py"):
         assert must in lowered, must
 
@@ -37,7 +38,7 @@ def test_skill_scripts_never_run_git_push_or_commit():
     for name in ("watch_errors.py", "resolve.py"):
         src = (SKILL / name).read_text(encoding="utf-8")
         assert not re.search(r"""["']git["'][^\]\n]*["'](?:push|commit)["']|git push|git commit""", src), name
-        assert "push" not in src.lower().replace("pull", "")
+        assert not re.search(r"\bpush(?:ed|es|ing)?\b", src, flags=re.IGNORECASE), name
 
 
 @pytest.mark.parametrize("branch", ["master", "main", "trunk", "develop"])
@@ -67,3 +68,15 @@ def test_guard_refuses_the_remote_default_branch_whatever_its_name(tmp_path):
 
 def test_guard_refuses_outside_a_repo(tmp_path):
     assert _guard(tmp_path).returncode == 1
+
+
+def test_guard_refuses_a_branch_that_tracks_a_default_branch(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "x")
+    _git(tmp_path, "checkout", "-q", "-b", "fix/error-abc")
+    _git(tmp_path, "config", "branch.fix/error-abc.remote", "origin")
+    _git(tmp_path, "config", "branch.fix/error-abc.merge", "refs/heads/main")
+    res = _guard(tmp_path)
+    assert res.returncode == 1 and "tracks default branch 'main'" in res.stderr and "--no-track" in res.stderr
+    _git(tmp_path, "config", "branch.fix/error-abc.merge", "refs/heads/fix/error-abc")
+    assert _guard(tmp_path).returncode == 0
