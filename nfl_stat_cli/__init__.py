@@ -2361,6 +2361,7 @@ class StatEngine:
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
         self.stats: Dict[str, StatDefinition] = dict(DEFAULT_STATS)
+        self.ephemeral_stats: Set[str] = set()
         self.stat_page: Dict[str, Any] = {
             "title": "My NFL Analytics Stat Page",
             "pinned_stats": [
@@ -2423,10 +2424,11 @@ class StatEngine:
                 pass
 
     def save_state(self) -> None:
+        ephemeral = getattr(self, "ephemeral_stats", set())
         custom_only = {
             k: asdict(v)
             for k, v in self.stats.items()
-            if v.category == "custom"
+            if v.category == "custom" and k not in ephemeral
         }
         payload = {
             "schema_version": "2.0",
@@ -2434,7 +2436,10 @@ class StatEngine:
             "stats": custom_only,
         }
         _atomic_write_json(self.custom_stats_file, payload)
-        _atomic_write_json(self.stat_page_file, self.stat_page)
+        clean_stat_page = dict(self.stat_page)
+        if "pinned_stats" in clean_stat_page and isinstance(clean_stat_page["pinned_stats"], list):
+            clean_stat_page["pinned_stats"] = [s for s in clean_stat_page["pinned_stats"] if s not in ephemeral]
+        _atomic_write_json(self.stat_page_file, clean_stat_page)
 
     def _validate_stat_definition(
         self,
@@ -2516,6 +2521,7 @@ class StatEngine:
         scope: str = "season",
         agg: str = "formula",
         pin_to_page: bool = True,
+        persist: bool = True,
     ) -> StatDefinition:
         clean_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.strip().lower()).strip("_")
         if clean_name and clean_name[0].isdigit():
@@ -2547,9 +2553,17 @@ class StatEngine:
             dependencies=deps,
         )
         self.stats[clean_name] = stat_def
-        if pin_to_page and clean_name not in self.stat_page["pinned_stats"]:
-            self.stat_page["pinned_stats"].append(clean_name)
-        self.save_state()
+        if persist:
+            if hasattr(self, "ephemeral_stats"):
+                self.ephemeral_stats.discard(clean_name)
+            if pin_to_page and clean_name not in self.stat_page["pinned_stats"]:
+                self.stat_page["pinned_stats"].append(clean_name)
+            self.save_state()
+        else:
+            if hasattr(self, "ephemeral_stats"):
+                self.ephemeral_stats.add(clean_name)
+            if clean_name in self.stat_page.get("pinned_stats", []):
+                self.stat_page["pinned_stats"].remove(clean_name)
         return stat_def
 
     def delete_custom_stat(self, name: str) -> StatDefinition:
@@ -2584,6 +2598,8 @@ class StatEngine:
             )
 
         del self.stats[clean_name]
+        if hasattr(self, "ephemeral_stats"):
+            self.ephemeral_stats.discard(clean_name)
 
         if clean_name in self.stat_page.get("pinned_stats", []):
             self.stat_page["pinned_stats"].remove(clean_name)
@@ -5745,6 +5761,7 @@ def handle_nl_query_result(
     all_plays: List[Dict[str, Any]],
     view_override: str = "auto",
     camera_override: Optional[str] = None,
+    interactive: bool = False,
 ) -> str:
     intent = parsed.get("intent", "stat_query")
     if intent == "ambiguous":
@@ -5858,18 +5875,49 @@ def handle_nl_query_result(
         return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=False)
 
     if intent == "create_stat":
+        stat_name = parsed.get("stat_name", "custom_stat")
+        title = parsed.get("title", "Custom Stat")
+        group_by = parsed.get("group_by") or "qb"
+        formula = parsed.get("formula", "yards_per_play")
+        description = parsed.get("explanation", "User-created custom stat.")
+        filter_expr = parsed.get("filter_expr", "")
+        scope = parsed.get("scope", "season")
+        agg = parsed.get("agg", "formula")
+
+        save_stat = parsed.get("save_stat")
+        if save_stat is None:
+            if interactive:
+                try:
+                    ans = prompt_input(
+                        f"\n  {C.CYAN}? Save custom stat '{stat_name}' permanently to your catalog? [Y/n] (default: Y): {C.RESET}"
+                    ).strip().lower()
+                    save_stat = ans not in ("n", "no")
+                except (EOFError, KeyboardInterrupt):
+                    save_stat = False
+            else:
+                save_stat = True
+
         sdef = engine.register_custom_stat(
-            name=parsed.get("stat_name", "custom_stat"),
-            title=parsed.get("title", "Custom Stat"),
-            group_by=parsed.get("group_by") or "qb",
-            formula=parsed.get("formula", "yards_per_play"),
-            description=parsed.get("explanation", "User-created custom stat."),
-            calculation_explained=f"Evaluated via formula `{parsed.get('formula')}` (scope={parsed.get('scope', 'season')}).",
-            filter_expr=parsed.get("filter_expr", ""),
-            scope=parsed.get("scope", "season"),
-            agg=parsed.get("agg", "formula"),
+            name=stat_name,
+            title=title,
+            group_by=group_by,
+            formula=formula,
+            description=description,
+            calculation_explained=f"Evaluated via formula `{formula}` (scope={scope}).",
+            filter_expr=filter_expr,
+            scope=scope,
+            agg=agg,
+            pin_to_page=save_stat,
+            persist=save_stat,
         )
-        return header + "\n" + render_general_stat_view(engine, s_plays, sdef.name, season, conf=conf, team=team, view_mode="table", division=division, week=week, qtr=qtr)
+        status_msg = (
+            f"  {C.GREEN}✔ Saved '{sdef.name}' permanently to custom_stats.json and pinned to Stat Page.{C.RESET}\n"
+            if save_stat
+            else f"  {C.YELLOW}ℹ Evaluated '{sdef.name}' for this session only (not saved to custom_stats.json).{C.RESET}\n"
+        )
+        return header + "\n" + status_msg + render_general_stat_view(
+            engine, s_plays, sdef.name, season, conf=conf, team=team, view_mode="table", division=division, week=week, qtr=qtr
+        )
 
     if intent == "specific_play" or parsed.get("show_field") is True:
         return header + "\n" + render_specific_play_view(
@@ -8278,7 +8326,7 @@ def interactive_tui(
                             parsed["camera"] = default_camera
                         last_parsed_nl = parsed
                         last_query_raw = nl_play_q
-                        print(handle_nl_query_result(parsed, engine, plays))
+                        print(handle_nl_query_result(parsed, engine, plays, interactive=is_interactive))
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
                 elif cmd_token in ("/games", "/game", "/matchup", "/matchups", "/boxscore", "/pbp"):
@@ -8395,7 +8443,7 @@ def interactive_tui(
                                     last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
                                 )
                                 last_parsed_nl = re_parsed
-                                print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays))
+                                print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive))
                             except Exception as re_err:
                                 print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
                     else:
@@ -8468,7 +8516,7 @@ def interactive_tui(
                 parsed["camera"] = default_camera
             last_parsed_nl = parsed
             last_query_raw = raw_in
-            print(handle_nl_query_result(parsed, engine, plays))
+            print(handle_nl_query_result(parsed, engine, plays, interactive=is_interactive))
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
         except Exception as exc:
