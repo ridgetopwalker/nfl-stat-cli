@@ -127,4 +127,4 @@ pip install "nfl-stat-cli[live]"
 
 ## License
 
-Released under the [MIT License](LICENSE). Play-by-play data provided via [nflverse/nflverse-data](https://github.com/nflverse/nflverse-data) (CC-BY 4.0) and [sportsdataverse-py](https://github.com/sportsdataverse/sportsdataverse-py).
+Code: MIT (see LICENSE). Data: nflverse (https://github.com/nflverse/nflverse-data), CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). We aggregate and derive statistics from it. See NOTICE. Not affiliated with or endorsed by the NFL or nflverse.
