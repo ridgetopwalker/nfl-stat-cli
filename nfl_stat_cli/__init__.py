@@ -1890,6 +1890,18 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="%",
         dependencies=["turnovers", "plays"],
     ),
+    "clean_play_score": StatDefinition(
+        name="clean_play_score",
+        title="Clean Play Score",
+        category="traditional",
+        group_by="play_concept",
+        filter_expr="pass_attempt == 1 or rush_attempt == 1",
+        formula="yards_per_play + (touchdowns / plays) * 6.0 - (turnovers / plays) * 40.0 - (penalties / plays) * 15.0",
+        description="Yards plus scoring per snap, discounted for turnovers and penalties that occur on those snaps; rewards the most productive plays that stay clean.",
+        calculation_explained="yards per play + 6 x touchdown rate - 40 x turnover rate - 15 x penalty rate, over scrimmage pass/rush snaps.",
+        unit="pts",
+        dependencies=["yards_per_play", "touchdowns", "turnovers", "penalties", "plays"],
+    ),
     "plays": StatDefinition(
         name="plays",
         title="Total Plays",
@@ -4203,6 +4215,14 @@ class NaturalLanguageStatAssistant:
     )
 
     STAT_SYNONYM_MAP: Tuple[Tuple[str, str, str], ...] = (
+        # Clean / successful plays net of turnovers & penalties ("most successful ... with the least penalties and turnovers")
+        (
+            r"\b(?:most|best|more)\s+(?:successful|productive|effective)\b.*\b(?:least|fewest|lowest|minimal|without|no|avoid\w*)\b.*\b(?:penalt\w*|turnover\w*)\b|"
+            r"\b(?:least|fewest|lowest|minimal)\b.*\b(?:penalt\w*|turnover\w*)\b.*\b(?:most|best)\s+(?:successful|productive|effective)\b|"
+            r"\bclean(?:est)?\s+(?:plays?|success|production)\b",
+            "clean_play_score",
+            "play_concept",
+        ),
         # Passing Yards (singular & plural, colloquial phrases)
         (r"\b(?:passing|pass)\s+(?:yard|yards|yds|yd)\b|\b(?:most\s+yards\s+passing|passed\s+for\s+the\s+most\s+yards|threw\s+for\s+the\s+most\s+yards)\b", "passing_yards", "qb"),
         # Rushing Yards (singular & plural, colloquial phrases)
@@ -7745,6 +7765,7 @@ STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
             "success_rate_pct",
             "explosive_play_rate",
             "turnover_rate",
+            "clean_play_score",
         ],
     ),
     (

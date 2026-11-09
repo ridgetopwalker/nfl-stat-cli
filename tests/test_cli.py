@@ -1226,4 +1226,21 @@ def test_player_top_plays_latest_game_nl_query():
     assert "Top 5 matching plays for bo nix" in parsed["explanation"]
 
 
+def test_clean_successful_plays_query_not_penalties():
+    engine = cli.StatEngine()
+    q = "which play has been the most successful (points made or yards gain) with the least amout of penalties and turnovers?"
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(q, engine, slm_model="off")
+    assert parsed["stat_name"] == "clean_play_score"
+    assert parsed["group_by"] == "play_concept"
+    assert "clean_play_score" in engine.stats and engine.stats["clean_play_score"].category == "traditional"
+    board = engine.evaluate_stat_leaderboard("clean_play_score", cli.SAMPLE_PBP_PLAYS, group_override="play_concept")
+    names = [r["entity"] for r in board]
+    assert names[0] == "play_action_deep"
+    # concepts with a turnover/penalty are discounted below their raw yards-per-play
+    pass_short = next((r for r in board if r["entity"] == "pass_short"), None)
+    if pass_short:
+        assert pass_short["value"] < pass_short["yards_per_play"]
+
+
+
 
