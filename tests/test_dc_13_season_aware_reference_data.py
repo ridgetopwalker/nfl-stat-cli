@@ -135,3 +135,20 @@ def test_play_rows_resolve_a_shared_surname_when_the_registry_cannot():
     plays = [{"receiver_player_name": "K.Allen", "receiver_position": "WR"}]
     assert cli.get_player_position("K.Allen", plays) == "WR"
     assert cli.get_player_position("K.Allen") is None
+
+
+def test_the_season_catalog_points_at_the_single_embedded_table():
+    assert cli.COACHING_STAFFS_BY_SEASON[SNAP_COACH] is cli.NFL_COACHING_STAFFS
+
+
+def test_query_header_carries_the_note_for_an_uncataloged_season(tmp_path):
+    engine = cli.StatEngine(storage_dir=tmp_path)
+    plays = [_row(season=SNAP_COACH + 1, game_id="g1")]
+    parsed = {"intent": "stat_query", "query": f"epa per play by coach {SNAP_COACH + 1}", "season": SNAP_COACH + 1,
+              "stat_name": "epa_per_play", "group_by": "coach"}
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, plays))
+    assert "Coaching staffs are not cataloged" in out
+    staff = cli.strip_ansi(cli.handle_nl_query_result(
+        {"intent": "coaching_staff", "query": f"kc coach {SNAP_COACH + 1}", "season": SNAP_COACH + 1, "team": "KC"},
+        engine, plays))
+    assert "not cataloged" in staff and "Andy Reid" not in staff

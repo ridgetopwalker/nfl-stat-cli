@@ -839,9 +839,8 @@ def get_team_coaching_staff(team_abbr: str, season: Optional[int] = None) -> Dic
     """
     if not coaching_season_cataloged(season):
         return {}
-    staffs = COACHING_STAFFS_BY_SEASON[max(COACHING_STAFFS_BY_SEASON) if season is None else int(season)]
     resolved = resolve_team_abbr(team_abbr) or team_abbr.upper()
-    return staffs.get(resolved, {})
+    return NFL_COACHING_STAFFS.get(resolved, {})  # the one cataloged snapshot (COACHING_STAFFS_BY_SEASON)
 
 
 def get_team_head_coach(team_abbr: str, season: Optional[int] = None) -> str:
@@ -6766,23 +6765,6 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
-_CONTRACT_STAT_NAMES = frozenset({
-    "cap_hit", "cap_hit_current_m", "yearly_salary_against_cap", "salary_against_cap",
-    "apy", "apy_m", "salary", "guaranteed_m", "contract_value_m",
-})
-
-
-def _reference_data_note(stat_name: Optional[str], group_by: Optional[str], season: Optional[int]) -> str:
-    """Yellow info line(s) when a query needs contract or coaching data for a season that is not cataloged."""
-    notes: List[str] = []
-    if season:
-        if stat_name in _CONTRACT_STAT_NAMES and not contract_season_cataloged(season):
-            notes.append(contract_catalog_note(season))
-        if str(group_by or "") == "coach" and not coaching_season_cataloged(season):
-            notes.append(coaching_catalog_note(season))
-    return "".join(f"  {C.YELLOW}ℹ {n}{C.RESET}\n" for n in notes)
-
-
 def handle_nl_query_result(
     parsed: Dict[str, Any],
     engine: StatEngine,
@@ -6835,6 +6817,7 @@ def handle_nl_query_result(
     qtr = parsed.get("qtr")
     player = parsed.get("player") or parsed.get("qb")
     camera = camera_override or parsed.get("camera") or "behind-offense"
+    header += _reference_data_note(parsed.get("stat_name"), parsed.get("group_by"), season)
 
     if division:
         div_low = division.strip().lower()
@@ -6907,9 +6890,12 @@ def handle_nl_query_result(
         except (KeyError, ValueError) as err:
             return header + f"\n  {C.RED}✖ {err}{C.RESET}"
 
+    if intent == "coaching_staff" and not coaching_season_cataloged(season):
+        return header + "\n" + render_coaching_staff_view(team or "", season=season)
+
     if intent == "coaching_staff":
         resolved_t = resolve_team_abbr(team) or team or "KC"
-        return header + "\n" + render_coaching_staff_view(resolved_t, role_filter=parsed.get("role"), season=season)
+        return header + "\n" + render_coaching_staff_view(resolved_t, role_filter=parsed.get("role"))
 
     if intent == "team_drilldown":
         resolved_t = team or "KC"
@@ -7055,7 +7041,7 @@ def handle_nl_query_result(
     stat_name = parsed.get("stat_name") or "yards_per_play"
     if stat_name not in engine.stats:
         stat_name = "yards_per_play"
-    return header + "\n" + _reference_data_note(stat_name, parsed.get("group_by"), season) + render_general_stat_view(
+    return header + "\n" + render_general_stat_view(
         engine,
         s_plays,
         stat_name=stat_name,
@@ -7974,6 +7960,23 @@ def render_player_drilldown_view(
 
     out.append(f"\n  {C.DIM}💡 Tip: Run `/play` to diagram any of {canonical_name}'s signature plays on the ASCII gridiron.{C.RESET}")
     return "\n".join(out)
+
+
+_CONTRACT_STAT_NAMES = frozenset({
+    "cap_hit", "cap_hit_current_m", "yearly_salary_against_cap", "salary_against_cap",
+    "apy", "apy_m", "salary", "guaranteed_m", "contract_value_m",
+})
+
+
+def _reference_data_note(stat_name: Optional[str], group_by: Optional[str], season: Optional[int]) -> str:
+    """Yellow info line(s) when a query needs contract or coaching data for a season that is not cataloged."""
+    notes: List[str] = []
+    if season:
+        if stat_name in _CONTRACT_STAT_NAMES and not contract_season_cataloged(season):
+            notes.append(contract_catalog_note(season))
+        if str(group_by or "") == "coach" and not coaching_season_cataloged(season):
+            notes.append(coaching_catalog_note(season))
+    return "".join(f"\n  {C.YELLOW}ℹ {n}{C.RESET}" for n in notes)
 
 
 def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None, season: Optional[int] = None) -> str:
