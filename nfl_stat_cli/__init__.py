@@ -3521,13 +3521,26 @@ class StatEngine:
                 continue
             needed.add(cur)
             sd = self.stats[cur]
+            for expr in (sd.formula, sd.filter_expr or ""):
+                if expr.strip():
+                    try:
+                        _parse_and_validate_expr(expr)
+                    except Exception:
+                        # A formula we cannot analyse might reference anything: fall back to every registered stat
+                        return set(self.stats)
             refs = set(extract_formula_dependencies(sd.formula)) | set(extract_formula_dependencies(sd.filter_expr or "")) | set(sd.dependencies or [])
             stack.extend(r for r in refs if r in self.stats and r not in needed)
         return needed
 
-    def evaluate_all_metrics_for_group(self, plays: List[Dict[str, Any]], only: Optional[Iterable[str]] = None) -> Dict[str, float]:
+    def evaluate_all_metrics_for_group(
+        self,
+        plays: List[Dict[str, Any]],
+        only: Optional[Iterable[str]] = None,
+        _closure: Optional[Set[str]] = None,
+    ) -> Dict[str, float]:
         """
-        Compute base traditional metrics AND resolve all composable custom stats across:
+        Compute base traditional metrics AND resolve all composable custom stats across
+        (with ``only``, just those stats and their dependencies, so the returned dict holds a subset of the registry):
         1. Play-scoped custom stats (evaluated per play, aggregated via sdef.agg)
         2. Game-scoped custom stats (evaluated per game with full game-level custom stat context, aggregated via sdef.agg)
         3. Season-scoped custom stats (evaluated on the entity's season context in dependency order, honoring each stat's filter_expr)
@@ -3536,7 +3549,7 @@ class StatEngine:
         all_defs = list(self.stats.values())
         if only is not None:
             # Evaluate just the requested stats and what they depend on (the other registered stats are skipped)
-            needed = self.stat_dependency_closure(only)
+            needed = _closure if _closure is not None else self.stat_dependency_closure(only)
             all_defs = [d for d in all_defs if d.name in needed]
 
         # 1. Play-scoped custom stats
@@ -3677,7 +3690,7 @@ class StatEngine:
                 if ent_pos and ent_pos != pos_target:
                     continue
 
-            metrics = self.evaluate_all_metrics_for_group(gplays, only=wanted)
+            metrics = self.evaluate_all_metrics_for_group(gplays, only=wanted, _closure=evaluated_stats)
             sample_play = max(gplays, key=lambda x: float(x.get("yards_gained", 0.0)))
             # QB record fields are only computed when the requested stat depends on them; otherwise they are None
             mw = int(round(metrics.get("qb_meaningful_win", 0.0))) if "qb_meaningful_win" in evaluated_stats else None

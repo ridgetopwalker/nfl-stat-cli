@@ -35,11 +35,12 @@ def main() -> None:
     eng.evaluate_stat_leaderboard("yards_per_play", plays, group_override="qb")
     fast = time.perf_counter() - t0
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    cli.StatEngine.evaluate_all_metrics_for_group = lambda self, p, only=None: orig(self, p, only=None)
+    cli.StatEngine.evaluate_all_metrics_for_group = lambda self, p, only=None, _closure=None: orig(self, p, only=None)
     t0 = time.perf_counter()
     eng.evaluate_stat_leaderboard("yards_per_play", plays, group_override="qb")
     full = time.perf_counter() - t0
-    print(f"{groups} groups, {len(plays)} plays: requested-stat-only {fast * 1000:.0f} ms, all-stats {full * 1000:.0f} ms ({full / max(fast, 1e-9):.1f}x)")
+    cli.StatEngine.evaluate_all_metrics_for_group = orig
+    print(f"(speedup depends on how many stats are registered) {groups} groups, {len(plays)} plays: requested-stat-only {fast * 1000:.0f} ms, all-stats {full * 1000:.0f} ms ({full / max(fast, 1e-9):.1f}x)")
 
 
 if __name__ == "__main__":

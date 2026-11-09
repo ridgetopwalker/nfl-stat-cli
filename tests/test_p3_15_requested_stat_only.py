@@ -27,7 +27,7 @@ def full_evaluation(monkeypatch):
     """Reference behaviour: ignore `only` so every registered stat is evaluated, as before the fix."""
     orig = cli.StatEngine.evaluate_all_metrics_for_group
 
-    def full(self, plays, only=None):
+    def full(self, plays, only=None, _closure=None):
         return orig(self, plays, only=None)
 
     monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", full)
@@ -48,7 +48,7 @@ def test_every_stat_gives_the_same_leaderboard_as_full_evaluation(engine, monkey
     assert len(names) > 40
     fast = {n: _comparable(_board(engine, n)) for n in names}
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
     for n in names:
         assert fast[n] == _comparable(_board(engine, n)), n
 
@@ -57,7 +57,7 @@ def test_every_stat_gives_the_same_leaderboard_as_full_evaluation(engine, monkey
 def test_group_overrides_match_full_evaluation(engine, monkeypatch, group):
     fast = _comparable(_board(engine, "big_gain_per_play", group_override=group))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
     assert fast == _comparable(_board(engine, "big_gain_per_play", group_override=group))
 
 
@@ -82,10 +82,10 @@ def test_only_requested_stats_are_evaluated(engine, monkeypatch):
     fast = len(calls)
     calls.clear()
     orig_all = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None: orig_all(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig_all(self, plays, only=None))
     _board(engine, "yards_per_play")
     full = len(calls)
-    assert full > 0 and fast * 5 <= full, (fast, full)
+    assert 0 < fast < full, (fast, full)
 
 
 def test_unrelated_stats_are_not_evaluated(engine, monkeypatch):
@@ -103,7 +103,9 @@ def test_a_broken_unrelated_stat_no_longer_affects_the_requested_one(engine):
         name="broken", title="b", category="custom", group_by="qb", formula="undefined_thing + 1", description="",
         calculation_explained="", scope="season", agg="formula", dependencies=[],
     )
-    assert _comparable(_board(engine, "yards_per_play"))
+    with_broken = _comparable(_board(engine, "yards_per_play"))
+    del engine.stats["broken"]
+    assert with_broken == _comparable(_board(engine, "yards_per_play"))
 
 
 def test_qb_record_fields_are_none_unless_the_stat_needs_them(engine):
@@ -123,17 +125,67 @@ def test_qb_wins_view_matches_full_evaluation(tmp_path, monkeypatch):
     eng = cli.StatEngine(storage_dir=tmp_path)
     fast = cli.strip_ansi(cli.render_qb_meaningful_wins_view(eng, PLAYS, 2024, None, view_mode="table"))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
     assert fast == cli.strip_ansi(cli.render_qb_meaningful_wins_view(eng, PLAYS, 2024, None, view_mode="table"))
 
 
 def test_general_view_output_is_unchanged(engine, monkeypatch):
     fast = cli.strip_ansi(cli.render_general_stat_view(engine, PLAYS, "epa_per_play", 2024, view_mode="table"))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
     assert fast == cli.strip_ansi(cli.render_general_stat_view(engine, PLAYS, "epa_per_play", 2024, view_mode="table"))
 
 
 def test_default_call_without_only_still_evaluates_everything(engine):
     metrics = engine.evaluate_all_metrics_for_group(PLAYS[:10])
     assert set(engine.stats) <= set(metrics)
+
+
+def _mk(name, formula, scope="season", agg="formula", filter_expr="", deps=()):
+    return cli.StatDefinition(
+        name=name, title=name, category="custom", group_by="qb", formula=formula, description="", calculation_explained="",
+        filter_expr=filter_expr, scope=scope, agg=agg, dependencies=list(deps),
+    )
+
+
+def _parity(engine, monkeypatch, stat):
+    fast = _comparable(_board(engine, stat))
+    orig = cli.StatEngine.evaluate_all_metrics_for_group
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
+    full = _comparable(_board(engine, stat))
+    monkeypatch.undo()
+    assert fast == full
+    return fast
+
+
+def test_filter_expr_play_fields_keep_parity_and_stat_refs_enter_the_closure(engine, monkeypatch):
+    engine.stats["gated_yards"] = _mk("gated_yards", "total_yards", filter_expr="yards_gained > 0", deps=["total_yards"])
+    _parity(engine, monkeypatch, "gated_yards")
+    engine.stats["gate"] = _mk("gate", "ifelse(plays > 2, 1.0, 0.0)")
+    engine.stats["refs_gate"] = _mk("refs_gate", "total_yards", filter_expr="gate > 0", deps=["total_yards"])
+    assert "gate" in engine.stat_dependency_closure(["refs_gate"])
+
+
+def test_game_scoped_stat_depending_on_play_and_season_stats_keeps_parity(engine, monkeypatch):
+    engine.stats["g_big"] = _mk("g_big", "big_gain / nz(plays, 1)", scope="game", agg="sum", deps=["big_gain", "plays"])
+    engine.stats["season_of_game"] = _mk("season_of_game", "g_big * 2", deps=["g_big"])
+    rows = _parity(engine, monkeypatch, "season_of_game")
+    assert rows
+
+
+def test_registered_stat_shadowing_a_base_metric_keeps_parity(engine, monkeypatch):
+    engine.stats["pass_attempts"] = _mk("pass_attempts", "plays * 2")
+    engine.stats["uses_shadow"] = _mk("uses_shadow", "pass_attempts / 2")
+    assert "pass_attempts" in engine.stat_dependency_closure(["uses_shadow"])
+    _parity(engine, monkeypatch, "uses_shadow")
+
+
+def test_stale_dependency_list_does_not_lose_a_referenced_stat(engine, monkeypatch):
+    engine.stats["loaded"] = _mk("loaded", "big_gain / nz(plays, 1)", deps=[])  # as if loaded from JSON with empty dependencies
+    assert "big_gain" in engine.stat_dependency_closure(["loaded"])
+    _parity(engine, monkeypatch, "loaded")
+
+
+def test_unparseable_formula_falls_back_to_every_stat(engine):
+    engine.stats["weird"] = _mk("weird", "((")
+    assert engine.stat_dependency_closure(["weird"]) == set(engine.stats)
