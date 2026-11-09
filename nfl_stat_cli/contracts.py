@@ -234,6 +234,52 @@ def get_all_coach_contracts() -> List[ContractRecord]:
     return coaches
 
 
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+_SURNAME_PARTICLES = {"st", "de", "di", "del", "la", "le", "van", "von", "mac"}
+_PLAY_NAME_FIELDS = ("player_name", "qb_name", "rusher_player_name", "receiver_player_name")
+
+
+def name_match_key(name: Any) -> Optional[Tuple[str, str]]:
+    """
+    Normalize a player name to (first initial, surname) so full contract names ("Patrick Mahomes",
+    "C.J. Stroud", "Patrick Surtain II") match play-by-play forms ("P.Mahomes", "C.Stroud", "P.Surtain II").
+    Returns None for blank names.
+    """
+    raw = re.sub(r"^\d+-", "", str(name or "").strip())
+    if not raw:
+        return None
+    raw = re.sub(r"\.(?=\S)", ". ", raw.replace("'", "").replace("\u2019", ""))
+    tokens = [t for t in re.sub(r"[^a-z0-9\s-]", " ", raw.lower()).split() if t]
+    while len(tokens) > 1 and tokens[-1] in _NAME_SUFFIXES:
+        tokens.pop()
+    if not tokens:
+        return None
+    if len(tokens) == 1:
+        return ("", tokens[0])
+    surname = tokens[-1]
+    if len(tokens) >= 3 and tokens[-2] in _SURNAME_PARTICLES:
+        surname = f"{tokens[-2]} {tokens[-1]}"
+    return (tokens[0][0], surname)
+
+
+def _colliding_name_keys() -> set:
+    """Name keys shared by more than one cataloged contract (need the team to tell them apart)."""
+    seen: Dict[Tuple[str, str], int] = {}
+    for c in NFL_CONTRACTS:
+        k = name_match_key(c.name)
+        if k:
+            seen[k] = seen.get(k, 0) + 1
+    return {k for k, n in seen.items() if n > 1}
+
+
+def _safe_epa(value: Any) -> float:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if f == f else 0.0  # NaN -> 0.0
+
+
 def calculate_contract_performance_efficiency(
     contract: ContractRecord,
     plays: List[Dict[str, Any]],
@@ -244,21 +290,34 @@ def calculate_contract_performance_efficiency(
     - Cost per EPA: APY ($M) / Total Season EPA
     - Cost per Fantasy Point: APY ($M) / Total Season Fantasy Points
     - APY per Touchdown
+
+    Contracts carry full names while play-by-play uses abbreviated forms ("P.Mahomes"), so plays are
+    matched on a normalized (first initial, surname) key. If that key is shared by several cataloged
+    contracts, the play's team must also match the contract's team. `epa_matched_plays` reports how many
+    plays were matched so callers can tell "no EPA" from "no name match".
     """
     from .fantasy import compute_player_fantasy_profile
 
     p_low = contract.name.strip().lower()
-    p_plays = [
-        p for p in plays
-        if (
-            str(p.get("player_name", "")).strip().lower() == p_low
-            or str(p.get("qb_name", "")).strip().lower() == p_low
-            or str(p.get("rusher_player_name", "")).strip().lower() == p_low
-            or str(p.get("receiver_player_name", "")).strip().lower() == p_low
-        )
-    ]
+    c_key = name_match_key(contract.name)
+    ambiguous = c_key in _colliding_name_keys() if c_key else False
 
-    tot_epa = sum(float(p.get("epa", 0.0)) for p in p_plays)
+    def _play_matches(p: Dict[str, Any]) -> bool:
+        for field in _PLAY_NAME_FIELDS:
+            val = str(p.get(field, "") or "").strip()
+            if not val:
+                continue
+            if val.lower() == p_low:
+                return True
+            if c_key and name_match_key(val) == c_key:
+                if ambiguous and str(p.get("posteam", "")).strip().upper() not in ("", contract.team.upper()):
+                    continue
+                return True
+        return False
+
+    p_plays = [p for p in plays if _play_matches(p)]
+
+    tot_epa = sum(_safe_epa(p.get("epa", 0.0)) for p in p_plays)
     fprof = compute_player_fantasy_profile(contract.name, plays)
     f_pts = fprof.get("points_ppr", 0.0)
 
@@ -273,6 +332,7 @@ def calculate_contract_performance_efficiency(
         "apy_m": contract.apy_m,
         "cap_hit_m": contract.cap_hit_current_m,
         "total_epa": round(tot_epa, 1),
+        "epa_matched_plays": len(p_plays),
         "fantasy_points": round(f_pts, 1),
         "cost_per_epa_k": cost_per_epa_k,
         "cost_per_fpoint_k": cost_per_fpoint_k,
@@ -384,13 +444,21 @@ def render_player_contract_view(
 
     if plays and season:
         eff = calculate_contract_performance_efficiency(c, plays, season)
+        no_epa_match = eff["epa_matched_plays"] == 0
+        if no_epa_match and c.contract_type == "player":
+            # Say so instead of showing an empty-looking ROI card
+            lines.extend([
+                "",
+                f"  {C.YELLOW}⚠ EPA unavailable ({season}): no play-by-play rows matched the name '{c.name}'.{C.RESET}",
+            ])
         if eff["total_epa"] != 0 or eff["fantasy_points"] != 0:
             cost_epa_str = f"${eff['cost_per_epa_k']}k / EPA" if eff["cost_per_epa_k"] > 0 else "N/A"
             cost_fp_str = f"${eff['cost_per_fpoint_k']}k / Pt" if eff["cost_per_fpoint_k"] > 0 else "N/A"
+            epa_total_str = "unavailable (no name match)" if no_epa_match else f"{eff['total_epa']:+.1f} EPA"
             lines.extend([
                 "",
                 f"  {C.MAGENTA}📈 PERFORMANCE ROI & CAP EFFICIENCY ({season}):{C.RESET}",
-                f"     • Total Season EPA:         {eff['total_epa']:+.1f} EPA",
+                f"     • Total Season EPA:         {epa_total_str}",
                 f"     • Season Fantasy Points:    {eff['fantasy_points']:.1f} Pts",
                 f"     • Cost per EPA:             {cost_epa_str}",
                 f"     • Cost per Fantasy Point:   {cost_fp_str}",
