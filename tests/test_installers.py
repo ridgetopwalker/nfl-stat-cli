@@ -147,14 +147,14 @@ class TestInstallShBehaviour:
         result = self.run(sandbox, "-v", FAKE_IMPORT_RC="1")
         assert result.returncode != 0
         assert "SAMPLE" in result.stderr
-        assert "--with-legacy-nfl-data-py" in result.stderr  # the Python 3.9 route is named
+        assert "--with-legacy-nfl-data-py" in result.stderr  # the opt-in legacy route is named
 
     def test_sample_only_is_explicit_and_labelled(self, sandbox):
         result = self.run(sandbox, "--sample-only", "-v", FAKE_LIVE_RC="1")
         assert result.returncode == 0, result.stderr
         assert "SAMPLE" in result.stdout
 
-    def test_legacy_loader_is_the_python39_route(self, sandbox):
+    def test_legacy_loader_is_opt_in(self, sandbox):
         result = self.run(sandbox, "--with-legacy-nfl-data-py", "-v", FAKE_IMPORT_RC="1", FAKE_LEGACY_RC="0")
         assert result.returncode == 0, result.stderr
         failing = self.run(sandbox, "--with-legacy-nfl-data-py", "-v", FAKE_LEGACY_INSTALL_RC="1")
@@ -169,7 +169,7 @@ class TestInstallShBehaviour:
     def test_old_python_is_rejected(self, sandbox):
         result = self.run(sandbox, "-v", FAKE_PY_OLD="1")
         assert result.returncode != 0
-        assert "3.9 or newer" in result.stderr
+        assert "3.10 or newer" in result.stderr
 
     def test_failed_package_install_is_fatal(self, sandbox):
         result = self.run(sandbox, "-v", FAKE_E_RC="1", FAKE_IMPORT_RC="0")

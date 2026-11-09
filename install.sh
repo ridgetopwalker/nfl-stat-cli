@@ -9,7 +9,7 @@
 #   --sample-only                Skip the live NFL data packages. nfl-stat then runs on the
 #                                small built-in SAMPLE dataset (it says so on every run).
 #   --with-legacy-nfl-data-py    Also install the deprecated nfl_data_py fallback loader
-#                                (only useful on Python 3.9, where nflreadpy is unavailable).
+#                                (opt-in; nflreadpy is preferred on all supported Pythons).
 #   --yes                        Allow commands that need administrator rights (sudo) to run
 #                                without asking (needed when stdin is not a terminal).
 #
@@ -126,23 +126,23 @@ confirm_sudo() {
         return 0
     fi
     if [ ! -t 0 ]; then
-        die "Python 3 is missing and installing it needs administrator rights ($what). Install Python 3.9+ yourself, or re-run with --yes."
+        die "Python 3 is missing and installing it needs administrator rights ($what). Install Python 3.10+ yourself, or re-run with --yes."
     fi
     printf "\n${BOLD}${CYAN}?${RESET} Python 3 is missing. Run '%s' with administrator rights? [y/N]: " "$what"
     read -r ans || ans=""
     case "$ans" in
         [yY]|[yY][eE][sS]) return 0 ;;
-        *) die "Cancelled: install Python 3.9+ yourself and re-run ./install.sh." ;;
+        *) die "Cancelled: install Python 3.10+ yourself and re-run ./install.sh." ;;
     esac
 }
 
 check_python_version() {
-    "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
-        || die "Python 3.9 or newer is required ($1 reports $("$1" --version 2>&1))."
+    "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
+        || die "Python 3.10 or newer is required ($1 reports $("$1" --version 2>&1))."
 }
 
 install_live_requirements_hint() {
-    echo "No live NFL data loader is available. nflreadpy (pandas, pyarrow, polars, nflreadpy in requirements-live.txt) needs Python 3.10+; on Python 3.9 re-run with --with-legacy-nfl-data-py. To accept the built-in SAMPLE dataset on purpose, re-run with --sample-only."
+    echo "No live NFL data loader is available. Install nflreadpy (pandas, pyarrow, polars, nflreadpy in requirements-live.txt), or re-run with --with-legacy-nfl-data-py for the deprecated loader. To accept the built-in SAMPLE dataset on purpose, re-run with --sample-only."
 }
 
 verify_live_data() {

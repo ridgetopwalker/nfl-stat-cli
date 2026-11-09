@@ -8,8 +8,8 @@
     Options:
       -SkipLivePackages     Explicit sample mode: skip the live NFL data packages. nfl-stat then
                             runs on the small built-in SAMPLE dataset.
-      -WithLegacyNflDataPy  Also install the deprecated nfl_data_py fallback loader (only useful
-                            on Python 3.9, where nflreadpy is unavailable).
+      -WithLegacyNflDataPy  Also install the deprecated nfl_data_py fallback loader (opt-in;
+                            nflreadpy is preferred on all supported Pythons).
       -WithSLM              Pull a small local model through Ollama (optional).
 
     Failures are not swallowed: if a required step fails the installer stops with a non-zero
@@ -63,7 +63,7 @@ function Write-InstallWarnings {
     }
 }
 
-$LiveHint = "No live NFL data loader is available. nflreadpy (requirements-live.txt) needs Python 3.10+; on Python 3.9 re-run with -WithLegacyNflDataPy. To accept the built-in SAMPLE dataset on purpose, re-run with -SkipLivePackages."
+$LiveHint = "No live NFL data loader is available. Install nflreadpy (requirements-live.txt), or re-run with -WithLegacyNflDataPy for the deprecated loader. To accept the built-in SAMPLE dataset on purpose, re-run with -SkipLivePackages."
 
 function Find-RealPython {
     $MachinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -77,7 +77,7 @@ function Find-RealPython {
         if ($found -and $found.Source -notmatch "WindowsApps") {
             try {
                 $ver = & $found.Source -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null | Select-Object -Last 1
-                if ($LASTEXITCODE -eq 0 -and $ver -match "^3\.(\d+)$" -and [int]$Matches[1] -ge 9) {
+                if ($LASTEXITCODE -eq 0 -and $ver -match "^3\.(\d+)$" -and [int]$Matches[1] -ge 10) {
                     return $found.Source
                 }
             } catch {}
@@ -150,7 +150,7 @@ if (-not $PythonExe) {
     $PythonExe = Find-RealPython
     if (-not $PythonExe) {
         if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $env:PROCESSOR_ARCHITEW6432 -eq "ARM64") {
-            Stop-Install "Python 3.9+ is not installed and the bundled fallback installer is x64-only. Install Python for ARM64 from https://www.python.org/downloads/ (or with winget) and re-run."
+            Stop-Install "Python 3.10+ is not installed and the bundled fallback installer is x64-only. Install Python for ARM64 from https://www.python.org/downloads/ (or with winget) and re-run."
         }
         $installerName = "python-$PythonInstallerVersion-amd64.exe"
         if (-not $VerboseMode) { Update-CompactUI 15 "Downloading $installerName from python.org..." }
@@ -160,7 +160,7 @@ if (-not $PythonExe) {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
         } catch {
-            Stop-Install "Could not download $installerName from python.org: $($_.Exception.Message). Install Python 3.9+ manually from https://www.python.org/downloads/ and re-run."
+            Stop-Install "Could not download $installerName from python.org: $($_.Exception.Message). Install Python 3.10+ manually from https://www.python.org/downloads/ and re-run."
         }
         $actualHash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actualHash -ne $PythonInstallerSha256) {
@@ -177,7 +177,7 @@ if (-not $PythonExe) {
         $PythonExe = Find-RealPython
     }
     if (-not $PythonExe) {
-        Stop-Install "Could not automatically install Python 3.9 or newer. Install it from https://www.python.org/downloads/ and re-run."
+        Stop-Install "Could not automatically install Python 3.10 or newer. Install it from https://www.python.org/downloads/ and re-run."
     }
 }
 if ($VerboseMode) { Write-Host "[1/5] Using Python: $PythonExe" -ForegroundColor Green }
