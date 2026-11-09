@@ -234,7 +234,11 @@ def apply_moves(dry_run: bool) -> List[str]:
             # Target already present (idempotent or prior partial run).
             if old_s.endswith(".bat") and new_s.endswith(".bat"):
                 try:
-                    same = old.read_bytes() == new.read_bytes()
+                    # New launcher may already have been content-rewritten; compare the
+                    # transformed old text to the new text (normalize newlines).
+                    old_txt = transform_text(old.read_text(encoding="utf-8", errors="replace"))
+                    new_txt = new.read_text(encoding="utf-8", errors="replace")
+                    same = old_txt.replace("\r\n", "\n") == new_txt.replace("\r\n", "\n")
                 except OSError:
                     same = False
                 if same:

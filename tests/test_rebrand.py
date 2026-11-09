@@ -46,7 +46,7 @@ def test_rebrand_script_idempotent(tmp_path):
     shutil.copytree(
         ROOT,
         dest,
-        ignore=shutil.ignore_patterns(".git", ".venv", "venv", "__pycache__", ".pytest_cache", "*.pyc"),
+        ignore=shutil.ignore_patterns(".git", ".venv", "venv", "__pycache__", ".pytest_cache", "*.pyc", "cache", "data", "*.zip", "dist", "build"),
     )
     apply1 = subprocess.run([sys.executable, str(dest / "tools" / "rebrand.py")], cwd=str(dest), capture_output=True, text=True)
     assert apply1.returncode == 0, apply1.stdout + apply1.stderr

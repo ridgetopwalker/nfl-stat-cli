@@ -144,7 +144,7 @@ def maybe_migrate_data_dir(old_dir: Path, new_dir: Path) -> Dict[str, str]:
                 moved.append(sub)
             except OSError as exc:
                 status["error"] = str(getattr(exc, "strerror", None) or exc)
-                # Leave marker noting partial migration; never delete the other side.
+                # Stop without writing a marker so a later run can retry remaining subs.
                 break
         if "error" in status:
             status["action"] = "partial"
