@@ -7780,6 +7780,15 @@ def write_resolution(
             shutil.move(str(pending_file), str(history_file))
         except Exception:
             pass
+    pending_latest = ipc_dir / "pending" / "latest.json"
+    if pending_latest.exists():
+        try:
+            with open(pending_latest, "r", encoding="utf-8") as f:
+                p_data = json.load(f)
+            if p_data.get("id") == report_id:
+                pending_latest.unlink(missing_ok=True)
+        except Exception:
+            pass
     return res_data
 
 
