@@ -1361,6 +1361,261 @@ def test_defense_turnovers_and_takeaways_nl_query():
     assert p_off["group_by"] == "team"
 
 
+def test_fantasy_scoring_calculations_and_leaderboards():
+    from nfl_stat_cli.fantasy import (
+        calculate_player_fantasy_points,
+        compute_player_fantasy_profile,
+        compute_all_fantasy_leaders,
+        render_fantasy_leaderboard_view,
+        render_player_fantasy_profile_view,
+    )
+
+    # 1. Custom mock play with 300 passing yds, 3 pass TDs, 1 INT, 40 rushing yds, 1 rush TD, 5 rec, 60 rec yds, 1 rec TD, 1 fumble lost
+    mock_plays = [
+        # Pass play
+        {
+            "season": 2024, "week": 1, "game_id": "2024_01_KC_BAL",
+            "posteam": "KC", "defteam": "BAL", "home_team": "BAL", "away_team": "KC",
+            "passer_player_name": "P.Mahomes", "player_name": "Patrick Mahomes",
+            "receiver_player_name": "R.Rice",
+            "play_type": "pass", "passing_yards": 250, "pass_touchdown": 2, "interception": 1,
+            "epa": 2.5, "wpa": 0.08, "down": 1, "ydstogo": 10,
+        },
+        # Rush play
+        {
+            "season": 2024, "week": 1, "game_id": "2024_01_KC_BAL",
+            "posteam": "KC", "defteam": "BAL", "home_team": "BAL", "away_team": "KC",
+            "rusher_player_name": "P.Mahomes", "player_name": "Patrick Mahomes",
+            "play_type": "run", "rushing_yards": 30, "rush_touchdown": 1, "fumble_lost": 0,
+            "epa": 1.2, "wpa": 0.04, "down": 2, "ydstogo": 4,
+        },
+        # Receiver play for Rashee Rice: 6 catches, 80 yards, 1 TD
+        {
+            "season": 2024, "week": 1, "game_id": "2024_01_KC_BAL",
+            "posteam": "KC", "defteam": "BAL", "home_team": "BAL", "away_team": "KC",
+            "receiver_player_name": "R.Rice", "player_name": "Rashee Rice",
+            "play_type": "pass", "receiving_yards": 80, "reception": 6, "touchdown": 1,
+            "epa": 1.5, "wpa": 0.05, "down": 3, "ydstogo": 7,
+        },
+    ]
+
+    # Mahomes scoring check:
+    # Passing: 250 * 0.04 = 10.0 pts, 2 TDs * 4 = 8.0 pts, 1 INT = -2.0 pts -> 16.0 pts
+    # Rushing: 30 * 0.10 = 3.0 pts, 1 TD * 6 = 6.0 pts -> 9.0 pts
+    # Total = 25.0 pts (Standard, Half, PPR all equal for non-pass-catchers)
+    m_std = calculate_player_fantasy_points(pass_yards=250, pass_tds=2, interceptions=1, rush_yards=30, rush_tds=1, format_type="standard")
+    m_half = calculate_player_fantasy_points(pass_yards=250, pass_tds=2, interceptions=1, rush_yards=30, rush_tds=1, format_type="half_ppr")
+    m_ppr = calculate_player_fantasy_points(pass_yards=250, pass_tds=2, interceptions=1, rush_yards=30, rush_tds=1, format_type="ppr")
+    assert round(m_std, 1) == 25.0
+    assert round(m_half, 1) == 25.0
+    assert round(m_ppr, 1) == 25.0
+
+    # Rashee Rice scoring check:
+    # Receiving: 80 * 0.10 = 8.0 pts, 1 TD * 6 = 6.0 pts -> 14.0 pts standard
+    # 6 catches: Standard = 14.0, Half-PPR = 14.0 + 3.0 = 17.0, PPR = 14.0 + 6.0 = 20.0
+    r_std = calculate_player_fantasy_points(rec_yards=80, receptions=6, rec_tds=1, format_type="standard")
+    r_half = calculate_player_fantasy_points(rec_yards=80, receptions=6, rec_tds=1, format_type="half_ppr")
+    r_ppr = calculate_player_fantasy_points(rec_yards=80, receptions=6, rec_tds=1, format_type="ppr")
+    assert round(r_std, 1) == 14.0
+    assert round(r_half, 1) == 17.0
+    assert round(r_ppr, 1) == 20.0
+
+    # Profile generation
+    prof = compute_player_fantasy_profile("Patrick Mahomes", mock_plays)
+    assert prof["player"] == "Patrick Mahomes"
+    assert prof["team"] == "KC"
+    assert len(prof["game_logs"]) == 1
+    assert round(prof["points_ppr"], 1) == 25.0
+
+    # Leaderboard view rendering
+    board_view = render_fantasy_leaderboard_view(mock_plays, season=2024, scoring_format="ppr")
+    clean_board = cli.strip_ansi(board_view)
+    assert "Fantasy Football Scoring Leaders" in clean_board
+    assert "Patrick Mahomes" in clean_board
+    assert "Rashee Rice" in clean_board
+
+    # Player profile view rendering
+    prof_view = render_player_fantasy_profile_view("Patrick Mahomes", mock_plays, season=2024)
+    clean_prof = cli.strip_ansi(prof_view)
+    assert "Fantasy Profile & Weekly Game Log: Patrick Mahomes" in clean_prof
+    assert "Pass Yds" in clean_prof
+    assert "Rush Yds" in clean_prof
+
+
+def test_sportsbook_handicapping_and_power_ratings():
+    from nfl_stat_cli.sportsbook import (
+        compute_team_power_ratings,
+        handicap_matchup,
+        render_sportsbook_board_view,
+        render_power_ratings_view,
+        render_game_handicap_dossier_view,
+    )
+
+    plays = cli.SAMPLE_PBP_PLAYS
+    ratings = compute_team_power_ratings(plays, season=2024)
+    assert isinstance(ratings, dict)
+    assert len(ratings) > 0
+    # Every rating record should contain required fields
+    for team, r in ratings.items():
+        assert "power_rating" in r
+        assert "net_epa" in r
+        assert "games_played" in r
+
+    # Handicap a matchup between KC and BUF
+    dossier = handicap_matchup("KC", "BUF", ratings)
+    assert dossier["home_team"] == "KC"
+    assert dossier["away_team"] == "BUF"
+    assert "spread" in dossier
+    assert "total" in dossier
+    assert "home_ml" in dossier
+    assert "away_ml" in dossier
+    assert dossier["home_win_prob"] + dossier["away_win_prob"] == 100.0
+
+    # View renderers
+    board = cli.strip_ansi(render_sportsbook_board_view(plays, season=2024))
+    assert "Sportsbook Betting Lines & Game Handicapping" in board
+
+    pow_view = cli.strip_ansi(render_power_ratings_view(plays, season=2024))
+    assert "NFL Team Power Ratings" in pow_view
+
+    dossier_view = cli.strip_ansi(render_game_handicap_dossier_view("KC", "BUF", plays, season=2024))
+    assert "SPORTSBOOK HANDICAPPING DOSSIER" in dossier_view
+    assert "Point Spread" in dossier_view
+    assert "MONEYLINES" in dossier_view
+
+
+def test_contracts_dataset_and_views():
+    from nfl_stat_cli.contracts import (
+        NFL_CONTRACTS,
+        find_contract_by_name,
+        get_contracts_by_team,
+        get_contracts_by_position,
+        get_all_coach_contracts,
+        calculate_contract_performance_efficiency,
+        render_contracts_leaderboard_view,
+        render_player_contract_view,
+        render_team_payroll_view,
+    )
+
+    # 1. Dataset checks
+    assert len(NFL_CONTRACTS) >= 50
+    mahomes_c = find_contract_by_name("Patrick Mahomes")
+    assert mahomes_c is not None
+    assert mahomes_c.apy_m >= 45.0
+    assert mahomes_c.team == "KC"
+    assert mahomes_c.position == "QB"
+
+    # Coach contract check
+    reid_c = find_contract_by_name("Andy Reid")
+    assert reid_c is not None
+    assert reid_c.contract_type == "coach"
+    assert reid_c.team == "KC"
+
+    # Position and team filters
+    qbs = get_contracts_by_position("QB")
+    assert len(qbs) >= 10
+    kc_contracts = get_contracts_by_team("KC")
+    assert len(kc_contracts) >= 3
+
+    coaches = get_all_coach_contracts()
+    assert len(coaches) >= 10
+
+    # Contract efficiency
+    eff = calculate_contract_performance_efficiency(mahomes_c, plays=cli.SAMPLE_PBP_PLAYS, season=2024)
+    assert eff["apy_m"] == mahomes_c.apy_m
+    assert "cost_per_epa_k" in eff
+    assert "cost_per_fpoint_k" in eff
+
+    # View renderers
+    c_board = cli.strip_ansi(render_contracts_leaderboard_view(contract_type="player", limit=15))
+    assert "Contract & Salary Leaderboard" in c_board
+    assert "Patrick Mahomes" in c_board
+
+    coach_board = cli.strip_ansi(render_contracts_leaderboard_view(contract_type="coach", limit=10))
+    assert "Contract & Salary Leaderboard" in coach_board
+    assert "Andy Reid" in coach_board
+
+    p_view = cli.strip_ansi(render_player_contract_view("Patrick Mahomes", plays=cli.SAMPLE_PBP_PLAYS, season=2024))
+    assert "OFFICIAL CONTRACT" in p_view
+    assert "Patrick Mahomes" in p_view
+    assert "PERFORMANCE ROI & CAP EFFICIENCY" in p_view
+
+    t_view = cli.strip_ansi(render_team_payroll_view("KC"))
+    assert "Team Contract Payroll" in t_view
+    assert "Patrick Mahomes" in t_view
+
+
+def test_nl_query_parsing_for_fantasy_sportsbook_and_contracts():
+    engine = cli.StatEngine()
+
+    # Fantasy queries
+    q_f1 = "who has the most fantasy points"
+    p_f1 = cli.NaturalLanguageStatAssistant.interpret_query(q_f1, engine=engine, slm_model="off")
+    assert p_f1["intent"] == "fantasy_report"
+    assert p_f1["subquery"] == "leaderboard"
+
+    q_f2 = "ppr fantasy leaders"
+    p_f2 = cli.NaturalLanguageStatAssistant.interpret_query(q_f2, engine=engine, slm_model="off")
+    assert p_f2["intent"] == "fantasy_report"
+    assert p_f2["scoring_format"] == "ppr"
+
+    q_f3 = "half-ppr fantasy points for Derrick Henry"
+    p_f3 = cli.NaturalLanguageStatAssistant.interpret_query(q_f3, engine=engine, slm_model="off")
+    assert p_f3["intent"] == "fantasy_report"
+    assert p_f3["subquery"] == "player"
+    assert "henry" in p_f3["player"].lower()
+
+    # Sportsbook queries
+    q_s1 = "spread for chiefs vs bills"
+    p_s1 = cli.NaturalLanguageStatAssistant.interpret_query(q_s1, engine=engine, slm_model="off")
+    assert p_s1["intent"] == "sportsbook_report"
+    assert p_s1["subquery"] == "matchup"
+    assert p_s1["home_team"] == "KC"
+    assert p_s1["away_team"] == "BUF"
+
+    q_s2 = "nfl power ratings"
+    p_s2 = cli.NaturalLanguageStatAssistant.interpret_query(q_s2, engine=engine, slm_model="off")
+    assert p_s2["intent"] == "sportsbook_report"
+    assert p_s2["subquery"] == "power_ratings"
+
+    q_s3 = "sportsbook odds for week 4"
+    p_s3 = cli.NaturalLanguageStatAssistant.interpret_query(q_s3, engine=engine, slm_model="off")
+    assert p_s3["intent"] == "sportsbook_report"
+    assert p_s3["week"] == 4
+
+    # Contract queries
+    q_c1 = "how much does Patrick Mahomes make"
+    p_c1 = cli.NaturalLanguageStatAssistant.interpret_query(q_c1, engine=engine, slm_model="off")
+    assert p_c1["intent"] == "contract_report"
+    assert p_c1["subquery"] == "player"
+    assert "mahomes" in p_c1["player"].lower()
+
+    q_c2 = "Andy Reid contract"
+    p_c2 = cli.NaturalLanguageStatAssistant.interpret_query(q_c2, engine=engine, slm_model="off")
+    assert p_c2["intent"] == "contract_report"
+    assert p_c2["subquery"] == "player"
+    assert "reid" in p_c2["player"].lower()
+
+    q_c3 = "highest paid head coaches"
+    p_c3 = cli.NaturalLanguageStatAssistant.interpret_query(q_c3, engine=engine, slm_model="off")
+    assert p_c3["intent"] == "contract_report"
+    assert p_c3["subquery"] == "coaches"
+
+    q_c4 = "Chiefs payroll"
+    p_c4 = cli.NaturalLanguageStatAssistant.interpret_query(q_c4, engine=engine, slm_model="off")
+    assert p_c4["intent"] == "contract_report"
+    assert p_c4["subquery"] == "team"
+    assert p_c4["team"] == "KC"
+
+
+def test_slash_help_includes_new_commands():
+    help_text = cli.strip_ansi(cli.render_slash_help())
+    assert "/fantasy" in help_text
+    assert "/sportsbook" in help_text
+    assert "/contract" in help_text
+
+
+
 
 
 

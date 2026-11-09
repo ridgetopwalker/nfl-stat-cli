@@ -36,6 +36,36 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
+from .fantasy import (
+    calculate_player_fantasy_points,
+    compute_player_fantasy_profile,
+    compute_all_fantasy_leaders,
+    render_fantasy_leaderboard_view,
+    render_player_fantasy_profile_view,
+    interactive_fantasy_browser,
+)
+from .sportsbook import (
+    compute_team_power_ratings,
+    handicap_matchup,
+    render_sportsbook_board_view,
+    render_power_ratings_view,
+    render_game_handicap_dossier_view,
+    interactive_sportsbook_browser,
+)
+from .contracts import (
+    ContractRecord,
+    NFL_CONTRACTS,
+    find_contract_by_name,
+    get_contracts_by_team,
+    get_contracts_by_position,
+    get_all_coach_contracts,
+    calculate_contract_performance_efficiency,
+    render_contracts_leaderboard_view,
+    render_player_contract_view,
+    render_team_payroll_view,
+    interactive_contracts_browser,
+)
+
 __version__ = "2.0.0"
 __author__ = "Sean McClain"
 __license__ = "MIT"
@@ -1912,6 +1942,50 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         unit="TO",
         dependencies=["turnovers"],
     ),
+    "fantasy_points": StatDefinition(
+        name="fantasy_points",
+        title="Fantasy Points (Standard)",
+        category="traditional",
+        group_by="player",
+        formula="fantasy_points",
+        description="NFL Standard (0 PPR) fantasy points: 0.04/pass yd, 4/pass TD, -2/INT, 0.1/rush yd, 6/rush TD, -2/lost fumble.",
+        calculation_explained="Standard non-PPR scoring applied to player passing, rushing, receiving, and turnovers.",
+        unit="pts",
+        dependencies=["fantasy_points"],
+    ),
+    "fantasy_points_ppr": StatDefinition(
+        name="fantasy_points_ppr",
+        title="Fantasy Points (PPR)",
+        category="traditional",
+        group_by="player",
+        formula="fantasy_points_ppr",
+        description="Point-Per-Reception (PPR) fantasy points (Standard + 1.0 point per reception).",
+        calculation_explained="Standard scoring + 1.0 pt per catch (PPR).",
+        unit="pts",
+        dependencies=["fantasy_points_ppr"],
+    ),
+    "fantasy_points_half_ppr": StatDefinition(
+        name="fantasy_points_half_ppr",
+        title="Fantasy Points (Half-PPR)",
+        category="traditional",
+        group_by="player",
+        formula="fantasy_points_half_ppr",
+        description="Half-PPR fantasy points (Standard + 0.5 points per reception).",
+        calculation_explained="Standard scoring + 0.5 pts per catch (Half-PPR).",
+        unit="pts",
+        dependencies=["fantasy_points_half_ppr"],
+    ),
+    "fantasy_ppg": StatDefinition(
+        name="fantasy_ppg",
+        title="Fantasy PPG (PPR)",
+        category="traditional",
+        group_by="player",
+        formula="fantasy_ppg_ppr",
+        description="Average Fantasy Points Per Game in PPR format.",
+        calculation_explained="PPR fantasy points divided by games played.",
+        unit="ppg",
+        dependencies=["fantasy_ppg_ppr"],
+    ),
     "clean_play_score": StatDefinition(
         name="clean_play_score",
         title="Clean Play Score",
@@ -2320,6 +2394,8 @@ BASE_METRIC_KEYS: Set[str] = {
     "penalties_per_game", "penalty_yards_per_game",
     "penalties_drawn", "penalty_yards_drawn", "net_penalties", "net_penalty_yards",
     "timeouts", "timeouts_used", "timeouts_called",
+    "fantasy_points", "fantasy_points_std", "fantasy_points_ppr", "fantasy_points_half_ppr",
+    "fantasy_ppg", "fantasy_ppg_ppr", "fantasy_ppg_std",
 }
 
 PLAY_ROW_KEYS: Set[str] = {
@@ -2878,6 +2954,13 @@ class StatEngine:
             "timeouts": float(timeouts),
             "timeouts_used": float(timeouts),
             "timeouts_called": float(timeouts),
+            "fantasy_points": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0), 2),
+            "fantasy_points_std": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0), 2),
+            "fantasy_points_ppr": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions), 2),
+            "fantasy_points_half_ppr": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + (float(completions) * 0.5), 2),
+            "fantasy_ppg": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
+            "fantasy_ppg_ppr": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
+            "fantasy_ppg_std": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0)) / float(games_played), 2),
         }
         return base
 
@@ -4374,6 +4457,16 @@ class NaturalLanguageStatAssistant:
         # General / Overall Yardage Leaders ("most yards", "who had the most yards", "which player has the most yards", "yards this year", etc.)
         (r"\b(?:most\s+yards|highest\s+yards|leading\s+(?:in\s+)?(?:the\s+most\s+)?yards|leader\s+in\s+yards|leaders\s+in\s+yards|has\s+the\s+most\s+yards|had\s+the\s+most\s+yards|more\s+yards|yards\s+leader|yards\s+leaders|total\s+yards)\b", "passing_yards", "qb"),
         (r"\b(?:yards|yds)\b", "passing_yards", "qb"),
+        # Fantasy Points (PPR)
+        (r"\b(?:ppr\s+fantasy\s+points|ppr\s+fantasy|ppr\s+points|ppr\s+scoring)\b", "fantasy_points_ppr", "player"),
+        # Fantasy Points (Half PPR)
+        (r"\b(?:half[\s-]ppr\s+fantasy\s+points|half[\s-]ppr\s+fantasy|half[\s-]ppr\s+points|0\.5\s+ppr)\b", "fantasy_points_half_ppr", "player"),
+        # Fantasy Points (Standard)
+        (r"\b(?:standard\s+fantasy\s+points|standard\s+fantasy|non-ppr\s+fantasy)\b", "fantasy_points", "player"),
+        # Fantasy Points General
+        (r"\b(?:fantasy\s+points|fantasy\s+score|fantasy\s+scoring|fantasy\s+pts)\b", "fantasy_points_ppr", "player"),
+        # Fantasy PPG
+        (r"\b(?:fantasy\s+points\s+per\s+game|fantasy\s+ppg|fppg)\b", "fantasy_ppg", "player"),
     )
 
     @classmethod
@@ -4406,7 +4499,11 @@ class NaturalLanguageStatAssistant:
     @classmethod
     def _validate_slm_response(cls, parsed: Dict[str, Any], engine: Optional[StatEngine]) -> Optional[Dict[str, Any]]:
         intent = str(parsed.get("intent") or "").strip().lower()
-        if intent not in ("stat_query", "specific_play", "create_stat", "qb_wins_report", "team_drilldown", "player_drilldown", "stat_page", "delete_stat", "dataset_info"):
+        if intent not in (
+            "stat_query", "specific_play", "create_stat", "qb_wins_report",
+            "team_drilldown", "player_drilldown", "stat_page", "delete_stat",
+            "dataset_info", "fantasy_report", "sportsbook_report", "contract_report"
+        ):
             return None
         parsed["intent"] = intent
         if "show_field" in parsed:
@@ -4662,7 +4759,8 @@ class NaturalLanguageStatAssistant:
         has_stat_term = any(w in ql for w in (
             "epa", "yards", "stat", "stats", "leaderboard", "rank", "ranking", "rate", "rating",
             "success", "cpoe", "wpa", "points", "touchdowns", "timeout", "timeouts", "penalty",
-            "penalties", "flags", "favor", "benefited", "benefitted", "drawn", "differential"
+            "penalties", "flags", "favor", "benefited", "benefitted", "drawn", "differential",
+            "contract", "contracts", "salary", "salaries", "paid", "payroll", "cap", "apy"
         ))
         is_coaching_query = (not has_stat_term) and (
             any(phrase in ql for phrase in (
@@ -4857,6 +4955,7 @@ class NaturalLanguageStatAssistant:
             "epa", "rating", "yac", "cpoe", "wpa", "yards per play", "success rate", "explosive", "meaningful win", "qb win",
             "passing yard", "rushing yard", "touchdown", "sack", "interception", "pass yards", "rush yards", "td",
             "turnover", "turnovers", "takeaway", "takeaways",
+            "fantasy", "ppr", "contract", "contracts", "salary", "salaries", "paid", "payroll", "spread", "odds",
         ))
         if not has_specific_stat_kw and (is_drill_kw or (
             team_filter and any(w in ql for w in ("team stats", "stats for the chiefs", "stats for the bills", "stats for the lions", "team overview"))
@@ -4899,6 +4998,169 @@ class NaturalLanguageStatAssistant:
                     "show_field": False,
                     "explanation": f"Drill-down into player passing, rushing, receiving, and situational stats for {player_filter.title()} ({season}).",
                 }
+
+        # Check if user is asking about FANTASY FOOTBALL
+        if any(w in ql for w in ("fantasy", "ppr", "half-ppr", "half ppr", "fppg")):
+            scoring_fmt = "ppr"
+            if "standard" in ql or "non-ppr" in ql or "non ppr" in ql:
+                scoring_fmt = "standard"
+            elif "half" in ql:
+                scoring_fmt = "half_ppr"
+
+            top_m = re.search(r"\btop\s+(\d+)\b", ql)
+            lim_val = int(top_m.group(1)) if top_m else 15
+
+            if player_filter:
+                return {
+                    "intent": "fantasy_report",
+                    "subquery": "player",
+                    "query": query,
+                    "player": player_filter,
+                    "position": position,
+                    "season": season,
+                    "week": week,
+                    "scoring_format": scoring_fmt,
+                    "limit": lim_val,
+                    "show_field": False,
+                    "explanation": f"Fantasy Football profile and scoring breakdown for {player_filter.title()} ({season}).",
+                }
+            return {
+                "intent": "fantasy_report",
+                "subquery": "leaderboard",
+                "query": query,
+                "player": None,
+                "position": position,
+                "season": season,
+                "week": week,
+                "scoring_format": scoring_fmt,
+                "limit": lim_val,
+                "show_field": False,
+                "explanation": f"Fantasy Football {scoring_fmt.upper()} leaderboard for {position or 'all positions'} ({season}).",
+            }
+
+        # Check if user is asking about SPORTSBOOK HANDICAPPING / BETTING ODDS
+        if any(w in ql for w in (
+            "spread", "spreads", "point spread", "handicap", "handicapping",
+            "sportsbook", "odds", "betting line", "betting lines", "moneyline",
+            "moneylines", "over under", "over/under", "who is favored", "underdog",
+            "power rating", "power ratings", "power ranking", "power rankings", "betting"
+        )):
+            if any(w in ql for w in ("power", "ratings", "rankings")):
+                return {
+                    "intent": "sportsbook_report",
+                    "subquery": "power_ratings",
+                    "query": query,
+                    "season": season,
+                    "week": week,
+                    "team": team_filter,
+                    "show_field": False,
+                    "explanation": f"Quantitative team power ratings derived from Net EPA/play and scoring differentials ({season}).",
+                }
+
+            # Check for matchup teams
+            matchup_teams = None
+            m_vs = re.search(r"\b([a-zA-Z]+)\s+(?:vs\.?|against|at|@)\s+([a-zA-Z]+)\b", ql)
+            if m_vs:
+                t1 = resolve_team_abbr(m_vs.group(1))
+                t2 = resolve_team_abbr(m_vs.group(2))
+                if t1 and t2:
+                    matchup_teams = (t2, t1) if (" at " in ql or " @ " in ql) else (t1, t2)
+            if not matchup_teams:
+                m_between = re.search(r"\bbetween\s+([a-zA-Z]+)\s+and\s+([a-zA-Z]+)\b", ql)
+                if m_between:
+                    t1 = resolve_team_abbr(m_between.group(1))
+                    t2 = resolve_team_abbr(m_between.group(2))
+                    if t1 and t2:
+                        matchup_teams = (t1, t2)
+
+            if matchup_teams:
+                home_t, away_t = matchup_teams
+                return {
+                    "intent": "sportsbook_report",
+                    "subquery": "matchup",
+                    "query": query,
+                    "home_team": home_t,
+                    "away_team": away_t,
+                    "season": season,
+                    "week": week,
+                    "show_field": False,
+                    "explanation": f"Sportsbook handicap dossier, spread, moneyline, and total for {away_t} at {home_t} ({season}).",
+                }
+
+            return {
+                "intent": "sportsbook_report",
+                "subquery": "board",
+                "query": query,
+                "team": team_filter,
+                "season": season,
+                "week": week,
+                "show_field": False,
+                "explanation": f"Sportsbook betting board, projected lines, and ATS results{' for Week ' + str(week) if week else ''} ({season}).",
+            }
+
+        # Check if user is asking about PLAYER & COACH CONTRACTS / SALARIES
+        if any(w in ql for w in (
+            "contract", "contracts", "salary", "salaries", "payroll", "cap hit", "apy",
+            "guaranteed money", "guarantees", "highest paid", "top paid", "most paid", "best paid"
+        )) or bool(re.search(r"\bhow\s+much\s+(?:does|is|do)\b.*\b(?:make|paid|earn)\b", ql)):
+            top_m = re.search(r"\btop\s+(\d+)\b", ql)
+            lim_val = int(top_m.group(1)) if top_m else 15
+
+            found_contract_name = None
+            if player_filter:
+                found_contract_name = player_filter
+            else:
+                for c in NFL_CONTRACTS:
+                    if c.name.lower() in ql:
+                        found_contract_name = c.name
+                        break
+                    last_name = c.name.split()[-1].lower()
+                    if len(last_name) > 3 and re.search(rf"\b{re.escape(last_name)}\b", ql):
+                        found_contract_name = c.name
+                        break
+
+            is_coach = any(w in ql for w in ("coach", "coaches", "head coach", "hc", "staff"))
+            if found_contract_name:
+                return {
+                    "intent": "contract_report",
+                    "subquery": "player",
+                    "query": query,
+                    "player": found_contract_name,
+                    "season": season,
+                    "show_field": False,
+                    "explanation": f"Contract details, APY, guarantees, and performance efficiency for {found_contract_name.title()} ({season}).",
+                }
+            if team_filter and any(w in ql for w in ("payroll", "team", "cap", "salary", "salaries")):
+                return {
+                    "intent": "contract_report",
+                    "subquery": "team",
+                    "query": query,
+                    "team": team_filter,
+                    "season": season,
+                    "show_field": False,
+                    "explanation": f"Team payroll, active contracts, and cap allocation for {team_filter} ({season}).",
+                }
+            if is_coach:
+                return {
+                    "intent": "contract_report",
+                    "subquery": "coaches",
+                    "query": query,
+                    "season": season,
+                    "limit": lim_val,
+                    "show_field": False,
+                    "explanation": "NFL Head Coach contract and salary leaderboard.",
+                }
+            return {
+                "intent": "contract_report",
+                "subquery": "leaderboard",
+                "query": query,
+                "position": position,
+                "team": team_filter,
+                "season": season,
+                "limit": lim_val,
+                "show_field": False,
+                "explanation": f"NFL contract leaderboard for {position or 'all players'}{' on ' + team_filter if team_filter else ''}.",
+            }
 
         # Check if user is asking about a SPECIFIC PLAY vs an AVERAGE/LEADERBOARD across the year
         ql_without_stat_phrases = re.sub(
@@ -5936,6 +6198,46 @@ def handle_nl_query_result(
     if intent == "player_drilldown":
         target_player = player or "Mahomes"
         return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=False)
+
+    if intent == "fantasy_report":
+        subq = parsed.get("subquery", "leaderboard")
+        target_p = parsed.get("player") or player
+        scoring = parsed.get("scoring_format") or "ppr"
+        if subq == "player" and target_p:
+            return header + "\n" + render_player_fantasy_profile_view(target_p, s_plays, season=season)
+        pos = parsed.get("position")
+        w_filter = parsed.get("week")
+        lim = parsed.get("limit") or 15
+        return header + "\n" + render_fantasy_leaderboard_view(
+            s_plays, season=season, scoring_format=scoring, position=pos, week=w_filter, limit=lim
+        )
+
+    if intent == "sportsbook_report":
+        subq = parsed.get("subquery", "board")
+        if subq == "power_ratings":
+            return header + "\n" + render_power_ratings_view(s_plays, season=season)
+        if subq == "matchup":
+            home_t = parsed.get("home_team") or team or "KC"
+            away_t = parsed.get("away_team") or "BUF"
+            w_val = parsed.get("week")
+            return header + "\n" + render_game_handicap_dossier_view(home_t, away_t, s_plays, season=season, week=w_val)
+        w_filter = parsed.get("week")
+        return header + "\n" + render_sportsbook_board_view(s_plays, season=season, week_filter=w_filter)
+
+    if intent == "contract_report":
+        subq = parsed.get("subquery", "leaderboard")
+        target_p = parsed.get("player") or player
+        if subq == "player" and target_p:
+            return header + "\n" + render_player_contract_view(target_p, plays=s_plays, season=season)
+        if subq == "team":
+            target_t = resolve_team_abbr(team) or team or "KC"
+            return header + "\n" + render_team_payroll_view(target_t)
+        if subq == "coaches":
+            return header + "\n" + render_contracts_leaderboard_view(contract_type="coach", limit=parsed.get("limit", 15))
+        pos = parsed.get("position")
+        return header + "\n" + render_contracts_leaderboard_view(
+            contract_type="player", position_filter=pos, team_filter=team, limit=parsed.get("limit", 15)
+        )
 
     if intent == "create_stat":
         stat_name = parsed.get("stat_name", "custom_stat")
@@ -7905,6 +8207,16 @@ STAT_CATALOG_GROUPS: List[Tuple[str, str, List[str]]] = [
             "explosive_pass_rate",
         ],
     ),
+    (
+        "🏈 Fantasy Football Analytics",
+        "PPR, Half-PPR, and Standard fantasy points, per-game averages, and weekly scoring profiles.",
+        [
+            "fantasy_points",
+            "fantasy_points_ppr",
+            "fantasy_points_half_ppr",
+            "fantasy_ppg",
+        ],
+    ),
 ]
 
 
@@ -8092,6 +8404,9 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/delete{C.RESET} [stat_id]                Delete a user-created custom stat (or list custom stats to delete)
     {C.BOLD}{C.CYAN}/play{C.RESET} [phase/query]             Interactive play explorer (pass/run concepts, generic chalkboards & drilldowns)
     {C.BOLD}{C.CYAN}/games{C.RESET} [week/team]             Browse games by team/week, view quarter play tables & step plays
+    {C.BOLD}{C.CYAN}/fantasy{C.RESET} [player/week]          Fantasy football center (PPR, Half-PPR, Standard, weekly logs & leaders)
+    {C.BOLD}{C.CYAN}/sportsbook{C.RESET} [week/matchup]      Sportsbook handicapper (spreads, totals, moneylines, power ratings & ATS)
+    {C.BOLD}{C.CYAN}/contract{C.RESET} [name/team]          NFL player & coach contracts (APY, guarantees, payrolls & cap hits)
     {C.BOLD}{C.CYAN}/camera{C.RESET} <offense|defense|side>  Set default camera angle for play diagrams
     {C.BOLD}{C.CYAN}/season{C.RESET} <year>                  Set active season year (default: current NFL season)
     {C.BOLD}{C.CYAN}/query{C.RESET}                          Run an ad-hoc season filter & group query
@@ -8411,6 +8726,57 @@ def interactive_tui(
                         initial_team=init_team,
                         initial_week=init_week,
                     )
+                elif cmd_token in ("/fantasy", "/fant", "/fp"):
+                    if cmd_args:
+                        arg_str = " ".join(cmd_args).strip()
+                        pos_match = arg_str.upper() if arg_str.upper() in ("QB", "RB", "WR", "TE", "K") else None
+                        if pos_match:
+                            s_plays = require_season_plays(plays, active_season)
+                            print(render_fantasy_leaderboard_view(s_plays, season=active_season, position=pos_match))
+                        elif any(fmt in arg_str.lower() for fmt in ("std", "standard", "half", "ppr")):
+                            fmt = "standard" if "std" in arg_str.lower() else ("half_ppr" if "half" in arg_str.lower() else "ppr")
+                            s_plays = require_season_plays(plays, active_season)
+                            print(render_fantasy_leaderboard_view(s_plays, season=active_season, scoring_format=fmt))
+                        else:
+                            s_plays = require_season_plays(plays, active_season)
+                            print(render_player_fantasy_profile_view(arg_str, s_plays, season=active_season))
+                    else:
+                        interactive_fantasy_browser(plays, active_season=active_season)
+                elif cmd_token in ("/sportsbook", "/odds", "/handicap", "/lines", "/betting"):
+                    if cmd_args:
+                        arg_str = " ".join(cmd_args).strip()
+                        s_plays = require_season_plays(plays, active_season)
+                        if any(w in arg_str.lower() for w in ("power", "ratings", "rankings")):
+                            print(render_power_ratings_view(s_plays, season=active_season))
+                        elif arg_str.isdigit():
+                            print(render_sportsbook_board_view(s_plays, season=active_season, week_filter=int(arg_str)))
+                        else:
+                            match_m = re.search(r"([a-zA-Z]+)\s+(?:vs\.?|at|@)\s+([a-zA-Z]+)", arg_str)
+                            if match_m:
+                                t1 = resolve_team_abbr(match_m.group(1)) or match_m.group(1).upper()
+                                t2 = resolve_team_abbr(match_m.group(2)) or match_m.group(2).upper()
+                                home_t, away_t = (t2, t1) if " at " in arg_str or " @ " in arg_str else (t1, t2)
+                                print(render_game_handicap_dossier_view(home_t, away_t, s_plays, season=active_season))
+                            else:
+                                print(render_sportsbook_board_view(s_plays, season=active_season))
+                    else:
+                        interactive_sportsbook_browser(plays, active_season=active_season)
+                elif cmd_token in ("/contract", "/contracts", "/contrat", "/payroll", "/salary", "/salaries"):
+                    if cmd_args:
+                        arg_str = " ".join(cmd_args).strip()
+                        pos_match = arg_str.upper() if arg_str.upper() in ("QB", "RB", "WR", "TE", "OT", "EDGE", "CB", "DT", "S", "K") else None
+                        t_match = resolve_team_abbr(arg_str)
+                        if any(w in arg_str.lower() for w in ("coach", "coaches", "staff", "hc")):
+                            print(render_contracts_leaderboard_view(contract_type="coach"))
+                        elif pos_match:
+                            print(render_contracts_leaderboard_view(contract_type="player", position_filter=pos_match))
+                        elif t_match:
+                            print(render_team_payroll_view(t_match))
+                        else:
+                            s_plays = require_season_plays(plays, active_season)
+                            print(render_player_contract_view(arg_str, plays=s_plays, season=active_season))
+                    else:
+                        interactive_contracts_browser(plays=plays, active_season=active_season)
                 elif cmd_token in ("/camera", "/perspective"):
                     if cmd_args:
                         cam_in = cmd_args[0].lower()
