@@ -118,24 +118,29 @@ def compute_player_fantasy_profile(player_name: str, plays: List[Dict[str, Any]]
     Aggregate all play-by-play events involving a player (as QB, rusher, or receiver)
     and compute standard, PPR, and half-PPR fantasy totals along with weekly game logs.
     """
-    p_low = player_name.strip().lower()
-    last_name = p_low.split()[-1] if len(p_low.split()) > 1 else ""
-    first_initial = p_low[0] if p_low else ""
-    abbrev = f"{first_initial}.{last_name}" if last_name else ""
-
     canonical_name = player_name
+    p_clean = re.sub(r"[^\w\s]", " ", player_name).split()
+    p_init = p_clean[0][0].lower() if p_clean else ""
+    p_surname = p_clean[-1].lower() if p_clean else ""
 
     def _match_val(val: Any) -> bool:
-        v = str(val or "").strip().lower()
+        v = str(val or "").strip()
         if not v:
             return False
-        if v == p_low or v == canonical_name.lower():
-            return True
-        if abbrev and v == abbrev:
-            return True
-        if last_name and len(last_name) > 3 and v == last_name:
-            return True
-        return False
+        v = re.sub(r"^\d+-", "", v)
+        v_clean = re.sub(r"[^\w\s]", " ", v).split()
+        if not v_clean:
+            return False
+        if len(p_clean) >= 2:
+            if v_clean[-1].lower() != p_surname:
+                return False
+            if len(v_clean) >= 2:
+                return v_clean[0][0].lower() == p_init
+            if "." in v:
+                dot_part = v.split(".")[0].strip().lower()
+                return bool(dot_part and dot_part[0] == p_init)
+            return False
+        return v_clean[-1].lower() == p_clean[0].lower()
 
     def _matches_qb(p: Dict[str, Any]) -> bool:
         return any(_match_val(p.get(k)) for k in ("qb_name", "passer_player_name", "player_name"))
