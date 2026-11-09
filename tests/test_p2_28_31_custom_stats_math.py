@@ -52,10 +52,16 @@ def test_modulo_by_zero_formula_is_recorded_too(engine):
     assert engine.last_zero_division_events > 0
 
 
-def test_events_reset_between_evaluations(engine):
+def test_events_accumulate_until_reset_and_ignore_unrelated_stats(engine):
     _register_div_stat(engine)
     engine.evaluate_stat_leaderboard("zdiv", PLAYS)
-    assert engine.last_zero_division_events > 0
+    first = engine.last_zero_division_events
+    assert first > 0
+    # A clean stat evaluated afterwards must not hide the earlier events (running total) ...
+    engine.evaluate_stat_leaderboard("yards_per_play", PLAYS)
+    assert engine.last_zero_division_events == first
+    # ... but it must not be charged for the unrelated zdiv stat that is also evaluated alongside it.
+    engine.reset_zero_division_events()
     engine.evaluate_stat_leaderboard("yards_per_play", PLAYS)
     assert engine.last_zero_division_events == 0
 
@@ -63,13 +69,13 @@ def test_events_reset_between_evaluations(engine):
 def test_general_view_shows_warning_for_zero_division_stat(engine):
     _register_div_stat(engine)
     out = cli.strip_ansi(cli.render_general_stat_view(engine, PLAYS, "zdiv", 2024, view_mode="table"))
-    assert "division/modulo by zero" in out or "divisions/modulo by zero" in out
+    assert "divided (or took a modulo) by zero" in out
     assert "nz(denominator" in out
 
 
 def test_general_view_has_no_warning_for_clean_stat(engine):
     out = cli.strip_ansi(cli.render_general_stat_view(engine, PLAYS, "yards_per_play", 2024, view_mode="table"))
-    assert "by zero" not in out and "divisions" not in out
+    assert "by zero" not in out
 
 
 @pytest.fixture
@@ -84,12 +90,44 @@ def forced_events(monkeypatch):
     monkeypatch.setattr(cli.StatEngine, "evaluate_stat_leaderboard", wrapper)
 
 
+def _zero_div_variant(engine, name, deps):
+    import dataclasses
+    base = engine.stats.get(name) or cli.EXAMPLE_CUSTOM_STATS[name]
+    engine.stats[name] = dataclasses.replace(base, formula="total_yards / (plays - plays)", dependencies=list(deps), filter_expr="")
+
+
+def test_efficiency_view_end_to_end_warning(engine):
+    _zero_div_variant(engine, "yards_per_play", ["total_yards", "plays"])
+    out = cli.strip_ansi(cli.render_play_efficiency_view(engine, PLAYS, 2024, "AFC", view_mode="table"))
+    assert "divided (or took a modulo) by zero" in out
+
+
+def test_qb_wins_view_end_to_end_warning(engine):
+    for k in ("qb_meaningful_win", "qb_meaningful_loss"):
+        engine.stats[k] = cli.EXAMPLE_CUSTOM_STATS[k]
+    _zero_div_variant(engine, "qb_impact_score", ["total_yards", "plays"])
+    out = cli.strip_ansi(cli.render_qb_meaningful_wins_view(engine, PLAYS, 2024, None, view_mode="table"))
+    assert "divided (or took a modulo) by zero" in out
+
+
+def test_drilldown_end_to_end_warning_and_clean_case(engine):
+    for k in ("qb_meaningful_win", "qb_meaningful_loss"):
+        engine.stats[k] = cli.EXAMPLE_CUSTOM_STATS[k]
+    engine.stats["qb_impact_score"] = cli.EXAMPLE_CUSTOM_STATS["qb_impact_score"]
+    qb_name = next(p["qb_name"] for p in PLAYS if p.get("qb_name"))
+    clean = cli.strip_ansi(cli.render_player_drilldown_view(engine, PLAYS, 2024, qb_name, interactive=False))
+    assert "by zero" not in clean
+    _zero_div_variant(engine, "qb_impact_score", ["total_yards", "plays"])
+    out = cli.strip_ansi(cli.render_player_drilldown_view(engine, PLAYS, 2024, qb_name, interactive=False))
+    assert "divided (or took a modulo) by zero" in out
+
+
 def test_every_leaderboard_renderer_appends_the_warning(engine, forced_events):
     qb = cli.strip_ansi(cli.render_qb_meaningful_wins_view(engine, PLAYS, 2024, None, view_mode="table"))
     eff = cli.strip_ansi(cli.render_play_efficiency_view(engine, PLAYS, 2024, "AFC", view_mode="table"))
     gen = cli.strip_ansi(cli.render_general_stat_view(engine, PLAYS, "yards_per_play", 2024, view_mode="table"))
     for out in (qb, eff, gen):
-        assert "3 divisions/modulo by zero" in out
+        assert "3 evaluations divided (or took a modulo) by zero" in out
 
 
 def test_player_drilldown_appends_the_warning(engine, forced_events):
@@ -97,11 +135,11 @@ def test_player_drilldown_appends_the_warning(engine, forced_events):
         engine.stats[k] = cli.EXAMPLE_CUSTOM_STATS[k]
     qb_name = next(p["qb_name"] for p in PLAYS if p.get("qb_name"))
     out = cli.strip_ansi(cli.render_player_drilldown_view(engine, PLAYS, 2024, qb_name, interactive=False))
-    assert "3 divisions/modulo by zero" in out
+    assert "3 evaluations divided (or took a modulo) by zero" in out
 
 
 def test_singular_wording():
-    assert "1 division/modulo by zero" in cli.strip_ansi(cli.zero_division_note(1))
+    assert "1 evaluation divided (or took a modulo) by zero" in cli.strip_ansi(cli.zero_division_note(1))
     assert cli.zero_division_note(0) == ""
 
 
@@ -124,7 +162,7 @@ def test_saved_entry_cannot_replace_builtin(tmp_path):
     assert eng.stats["yards_per_play"].formula == built_in_formula
     assert eng.stats["yards_per_play"] is cli.DEFAULT_STATS["yards_per_play"]
     assert any("built-in" in w and "yards_per_play" in w for w in eng.load_warnings)
-    assert (tmp_path / "custom_stats.json.rejected").exists() or list(tmp_path.glob("*.rejected"))
+    assert (tmp_path / "custom_stats.json.rejected").exists()
 
 
 def test_identical_copy_of_builtin_is_ignored_quietly(tmp_path):
@@ -192,3 +230,50 @@ def test_load_warnings_are_printed_to_stderr_by_main(tmp_path, monkeypatch, caps
     cli.main(["list-stats", "--no-color"])
     err = capsys.readouterr().err
     assert "built-in" in err and "yards_per_play" in err
+
+
+def test_stat_depending_on_a_rejected_stat_is_dropped(tmp_path):
+    _write_state(tmp_path / "custom_stats.json", {
+        "bad_base": _item("bad_base", "plays + no_such_block"),
+        "child": _item("child", "bad_base * 2"),
+        "grandchild": _item("grandchild", "child + 1"),
+        "fine": _item("fine", "plays + 1"),
+    })
+    eng = cli.StatEngine(storage_dir=tmp_path)
+    for n in ("bad_base", "child", "grandchild"):
+        assert n not in eng.stats
+    assert "fine" in eng.stats
+    assert len(eng.load_warnings) == 3
+
+
+def test_cycles_between_saved_stats_are_rejected(tmp_path):
+    _write_state(tmp_path / "custom_stats.json", {"a": _item("a", "b + 1"), "b": _item("b", "a + 1")})
+    eng = cli.StatEngine(storage_dir=tmp_path)
+    assert "a" not in eng.stats and "b" not in eng.stats
+    assert eng.load_warnings
+
+
+def test_non_stat_entries_are_reported_and_backed_up(tmp_path):
+    _write_state(tmp_path / "custom_stats.json", {"junk": "not a dict", "nof": {"title": "x"}, "ok": _item("ok", "plays + 1")})
+    eng = cli.StatEngine(storage_dir=tmp_path)
+    assert "ok" in eng.stats and len(eng.load_warnings) == 2
+    assert (tmp_path / "custom_stats.json.rejected").exists()
+
+
+def test_second_rejection_does_not_overwrite_first_backup(tmp_path):
+    f = tmp_path / "custom_stats.json"
+    _write_state(f, {"yards_per_play": _item("yards_per_play", "plays * 1000")})
+    cli.StatEngine(storage_dir=tmp_path)
+    first = (tmp_path / "custom_stats.json.rejected").read_text()
+    _write_state(f, {"yards_per_play": _item("yards_per_play", "plays * 2000")})
+    cli.StatEngine(storage_dir=tmp_path)
+    assert (tmp_path / "custom_stats.json.rejected").read_text() == first
+    assert len(list(tmp_path.glob("custom_stats.json.rejected*"))) == 2
+
+
+def test_warning_text_is_single_line_and_printable(tmp_path):
+    _write_state(tmp_path / "custom_stats.json", {"x\n[!] forged\x07\x1b[2J": _item("x", "plays + 1")})
+    eng = cli.StatEngine(storage_dir=tmp_path)
+    assert eng.load_warnings
+    for w in eng.load_warnings:
+        assert "\n" not in w and "\x07" not in w and "\x1b" not in w
