@@ -89,7 +89,7 @@ def test_answer_query_returns_structured_ansi_free_result(engine, no_network):
     assert r.records and {"entity", "team", "value", "plays"} <= set(r.records[0])
     assert "best_play" not in r.records[0] and "metrics" not in r.records[0]
     assert "\x1b" not in r.text and "epa" in r.text.lower()
-    assert json.loads(json.dumps(r.to_dict()))["records"] == r.records
+    assert json.loads(json.dumps(r.to_dict(), allow_nan=False))["records"] == r.records
     assert r.title and "\x1b" not in r.title
 
 
@@ -97,6 +97,7 @@ def test_answer_query_limit_and_ordering(engine):
     full = cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024)
     one = cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024, limit=1)
     assert len(one.records) == 1 and one.records[0] == full.records[0]
+    assert len(full.records) > 1
     values = [r["value"] for r in full.records]
     assert values == sorted(values, reverse=True)
 
@@ -160,3 +161,66 @@ def test_main_restores_colour_even_when_the_command_fails(monkeypatch, tmp_path)
     except BaseException:
         pass
     assert cli.C.snapshot() == before
+
+
+def test_jsonable_removes_nan_and_control_characters():
+    out = cli._jsonable({"a\x1b[2J": [float("nan"), float("inf"), 1.5, "x\x07y\x1b]0;t\x07z", ("t", {1})], "b": object()})
+    assert json.dumps(out, allow_nan=False)
+    assert out["a"][0] is None and out["a"][1] is None and out["a"][2] == 1.5
+    assert "\x07" not in json.dumps(out) and "\x1b" not in json.dumps(out)
+
+
+def test_answer_query_records_are_strict_json_even_with_nan_values(engine, monkeypatch):
+    orig = cli.StatEngine.evaluate_stat_leaderboard
+
+    def with_nan(self, *a, **k):
+        rows = orig(self, *a, **k)
+        for r in rows:
+            r["value"] = float("nan")
+        return rows
+
+    monkeypatch.setattr(cli.StatEngine, "evaluate_stat_leaderboard", with_nan)
+    r = cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024)
+    assert r.records and all(rec["value"] is None for rec in r.records)
+    json.dumps(r.to_dict(), allow_nan=False)
+
+
+def test_answer_query_restores_the_last_result_globals(engine):
+    cli.LAST_RENDERED_TABLE = {"title": "mine", "headers": ["h"], "rows": [["r"]]}
+    cli.LAST_RAW_OUTPUT = "mine"
+    cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024)
+    assert cli.LAST_RENDERED_TABLE == {"title": "mine", "headers": ["h"], "rows": [["r"]]}
+    assert cli.LAST_RAW_OUTPUT == "mine"
+
+
+def test_answer_query_strips_control_characters_from_user_text(engine):
+    r = cli.answer_query("epa per play 2024 \x1b[31m\x07", engine, PLAYS, default_season=2024)
+    blob = json.dumps(r.to_dict())
+    assert "\\u001b" not in blob and "\\u0007" not in blob
+
+
+@pytest.mark.parametrize("query", ["blorp zzz qqq", "show me Mahomes", "Chiefs team stats 2024", "Patrick Mahomes player stats 2024"])
+def test_answer_query_never_prompts_for_any_read_intent(engine, monkeypatch, query):
+    import builtins
+    monkeypatch.setattr(cli, "prompt_input", lambda *a, **k: pytest.fail("prompted"))
+    monkeypatch.setattr(builtins, "input", lambda *a, **k: pytest.fail("input() called"))
+    r = cli.answer_query(query, engine, PLAYS, default_season=2024)
+    assert isinstance(r.text, str) and r.text and r.intent
+
+
+def test_model_chosen_mutating_intents_are_refused(engine, monkeypatch):
+    monkeypatch.setattr(cli.NaturalLanguageStatAssistant, "detect_ollama_model", classmethod(lambda cls, requested=None: "fake-model"))
+    for intent in ("delete_stat", "create_stat", "stat_page", "export_data", "export_stats"):
+        monkeypatch.setattr(
+            cli.NaturalLanguageStatAssistant, "query_local_slm",
+            classmethod(lambda cls, q, e, m, intent=intent: {"intent": intent, "stat_name": "yards_per_play", "query": q, "target_file": "x.csv"}),
+        )
+        r = cli.answer_query("anything", engine, PLAYS, slm_model="auto", default_season=2024)
+        assert r.answered is False and "does not" in r.text, intent
+    assert "yards_per_play" in engine.stats
+
+
+def test_answer_query_limit_is_applied_to_text_and_records(engine):
+    r = cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024, limit=1)
+    assert len(r.records) == 1
+    assert r.parsed.get("limit") is None or isinstance(r.parsed.get("limit"), int)

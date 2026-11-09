@@ -7067,6 +7067,25 @@ class QueryResult:
         return asdict(self)
 
 
+def _jsonable(value: Any) -> Any:
+    """Plain, strict-JSON-safe copy: control/ANSI characters stripped from strings, NaN/Infinity become None."""
+    if isinstance(value, str):
+        return strip_ansi(value)
+    if isinstance(value, bool) or value is None or isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {strip_ansi(str(k)): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(v) for v in value]
+    return strip_ansi(str(value))
+
+
+# The renderers record the last table in module globals (for the TUI's /export); serialise library calls and restore them.
+_ANSWER_QUERY_LOCK = threading.Lock()
+
+
 def answer_query(
     query: str,
     engine: StatEngine,
@@ -7078,21 +7097,31 @@ def answer_query(
     """
     Library/web entry point: answer a question and return a QueryResult instead of an ANSI-coloured string.
     Never changes the process-wide colour setting (the text is stripped of ANSI codes), never prompts, never writes
-    files, and uses no local model unless ``slm_model`` is "auto" or a model name.
+    files, and uses no local model unless ``slm_model`` is "auto" or a model name. Calls are serialised with a lock and
+    leave the TUI's "last result" globals as they found them; ``engine`` itself is not thread-safe, so share it with care.
     """
+    global LAST_RENDERED_TABLE, LAST_RAW_OUTPUT, LAST_RESULT_RECORDS
     parsed = NaturalLanguageStatAssistant.interpret_query(query, engine=engine, slm_model=slm_model, default_season=default_season)
     intent = str(parsed.get("intent", "stat_query"))
-    safe_parsed = json.loads(json.dumps(parsed, default=str))
+    safe_parsed = _jsonable(parsed)
     if intent not in LIBRARY_READ_ONLY_INTENTS:
         return QueryResult(
-            query=query, intent=intent, answered=False, parsed=safe_parsed,
+            query=strip_ansi(query), intent=strip_ansi(intent), answered=False, parsed=safe_parsed,
             text="This question would change saved data or files, which the library API does not do. Use the CLI for it.",
         )
+    if limit and limit > 0:
+        parsed = dict(parsed, limit=limit)
     sink: List[Dict[str, Any]] = []
-    text = handle_nl_query_result(parsed, engine, plays, view_override="table", interactive=False, board_sink=sink)
+    with _ANSWER_QUERY_LOCK:
+        saved_globals = (LAST_RENDERED_TABLE, LAST_RAW_OUTPUT, LAST_RESULT_RECORDS)
+        try:
+            text = handle_nl_query_result(parsed, engine, plays, view_override="table", interactive=False, board_sink=sink)
+        finally:
+            LAST_RENDERED_TABLE, LAST_RAW_OUTPUT, LAST_RESULT_RECORDS = saved_globals
+    season = parsed.get("season")
     result = QueryResult(
-        query=query, intent=intent, answered=intent != "ambiguous", text=strip_ansi(text).strip(),
-        season=parsed.get("season") if isinstance(parsed.get("season"), int) else None, parsed=safe_parsed,
+        query=strip_ansi(query), intent=strip_ansi(intent), answered=intent != "ambiguous", text=strip_ansi(text).strip(),
+        season=season if isinstance(season, int) and not isinstance(season, bool) else None, parsed=safe_parsed,
     )
     if sink:
         stat_name = parsed.get("stat_name") or "yards_per_play"
@@ -7100,7 +7129,7 @@ def answer_query(
             stat_name = "yards_per_play"
         sdef = engine.stats[stat_name]
         result.stat_name, result.title, result.unit = stat_name, strip_ansi(sdef.title), strip_ansi(sdef.unit or "")
-        result.records = json.loads(json.dumps(sink[: limit if (limit and limit > 0) else None], default=str))
+        result.records = _jsonable(sink)
     return result
 
 
