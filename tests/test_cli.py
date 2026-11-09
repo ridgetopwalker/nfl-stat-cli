@@ -1156,3 +1156,58 @@ def test_play_concept_average_yards_nl_query():
     assert "field_goal" not in res_str
     assert "punt" not in res_str
 
+
+def test_ipc_error_reporting_and_resolution():
+    ipc_dir = cli.get_ipc_dir()
+    assert (ipc_dir / "pending").exists()
+    assert (ipc_dir / "resolved").exists()
+    assert (ipc_dir / "history").exists()
+
+    engine = cli.StatEngine()
+    q = "which coach has called the most timeouts in the 4th qrt"
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(q, engine, slm_model="off")
+
+    # 1. Test create_error_report
+    rep = cli.create_error_report(
+        query_raw=q,
+        parsed_nl=parsed,
+        user_explanation="Missed 4th qrt filter",
+        season=2026,
+    )
+    rep_id = rep["id"]
+    assert rep["query"] == q
+    assert rep["user_explanation"] == "Missed 4th qrt filter"
+    assert rep["status"] == "pending"
+
+    # Verify files created on disk
+    pending_file = ipc_dir / "pending" / f"{rep_id}.json"
+    latest_file = ipc_dir / "pending" / "latest.json"
+    assert pending_file.exists()
+    assert latest_file.exists()
+
+    # 2. Test write_resolution signal
+    res = cli.write_resolution(
+        report_id=rep_id,
+        summary="Added 4th quarter filter mapping to coach timeout leaderboard",
+        commit="test_commit_hash",
+        status="resolved",
+    )
+    assert res["id"] == rep_id
+    assert res["status"] == "resolved"
+    assert res["commit"] == "test_commit_hash"
+
+    # Verify resolution files created and pending file archived
+    res_file = ipc_dir / "resolved" / f"{rep_id}.json"
+    res_latest = ipc_dir / "resolved" / "latest.json"
+    hist_file = ipc_dir / "history" / f"{rep_id}.json"
+    assert res_file.exists()
+    assert res_latest.exists()
+    assert hist_file.exists()
+    assert not pending_file.exists()
+
+    # 3. Verify /help contains /error and /reload
+    help_text = cli.render_slash_help()
+    assert "/error" in help_text
+    assert "/reload" in help_text
+
+
