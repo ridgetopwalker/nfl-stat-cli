@@ -88,7 +88,8 @@ def test_error_after_wrong_answer_captures_what_was_shown(tmp_path):
     assert rep["query"] == "epa per play"
     assert rep["parsed"]["stat_name"] == "epa_per_play"
     assert "per game" in rep["user_explanation"]
-    assert "epa_per_play" in rep["response"] or "EPA" in rep["response"]
+    assert rep["response"].startswith("\n") and "Query Interpretation" in rep["response"]
+    assert "epa_per_play" in rep["response"]
     assert not log.exists()
 
 
@@ -128,7 +129,8 @@ def test_resolve_then_reload_in_same_session_runs_no_git(tmp_path):
     t.join()
     assert "A resolution signal was received" in out
     assert "abc1234" in out and "fixed in abc1234" in out
-    assert "Reloading" in out or "Query Interpretation" in out.split("A resolution signal was received", 1)[1]
+    after = out.split("A resolution signal was received", 1)[1]
+    assert "Query Interpretation" in after  # reloaded code re-ran the query
     assert "Error during hot-reload" not in out
     assert not log.exists(), f"git was invoked: {log.read_text()}"
     # resolved report moved out of pending into history
@@ -226,3 +228,13 @@ def test_unwritable_report_dir_fails_gracefully(tmp_path):
     finally:
         ro.chmod(0o700)
     assert "Could not save the error report" in out
+
+
+def test_create_error_report_survives_unserializable_parse(tmp_path, monkeypatch):
+    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    circular = {}
+    circular["self"] = circular
+    rep = cli.create_error_report("q", circular, "n")
+    assert "unserializable_parse" in rep["parsed"]
+    rep2 = cli.create_error_report("q", {(1, 2): "tuple key"}, "n")
+    assert rep2["id"]

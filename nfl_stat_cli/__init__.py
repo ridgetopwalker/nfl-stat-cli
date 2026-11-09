@@ -6839,7 +6839,12 @@ attempt attempts catch catches reception receptions target targets win wins loss
 quarterback quarterbacks running back backs wide receivers tight end ends line linebacker linebackers safety safeties cornerback cornerbacks
 january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday
 export save load reload help delete create custom example page coaches coach head coordinator staff contract contracts salary payroll
-spread odds line lines bets betting favorite favorites underdog underdogs power""".split())
+spread odds line lines bets betting favorite favorites underdog underdogs power
+find display sort count calculate name names give pull fetch lookup look search compute run render print output explain describe summarize
+summary analyze analysis report reports data information info details breakdown versus super bowl pro bowl monday night football sunday
+fantasy points point score scores scoring scored game's thanksgiving christmas hall fame mvp rookie rookies veteran veterans draft
+overall combined average averages mean median percent percentage ratio rate rates number numbers amount value values index metric
+metrics measure ranking position positions player players quarterbacks coaching starter starters backup backups""".split())
 
 
 def _unknown_name_tokens(query: str, all_plays: List[Dict[str, Any]], engine: "StatEngine") -> List[str]:
@@ -6880,7 +6885,7 @@ def _unknown_name_tokens(query: str, all_plays: List[Dict[str, Any]], engine: "S
 
     out: List[str] = []
     for run in runs:
-        if len(run) == 1 and run[0].lower() in known_players:
+        if run[-1].lower() in known_players:  # "Josh Allen", "Allen", even if not in the loaded plays
             continue
         if find_player_plays(all_plays, " ".join(run)):
             continue
@@ -7186,6 +7191,8 @@ def handle_nl_query_result(
             player_filtered = find_player_plays(s_plays, str(player))
         if player_filtered:
             s_plays = player_filtered
+        elif str(player).strip().lower() in _NL_NON_NAME_WORDS or resolve_team_abbr(str(player)):
+            pass  # a position/team word the parser mislabeled as a player: keep the unfiltered stat
         else:
             return _render_unanswered(parsed, f"no plays were found for '{_one_line_text(player, 60)}' in the {season} data, so I won't answer from other players' numbers.", engine)
 
@@ -9608,12 +9615,12 @@ def error_ipc_enabled() -> bool:
     Local `/error` report capture is ON by default: nothing is written unless the user types `/error`,
     reports go only to a private per-user folder, and nothing is sent anywhere. Opt out with
     NFL_STAT_DISABLE_ERROR_IPC=1 or NFL_STAT_ENABLE_ERROR_IPC=0. Force-reload and git updates are
-    separate and are never enabled by this.
+    separate and are never enabled by this. Any value not listed as "off" leaves capture on.
     """
     if _truthy_env(ERROR_IPC_DISABLE_ENV):
         return False
     raw = os.environ.get(ERROR_IPC_ENV, "").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+    return raw not in ("0", "false", "no", "off", "none", "disable", "disabled")
 
 
 def validate_report_id(report_id: str) -> str:
@@ -9664,6 +9671,14 @@ def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _json_safe(value: Any) -> Any:
+    """Round-trip through JSON, stringifying non-JSON values; fall back to a repr for unserializable structures."""
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError, RecursionError):
+        return {"unserializable_parse": repr(value)[:2000]}
+
+
 def create_error_report(
     query_raw: str,
     parsed_nl: Dict[str, Any],
@@ -9684,7 +9699,7 @@ def create_error_report(
         "timestamp": now_dt.isoformat(),
         "query": query_raw,
         "user_explanation": user_explanation or "Interpretation mismatch or unexpected query result.",
-        "parsed": json.loads(json.dumps(parsed_nl, default=str)),  # tolerate non-JSON values in a parse
+        "parsed": _json_safe(parsed_nl),
         "response": strip_ansi(str(response_text or ""))[:IPC_MAX_RESPONSE_CHARS],
         "season": season or CURRENT_SEASON,
         "version": __version__,
@@ -10155,6 +10170,7 @@ def interactive_tui(
                             parsed["camera"] = default_camera
                         last_parsed_nl = parsed
                         last_query_raw = nl_play_q
+                        last_response_text = ""
                         last_response_text = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
                         print(last_response_text)
                     else:
@@ -10454,6 +10470,7 @@ def interactive_tui(
                 parsed["camera"] = default_camera
             last_parsed_nl = parsed
             last_query_raw = raw_in
+            last_response_text = ""
             res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
             LAST_RAW_OUTPUT = strip_ansi(res_str)
             last_response_text = res_str

@@ -120,6 +120,13 @@ def test_unknown_player_in_leaderboard_query_is_cant_answer(engine, plays, query
     "Highest EPA in the Red Zone",
     "Passing Yards Leaders This Season",
     "passing yards",
+    "Find the QB with the most passing yards",
+    "Display rushing yards by team",
+    "Calculate average yards per play",
+    "Sort quarterbacks by passer rating",
+    "Monday Night Football passing yards",
+    "Super Bowl touchdown passes",
+    "Pat Mahomes passing yards",
 ])
 def test_known_players_teams_and_plain_questions_still_answer(engine, plays, query):
     parsed, out = _ask(engine, plays, query)
@@ -131,3 +138,11 @@ def test_player_with_no_matching_plays_is_not_answered_from_everyone_else(engine
               "player": "nobodyhere", "team": None, "group_by": None}
     out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, plays))
     assert "I can't answer that" in out and "nobodyhere" in out
+
+
+@pytest.mark.parametrize("player", ["quarterback", "chiefs", "KC"])
+def test_position_or_team_word_mislabeled_as_player_does_not_refuse(engine, plays, player):
+    parsed = {"intent": "stat_query", "query": "passing yards", "season": SEASON, "stat_name": "passing_yards",
+              "player": player, "team": None, "group_by": None}
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, plays))
+    assert "I can't answer that" not in out

@@ -26,7 +26,7 @@ description: Watch for /error reports filed from nfl-stat-cli (local, or a WSL c
 
 ## Workflow
 1. Start (or restart) the watcher as a **background task**: `python3 .agents/skills/nfl-stat-error-triage/watch_errors.py`
-   (`py -3` on Windows). It exits when a pending report appears, printing `NEW_ERROR_REPORT source=<local|wsl> id=<id>`
+   (`py -3` on Windows; add `--ignore <id>` to skip a report you cannot resolve). It exits when a pending report appears, printing `NEW_ERROR_REPORT source=<local|wsl> id=<id>`
    plus the JSON. You are notified automatically when it exits.
 2. Reproduce: `NaturalLanguageStatAssistant.interpret_query(query, StatEngine(), slm_model="off")` then
    `handle_nl_query_result(parsed, engine, plays)`; compare with `response` in the report.

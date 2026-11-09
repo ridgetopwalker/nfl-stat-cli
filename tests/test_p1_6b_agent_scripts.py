@@ -122,3 +122,57 @@ def test_skill_files_have_no_personal_paths_or_old_ipc_layout():
         assert not personal.search(text), name
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     assert "NFL_STAT_IPC_DIR" in skill and "err_YYYYMMDD_HHMMSS_xxxxxxxx" in skill
+
+
+def _load_resolve():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("nfl_resolve_script", SKILL / "resolve.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_resolve_wsl_runs_without_a_shell_and_passes_summary_as_one_argument(monkeypatch):
+    mod = _load_resolve()
+    calls = []
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 0})())
+    monkeypatch.setenv("NFL_STAT_WSL_REPO", "/srv/checkout")
+    monkeypatch.setenv("NFL_STAT_WSL_IPC_DIR", "/srv/ipc")
+    summary = "x; rm -rf ~ && $(whoami) `id`"
+    assert mod.main(["wsl", "err_20260101_010203_0a1b2c3d", "abc1234", summary, "--pull"]) == 0
+    pull, run = calls
+    assert pull[:3] == ["wsl.exe", "-e", "git"] and "--ff-only" in pull
+    assert run[:3] == ["wsl.exe", "-e", "env"] and "NFL_STAT_IPC_DIR=/srv/ipc" in run
+    assert run.count(summary) == 1  # one argv element, never joined into a shell string
+
+
+def test_resolve_summary_containing_the_word_pull_is_kept(tmp_path):
+    rep = _make_report(tmp_path)
+    res = _run("resolve.py", ["local", rep["id"], "abc1234", "pull it"], _env(tmp_path), tmp_path)
+    assert res.returncode == 0, res.stderr
+    assert json.loads((tmp_path / "ipc" / "resolved" / f"{rep['id']}.json").read_text())["summary"] == "pull it"
+
+
+def test_watcher_ignore_option_and_symlinked_pending_dir(tmp_path):
+    rep = _make_report(tmp_path)
+    res = _run("watch_errors.py", ["--timeout", "0.5", "--interval", "0.1", "--ignore", rep["id"]], _env(tmp_path), tmp_path)
+    assert res.returncode == 1 and "NEW_ERROR_REPORT" not in res.stdout
+    # a symlinked pending folder is not followed
+    real = tmp_path / "real_pending"
+    real.mkdir()
+    (real / f"{rep['id']}.json").write_text((tmp_path / "ipc" / "pending" / f"{rep['id']}.json").read_text())
+    other = tmp_path / "other"
+    other.mkdir()
+    os.symlink(real, other / "pending")
+    res = _run("watch_errors.py", ["--timeout", "0.5", "--interval", "0.1"],
+               _env(tmp_path, NFL_STAT_IPC_DIR=str(other)), tmp_path)
+    assert res.returncode == 1
+
+
+def test_watcher_ignores_oversized_report_files(tmp_path):
+    pend = tmp_path / "ipc" / "pending"
+    pend.mkdir(parents=True)
+    rid = "err_20260101_010203_0a1b2c3d"
+    (pend / f"{rid}.json").write_text(json.dumps({"id": rid, "query": "x" * 400000}))
+    res = _run("watch_errors.py", ["--timeout", "0.5", "--interval", "0.1"], _env(tmp_path), tmp_path)
+    assert res.returncode == 1

@@ -13,6 +13,7 @@ Usage: python3 resolve.py <local|wsl> <report_id> <commit> "<summary>" [--pull]
 <report_id> must look like err_YYYYMMDD_HHMMSS_xxxxxxxx (the id format written by `/error`).
 The waiting session then shows the summary and, only if the user agrees, reloads the code in place.
 """
+import argparse
 import os
 import re
 import subprocess
@@ -52,24 +53,26 @@ def resolve_wsl(rid: str, commit: str, summary: str, pull: bool = False) -> int:
     if not repo:
         raise SystemExit("Set NFL_STAT_WSL_REPO to the nfl-stat-cli checkout path inside WSL.")
     py = os.environ.get("NFL_STAT_WSL_PYTHON", "").strip() or "python3"
+    # `wsl.exe -e` executes the program directly (no login shell), so the free-text summary is never
+    # re-parsed by a shell.
     if pull:
-        subprocess.run(["wsl.exe", "git", "-C", repo, "pull", "--ff-only"], check=True)
+        subprocess.run(["wsl.exe", "-e", "git", "-C", repo, "pull", "--ff-only"], check=True)
     ipc = os.environ.get("NFL_STAT_WSL_IPC_DIR", "").strip()
-    prefix = ["wsl.exe", "env", f"NFL_STAT_IPC_DIR={ipc}"] if ipc else ["wsl.exe"]
+    prefix = ["wsl.exe", "-e", "env", f"NFL_STAT_IPC_DIR={ipc}"] if ipc else ["wsl.exe", "-e"]
     return subprocess.run(prefix + [py, "-c", SNIPPET, repo, rid, summary, commit], check=True).returncode
 
 
 def main(argv=None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    pull = "--pull" in argv
-    argv = [a for a in argv if a != "--pull"]
-    if len(argv) != 4 or argv[0] not in ("local", "wsl"):
-        print(__doc__)
-        return 2
-    source, rid, commit, summary = argv
-    if source == "wsl":
-        return resolve_wsl(rid, commit, summary, pull=pull)
-    return resolve_local(rid, commit, summary)
+    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0], usage="%(prog)s {local,wsl} report_id commit summary [--pull]")
+    ap.add_argument("source", choices=["local", "wsl"])
+    ap.add_argument("report_id")
+    ap.add_argument("commit")
+    ap.add_argument("summary")
+    ap.add_argument("--pull", action="store_true", help="wsl only: git pull --ff-only in the WSL checkout first")
+    args = ap.parse_args(argv)
+    if args.source == "wsl":
+        return resolve_wsl(args.report_id, args.commit, args.summary, pull=args.pull)
+    return resolve_local(args.report_id, args.commit, args.summary)
 
 
 if __name__ == "__main__":
