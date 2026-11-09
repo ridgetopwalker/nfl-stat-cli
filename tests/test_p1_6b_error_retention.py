@@ -316,7 +316,11 @@ def test_cleanup_uses_env_defaults_when_overrides_omitted(tmp_path, monkeypatch)
 
 def test_cleanup_swallows_unexpected_errors(tmp_path, monkeypatch):
     ipc = _ipc(tmp_path)
+    now = time.time()
+    survivor = _seed_report(ipc / "resolved", _report_name(seq=1), now - 90 * 86400)
     monkeypatch.setattr(cli, "_iter_retention_candidates", lambda _root: (_ for _ in ()).throw(RuntimeError("boom")))
-    result = cli.cleanup_error_reports(ipc, force=True)
+    result = cli.cleanup_error_reports(ipc, force=True, now=now, retention_days=30)
+    assert result["skipped"] == 0
     assert result["deleted_age"] == 0
+    assert survivor.exists()  # exception path ran before any deletes
     assert isinstance(result, dict)

@@ -9989,8 +9989,11 @@ def write_resolution(
             # rename keeps the old mtime; refresh so a long-pending report is not age-pruned immediately
             try:
                 now_ts = time.time()
-                os.utime(history_file, (now_ts, now_ts), follow_symlinks=False)
-            except (OSError, TypeError, ValueError):
+                if os.utime in getattr(os, "supports_follow_symlinks", set()):
+                    os.utime(history_file, (now_ts, now_ts), follow_symlinks=False)
+                else:
+                    os.utime(history_file, (now_ts, now_ts))
+            except (OSError, TypeError, ValueError, NotImplementedError):
                 try:
                     os.utime(history_file, (time.time(), time.time()))
                 except OSError:
