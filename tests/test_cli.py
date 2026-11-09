@@ -1914,6 +1914,41 @@ def test_cli_autocomplete_case_insensitive_and_options(tmp_path):
     completer.set_context(None)
 
 
+def test_player_drilldown_name_matching_regression():
+    """
+    Regression test for /player command:
+    - Verifies 'Patrick Mahomes' does NOT match unrelated players named 'Patrick' (e.g. Patrick Taylor, Patrick Queen).
+    - Verifies get_player_teams does not treat opponents who sacked/intercepted the player as teams played for.
+    - Verifies exactly 1 team ('KC') is detected for Patrick Mahomes, auto-selecting without prompting.
+    """
+    mixed_plays = list(cli.SAMPLE_PBP_PLAYS) + [
+        {"season": 2024, "rusher_player_name": "P.Taylor", "posteam": "CHI", "defteam": "GB", "desc": "P.Taylor right guard for 4 yards"},
+        {"season": 2024, "player_name": "Patrick Taylor", "posteam": "CHI", "defteam": "GB", "desc": "Patrick Taylor up the middle for 2 yards"},
+        {"season": 2024, "player_name": "Patrick Queen", "posteam": "CLE", "defteam": "PIT", "desc": "Patrick Queen tackles N.Harris"},
+        {"season": 2024, "player_name": "Lucas Patrick", "posteam": "MIA", "defteam": "BUF", "desc": "Lucas Patrick false start"},
+        {"season": 2024, "qb_name": "P.Mahomes", "posteam": "KC", "defteam": "LV", "desc": "P.Mahomes sacked by M.Crosby for -5 yards"},
+        {"season": 2024, "qb_name": "P.Mahomes", "posteam": "KC", "defteam": "DEN", "desc": "P.Mahomes pass intercepted by P.Surtain"},
+    ]
+
+    # 1. Matching plays must only include Patrick Mahomes, not other Patricks
+    m_plays = cli.find_player_plays(mixed_plays, "Patrick Mahomes", season=2024)
+    for p in m_plays:
+        assert p.get("rusher_player_name") != "P.Taylor"
+        assert p.get("player_name") not in ("Patrick Taylor", "Patrick Queen", "Lucas Patrick")
+
+    # 2. Teams played for must be strictly ['KC'], NOT opponent teams (LV, DEN, CHI, CLE, MIA)
+    teams = cli.get_player_teams(m_plays, "Patrick Mahomes")
+    assert teams == ["KC"]
+
+    # 3. Drilldown view should auto-select KC without prompting
+    engine = cli.StatEngine()
+    out = cli.strip_ansi(cli.render_player_drilldown_view(engine, mixed_plays, season=2024, player_name="Patrick Mahomes", interactive=True))
+    assert "PLAYER DRILL-DOWN" in out
+    assert "KC (1 team in 2024 — auto-selected)" in out
+    assert "CHI" not in out.split("Team:")[1].split("\n")[0]
+
+
+
 
 
 
