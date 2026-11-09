@@ -340,7 +340,14 @@ class CLICompleter:
         abbrevs = sorted(list(afc | nfc))
         assistant = globals().get("NaturalLanguageStatAssistant")
         nicknames = sorted([t.title() for t in assistant.TEAM_NICKNAME_MAP.keys()]) if assistant else []
-        return abbrevs + nicknames
+        cities = [
+            "New York", "Los Angeles", "Kansas City", "San Francisco", "Green Bay",
+            "Tampa Bay", "Las Vegas", "Dallas", "Philadelphia", "Detroit", "Miami",
+            "Buffalo", "Baltimore", "Cincinnati", "Cleveland", "Pittsburgh", "Houston",
+            "Indianapolis", "Jacksonville", "Tennessee", "Denver", "Seattle", "Arizona",
+            "Atlanta", "Carolina", "New Orleans", "Chicago", "Minnesota", "Washington"
+        ]
+        return abbrevs + nicknames + cities
 
     def get_player_options(self) -> List[str]:
         names: Set[str] = set()
@@ -532,6 +539,100 @@ def resolve_team_abbr(team_str: Optional[str]) -> Optional[str]:
     if matches:
         return matches[0]
     return None
+
+
+STATE_AND_REGION_TEAMS: Dict[str, List[str]] = {
+    "new york": ["NYG", "NYJ"],
+    "ny": ["NYG", "NYJ"],
+    "nyc": ["NYG", "NYJ"],
+    "los angeles": ["LA", "LAC"],
+    "la": ["LA", "LAC"],
+    "texas": ["DAL", "HOU"],
+    "florida": ["MIA", "TB", "JAX"],
+    "ohio": ["CIN", "CLE"],
+    "pennsylvania": ["PHI", "PIT"],
+    "california": ["SF", "LA", "LAC"],
+    "carolina": ["CAR"],
+    "bay": ["GB", "TB"],
+}
+
+
+def resolve_team_matches(team_str: Optional[str]) -> List[str]:
+    """
+    Resolve a team query to all matching canonical NFL team abbreviations.
+    Handles exact abbreviations, nicknames, multi-team cities/regions, and full name substrings.
+    """
+    if not team_str:
+        return []
+    raw = team_str.strip()
+    low = raw.lower()
+    up = raw.upper()
+
+    # Exact abbreviation (e.g. KC, BUF, NYG, NYJ, LAC)
+    if up in ("NYG", "NYJ", "LAC", "KC", "BUF", "BAL", "MIA", "NE", "HOU", "IND", "JAX", "TEN", "CIN", "CLE", "PIT", "DEN", "LV", "DAL", "PHI", "WAS", "GB", "DET", "MIN", "CHI", "SF", "SEA", "ARI", "TB", "ATL", "CAR", "NO"):
+        return [up]
+    if up == "LAR":
+        return ["LA"]
+
+    # Exact nickname (e.g. Chiefs -> KC, Giants -> NYG, Jets -> NYJ, Rams -> LA, Chargers -> LAC)
+    if low in TEAM_NICKNAMES_TO_ABBR:
+        return [TEAM_NICKNAMES_TO_ABBR[low]]
+
+    # Known city, metro, or regional grouping with multiple teams
+    if low in STATE_AND_REGION_TEAMS:
+        return list(STATE_AND_REGION_TEAMS[low])
+
+    # Check exact full name
+    for abbr, name in TEAM_FULL_NAMES.items():
+        if low == name.lower():
+            return ["LA"] if abbr == "LAR" else [abbr]
+
+    # Substring search in full names
+    matches: List[str] = []
+    for abbr, name in TEAM_FULL_NAMES.items():
+        if low in name.lower():
+            canonical = "LA" if abbr == "LAR" else abbr
+            if canonical not in matches:
+                matches.append(canonical)
+
+    return matches
+
+
+def resolve_team_interactive(
+    team_str: Optional[str],
+    default_team: str = "KC",
+    interactive: bool = True,
+) -> str:
+    """
+    Resolve a team query string.
+    If multiple teams match (e.g. 'New York' -> NYG and NYJ; 'Los Angeles' -> LA and LAC),
+    prompts the user to select from the matching teams when interactive.
+    """
+    if not team_str:
+        return default_team
+    matches = resolve_team_matches(team_str)
+    if not matches:
+        res = resolve_team_abbr(team_str)
+        return res or team_str.upper()
+
+    if len(matches) == 1:
+        return matches[0]
+
+    # Multiple teams matched
+    if interactive and sys.stdin.isatty():
+        print(f"\n  {C.BOLD}{C.CYAN}Multiple teams matched '{team_str}':{C.RESET}")
+        for idx, t in enumerate(matches, 1):
+            full_n = TEAM_FULL_NAMES.get(t, t)
+            print(f"    [{idx}] {full_n} ({t})")
+        try:
+            sel = prompt_input(f"  Select team [1-{len(matches)}] (default: 1): ").strip()
+            if sel.isdigit() and 1 <= int(sel) <= len(matches):
+                return matches[int(sel) - 1]
+            return matches[0]
+        except (EOFError, KeyboardInterrupt):
+            return matches[0]
+
+    return matches[0]
 
 
 NFL_COACHING_STAFFS: Dict[str, Dict[str, Any]] = {
@@ -6757,12 +6858,12 @@ def handle_nl_query_result(
         return header + "\n" + render_coaching_staff_view(resolved_t, role_filter=parsed.get("role"))
 
     if intent == "team_drilldown":
-        resolved_t = resolve_team_abbr(team) or team or "KC"
-        return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t)
+        resolved_t = team or "KC"
+        return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t, interactive=interactive)
 
     if intent == "player_drilldown":
         target_player = player or "Mahomes"
-        return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=False)
+        return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=interactive)
 
     if intent == "fantasy_report":
         subq = parsed.get("subquery", "leaderboard")
@@ -7359,6 +7460,143 @@ def get_player_teams(player_plays: List[Dict[str, Any]], player_name: str) -> Li
     return sorted(valid_teams)
 
 
+def _format_surname(s: str) -> str:
+    """Format surname handling Scottish/Irish prefixes (e.g. McCaffrey, McDonald)."""
+    if s.lower().startswith("mc") and len(s) > 2:
+        return "Mc" + s[2:].capitalize()
+    if s.lower().startswith("mac") and len(s) > 3:
+        return "Mac" + s[3:].capitalize()
+    return s.capitalize()
+
+
+def find_matching_player_candidates(
+    plays: List[Dict[str, Any]],
+    query_name: str,
+    season: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Locate all distinct player candidates matching query_name in the provided play dataset.
+    Returns a list of candidate dictionaries with distinguishing details:
+      {'name': 'Christian McCaffrey', 'team': 'SF', 'position': 'RB', 'play_count': 155, 'search_name': 'Christian McCaffrey'}
+    If the user provided a full name (first and last), returns empty list (no disambiguation needed).
+    """
+    clean_q = query_name.strip()
+    if not clean_q:
+        return []
+
+    q_tokens = re.sub(r"[^\w\s]", " ", clean_q).split()
+    if not q_tokens:
+        return []
+    # If the user already provided a full name (first and last), no ambiguity
+    if len(q_tokens) >= 2:
+        return []
+
+    target_surname = q_tokens[0].lower()
+
+    if season is not None:
+        target_plays = [p for p in plays if _safe_int(p.get("season"), -1) == int(season)]
+        if not target_plays:
+            target_plays = plays
+    else:
+        target_plays = plays
+
+    candidates_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    for p in target_plays:
+        occurrences: List[Tuple[str, str]] = []
+        for k in (
+            "player_name", "qb_name", "passer_player_name", "rusher_player_name",
+            "receiver_player_name", "kicker_player_name", "punter_player_name",
+            "fantasy_player_name", "sack_player_name", "half_sack_1_player_name",
+            "interception_player_name", "pass_defense_1_player_name", "tackle_for_loss_1_player_name",
+            "solo_tackle_1_player_name", "assist_tackle_1_player_name", "returner_player_name",
+            "kickoff_returner_player_name", "punt_returner_player_name", "penalty_player_name"
+        ):
+            val = str(p.get(k, "")).strip()
+            if val and _matches_player_name(target_surname, val):
+                occurrences.append((val, k))
+
+        desc = str(p.get("desc", ""))
+        if desc:
+            tokens_in_desc = re.findall(r"\b(?:\d+-)?([A-Za-z]\.?[A-Za-z'-]+)\b", desc)
+            for tok in tokens_in_desc:
+                if _matches_player_name(target_surname, tok):
+                    occurrences.append((tok, "desc"))
+
+        for name_val, field_name in occurrences:
+            clean_name = re.sub(r"^\d+-", "", name_val.strip())
+            c_toks = re.sub(r"[^\w\s]", " ", clean_name).split()
+            if not c_toks or c_toks[-1].lower() != target_surname:
+                continue
+
+            init = c_toks[0][0].lower() if len(c_toks) >= 2 else (clean_name.split(".")[0].strip().lower() if "." in clean_name else "")
+            if not init:
+                continue
+
+            tm = get_play_player_team(p, clean_name) or str(p.get("posteam") or p.get("defteam") or "").upper()
+            pos = str(p.get("player_position") or p.get("position") or "").upper()
+            if not pos:
+                if "passer" in field_name or "qb" in field_name:
+                    pos = "QB"
+                elif "rusher" in field_name:
+                    pos = "RB"
+                elif "receiver" in field_name:
+                    pos = "WR"
+                elif "kicker" in field_name:
+                    pos = "K"
+                elif "punter" in field_name:
+                    pos = "P"
+                elif any(d in field_name for d in ("sack", "interception", "tackle", "defense")):
+                    pos = "DEF"
+
+            key = (target_surname, init)
+            if key not in candidates_map:
+                full_name = clean_name if len(c_toks) >= 2 and len(c_toks[0]) > 1 else ""
+                try:
+                    from .contracts import NFL_CONTRACTS
+                    for c in NFL_CONTRACTS:
+                        c_toks = re.sub(r"[^\w\s]", " ", c.name).split()
+                        if len(c_toks) >= 2 and c_toks[-1].lower() == target_surname and c_toks[0][0].lower() == init:
+                            full_name = c.name
+                            if not pos and c.position:
+                                pos = c.position
+                            if not tm and c.team:
+                                tm = c.team
+                            break
+                except Exception:
+                    pass
+
+                if not full_name:
+                    full_name = f"{init.upper()}.{_format_surname(target_surname)}"
+
+                candidates_map[key] = {
+                    "name": full_name,
+                    "team_counts": Counter(),
+                    "position": pos or "Unknown",
+                    "play_count": 0,
+                    "search_name": full_name,
+                }
+
+            candidates_map[key]["play_count"] += 1
+            if tm:
+                candidates_map[key]["team_counts"][tm] += 1
+            if pos and candidates_map[key]["position"] == "Unknown":
+                candidates_map[key]["position"] = pos
+
+    results: List[Dict[str, Any]] = []
+    for cand in candidates_map.values():
+        primary_team = cand["team_counts"].most_common(1)[0][0] if cand["team_counts"] else ""
+        results.append({
+            "name": cand["name"],
+            "team": primary_team,
+            "position": cand["position"],
+            "play_count": cand["play_count"],
+            "search_name": cand["search_name"],
+        })
+
+    return sorted(results, key=lambda c: c["play_count"], reverse=True)
+
+
 def render_player_drilldown_view(
     engine: StatEngine,
     plays: List[Dict[str, Any]],
@@ -7372,6 +7610,30 @@ def render_player_drilldown_view(
     Smart team detection: lists all teams played for; if only 1 team in the season, does not ask!
     """
     s_plays = plays_for_season(plays, season)
+
+    # Generic Player Disambiguation:
+    # If the user queried a name that matches multiple distinct players (e.g. /player McCaffrey -> Christian vs Luke)
+    candidates = find_matching_player_candidates(s_plays, player_name, season=season)
+    if len(candidates) > 1:
+        if interactive and sys.stdin.isatty():
+            print(f"\n  {C.BOLD}{C.CYAN}Multiple players matched '{player_name}':{C.RESET}")
+            for idx, cand in enumerate(candidates, 1):
+                pos = cand.get("position") or "Unknown"
+                pos_str = f" - {pos}" if pos else ""
+                t_str = f" ({cand['team']}{pos_str}, {cand['play_count']} plays)" if cand.get("team") else f" ({cand['play_count']} plays)"
+                print(f"    [{idx}] {cand['name']}{t_str}")
+            try:
+                sel = prompt_input(f"  Select player [1-{len(candidates)}] (default: 1): ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(candidates):
+                    selected_cand = candidates[int(sel) - 1]
+                else:
+                    selected_cand = candidates[0]
+            except (EOFError, KeyboardInterrupt):
+                selected_cand = candidates[0]
+        else:
+            selected_cand = candidates[0]
+        player_name = selected_cand["search_name"]
+
     matching_plays = find_player_plays(s_plays, player_name, season=season)
     if not matching_plays:
         all_matches = find_player_plays(plays, player_name)
@@ -7711,9 +7973,30 @@ def render_team_drilldown_view(
     plays: List[Dict[str, Any]],
     season: int,
     team: str,
+    interactive: bool = False,
 ) -> str:
     """Drill down into comprehensive team offensive, defensive, coaching, and roster stats for a season."""
-    team_abbr = resolve_team_abbr(team) or team.upper()
+    team_matches = resolve_team_matches(team)
+    if len(team_matches) > 1:
+        if interactive and sys.stdin.isatty():
+            print(f"\n  {C.BOLD}{C.CYAN}Multiple teams matched '{team}':{C.RESET}")
+            for idx, t in enumerate(team_matches, 1):
+                full_n = TEAM_FULL_NAMES.get(t, t)
+                print(f"    [{idx}] {full_n} ({t})")
+            try:
+                sel = prompt_input(f"  Select team [1-{len(team_matches)}] (default: 1): ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(team_matches):
+                    team_abbr = team_matches[int(sel) - 1]
+                else:
+                    team_abbr = team_matches[0]
+            except (EOFError, KeyboardInterrupt):
+                team_abbr = team_matches[0]
+        else:
+            team_abbr = team_matches[0]
+    elif len(team_matches) == 1:
+        team_abbr = team_matches[0]
+    else:
+        team_abbr = resolve_team_abbr(team) or team.upper()
     s_plays = plays_for_season(plays, season)
     off_plays = [p for p in s_plays if str(p.get("posteam", "")).upper() == team_abbr]
     def_plays = [p for p in s_plays if str(p.get("defteam", "")).upper() == team_abbr]
@@ -9523,30 +9806,33 @@ def interactive_tui(
                         print(f"  {C.RED}✖ {err}{C.RESET}")
                 elif cmd_token in ("/team", "/team-stats", "/team-drilldown"):
                     if cmd_args:
-                        t_raw = cmd_args[0]
-                        s_val = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else active_season
-                        res_t = resolve_team_abbr(t_raw) or t_raw.upper()
-                        print(render_team_drilldown_view(engine, plays, season=s_val, team=res_t))
+                        t_raw = " ".join(cmd_args)
+                        tokens = t_raw.split()
+                        if len(tokens) > 1 and tokens[-1].isdigit():
+                            s_val = int(tokens[-1])
+                            t_raw = " ".join(tokens[:-1])
+                        else:
+                            s_val = active_season
+                        print(render_team_drilldown_view(engine, plays, season=s_val, team=t_raw, interactive=is_interactive))
                     else:
                         def_t = default_team or "KC"
                         if _GLOBAL_COMPLETER:
                             _GLOBAL_COMPLETER.set_context("team")
-                        t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions) (default: {def_t}): ").strip() or def_t
+                        t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions, New York) (default: {def_t}): ").strip() or def_t
                         if _GLOBAL_COMPLETER:
                             _GLOBAL_COMPLETER.set_context(None)
-                        res_t = resolve_team_abbr(t_in) or t_in.upper()
-                        print(render_team_drilldown_view(engine, plays, season=active_season, team=res_t))
+                        print(render_team_drilldown_view(engine, plays, season=active_season, team=t_in, interactive=is_interactive))
                 elif cmd_token in ("/coaches", "/coach", "/staff"):
                     if cmd_args:
-                        t_in = cmd_args[0]
+                        t_in = " ".join(cmd_args)
                     else:
                         def_t = default_team or "KC"
                         if _GLOBAL_COMPLETER:
                             _GLOBAL_COMPLETER.set_context("team")
-                        t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions) (default: {def_t}): ").strip() or def_t
+                        t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions, New York) (default: {def_t}): ").strip() or def_t
                         if _GLOBAL_COMPLETER:
                             _GLOBAL_COMPLETER.set_context(None)
-                    res_t = resolve_team_abbr(t_in) or t_in.upper()
+                    res_t = resolve_team_interactive(t_in, default_team=def_t, interactive=is_interactive)
                     print(render_coaching_staff_view(res_t))
                 elif cmd_token in ("/player", "/player-stats", "/player-drilldown"):
                     if cmd_args:
