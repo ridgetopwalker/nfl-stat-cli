@@ -7078,7 +7078,8 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {strip_ansi(str(k)): _jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [_jsonable(v) for v in value]
+        items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
+        return [_jsonable(v) for v in items]
     return strip_ansi(str(value))
 
 
@@ -7129,7 +7130,7 @@ def answer_query(
             stat_name = "yards_per_play"
         sdef = engine.stats[stat_name]
         result.stat_name, result.title, result.unit = stat_name, strip_ansi(sdef.title), strip_ansi(sdef.unit or "")
-        result.records = _jsonable(sink)
+        result.records = _jsonable(sink[: limit if (limit and limit > 0) else None])
     return result
 
 

@@ -185,12 +185,23 @@ def test_answer_query_records_are_strict_json_even_with_nan_values(engine, monke
     json.dumps(r.to_dict(), allow_nan=False)
 
 
-def test_answer_query_restores_the_last_result_globals(engine):
-    cli.LAST_RENDERED_TABLE = {"title": "mine", "headers": ["h"], "rows": [["r"]]}
-    cli.LAST_RAW_OUTPUT = "mine"
+def test_answer_query_restores_the_last_result_globals(engine, monkeypatch):
+    mine = {"title": "mine", "headers": ["h"], "rows": [["r"]]}
+    monkeypatch.setattr(cli, "LAST_RENDERED_TABLE", mine)
+    monkeypatch.setattr(cli, "LAST_RAW_OUTPUT", "mine")
+    monkeypatch.setattr(cli, "LAST_RESULT_RECORDS", [{"mine": 1}])
+    seen_during = []
+    orig = cli.handle_nl_query_result
+
+    def spy(*a, **k):
+        out = orig(*a, **k)
+        seen_during.append(cli.LAST_RENDERED_TABLE)
+        return out
+
+    monkeypatch.setattr(cli, "handle_nl_query_result", spy)
     cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024)
-    assert cli.LAST_RENDERED_TABLE == {"title": "mine", "headers": ["h"], "rows": [["r"]]}
-    assert cli.LAST_RAW_OUTPUT == "mine"
+    assert seen_during and seen_during[0] is not mine  # the renderer really did overwrite it during the call
+    assert cli.LAST_RENDERED_TABLE is mine and cli.LAST_RAW_OUTPUT == "mine" and cli.LAST_RESULT_RECORDS == [{"mine": 1}]
 
 
 def test_answer_query_strips_control_characters_from_user_text(engine):
@@ -200,7 +211,7 @@ def test_answer_query_strips_control_characters_from_user_text(engine):
 
 
 @pytest.mark.parametrize("query", ["blorp zzz qqq", "show me Mahomes", "Chiefs team stats 2024", "Patrick Mahomes player stats 2024"])
-def test_answer_query_never_prompts_for_any_read_intent(engine, monkeypatch, query):
+def test_answer_query_never_prompts_for_any_read_intent(engine, monkeypatch, no_network, query):
     import builtins
     monkeypatch.setattr(cli, "prompt_input", lambda *a, **k: pytest.fail("prompted"))
     monkeypatch.setattr(builtins, "input", lambda *a, **k: pytest.fail("input() called"))
@@ -221,6 +232,7 @@ def test_model_chosen_mutating_intents_are_refused(engine, monkeypatch):
 
 
 def test_answer_query_limit_is_applied_to_text_and_records(engine):
-    r = cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024, limit=1)
-    assert len(r.records) == 1
-    assert r.parsed.get("limit") is None or isinstance(r.parsed.get("limit"), int)
+    full = cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024)
+    one = cli.answer_query("epa per play 2024", engine, PLAYS, default_season=2024, limit=1)
+    assert len(one.records) == 1 and len(full.records) > 1
+    assert full.records[1]["entity"] in full.text and full.records[1]["entity"] not in one.text
