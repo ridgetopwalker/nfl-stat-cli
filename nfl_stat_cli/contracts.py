@@ -10,6 +10,7 @@ Provides comprehensive, publicly sourced contract data from OverTheCap & Spotrac
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -143,35 +144,73 @@ NFL_CONTRACTS: List[ContractRecord] = [
 
 
 def find_contract_by_name(query_name: str) -> Optional[ContractRecord]:
-    """Find a contract record by full or partial player/coach name."""
+    """Find a contract record by full or partial player/coach name, supporting initial abbreviations."""
     q = query_name.strip().lower()
     if not q:
         return None
 
-    # Exact match
-    for c in NFL_CONTRACTS:
-        if c.name.lower() == q:
-            return c
+    # 1. Exact match (prefer player if both exist)
+    exact_players = [c for c in NFL_CONTRACTS if c.name.lower() == q and c.contract_type == "player"]
+    if exact_players:
+        return exact_players[0]
+    exact_all = [c for c in NFL_CONTRACTS if c.name.lower() == q]
+    if exact_all:
+        return exact_all[0]
 
-    # Last name or substring match
-    candidates = []
+    # 2. Check for initial + dot pattern (e.g. "j.taylor", "a.st. brown", "p.mahomes", "j. allen")
+    dot_m = re.match(r"^([a-z])\.\s*(.+)$", q)
+    if dot_m:
+        init_letter = dot_m.group(1)
+        rest_name = dot_m.group(2).strip()
+        norm_rest = rest_name.replace(".", "").strip()
+        matched_init = []
+        for c in NFL_CONTRACTS:
+            c_low = c.name.lower()
+            c_parts = c_low.split()
+            if not c_parts:
+                continue
+            first_init = c_parts[0][0]
+            if first_init != init_letter:
+                continue
+            surname = " ".join(c_parts[1:])
+            surname_clean = surname.replace(".", "")
+            if norm_rest in (surname_clean, surname, c_parts[-1]):
+                matched_init.append(c)
+        if matched_init:
+            players = [c for c in matched_init if c.contract_type == "player"]
+            return players[0] if players else matched_init[0]
+
+    # 3. Last name or substring match (prefer players over coaches)
+    player_candidates = []
+    coach_candidates = []
     for c in NFL_CONTRACTS:
         c_low = c.name.lower()
+        parts = c_low.split()
         if q in c_low or c_low in q:
-            candidates.append(c)
-        else:
-            parts = c_low.split()
-            if any(p == q for p in parts if len(p) >= 3):
-                candidates.append(c)
+            if c.contract_type == "player":
+                player_candidates.append(c)
+            else:
+                coach_candidates.append(c)
+        elif any(p == q for p in parts if len(p) >= 3):
+            if c.contract_type == "player":
+                player_candidates.append(c)
+            else:
+                coach_candidates.append(c)
 
-    if candidates:
-        return candidates[0]
+    if player_candidates:
+        return player_candidates[0]
+    if coach_candidates:
+        return coach_candidates[0]
 
-    # Fuzzy match
-    names = [c.name for c in NFL_CONTRACTS]
-    matches = difflib.get_close_matches(query_name, names, n=1, cutoff=0.6)
+    # 4. Fuzzy match (prefer players)
+    player_names = [c.name for c in NFL_CONTRACTS if c.contract_type == "player"]
+    matches = difflib.get_close_matches(query_name, player_names, n=1, cutoff=0.6)
     if matches:
         return next(c for c in NFL_CONTRACTS if c.name == matches[0])
+    all_names = [c.name for c in NFL_CONTRACTS]
+    matches_all = difflib.get_close_matches(query_name, all_names, n=1, cutoff=0.6)
+    if matches_all:
+        return next(c for c in NFL_CONTRACTS if c.name == matches_all[0])
     return None
 
 
