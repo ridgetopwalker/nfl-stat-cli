@@ -171,3 +171,58 @@ def test_create_error_report_tolerates_non_json_values_and_caps_response(tmp_pat
     data = json.loads((tmp_path / "ipc" / "pending" / f"{rep['id']}.json").read_text(encoding="utf-8"))
     assert data["query"] == "q" and data["user_explanation"] == "notes"
     assert "\x1b" not in data["response"] and len(data["response"]) == cli.IPC_MAX_RESPONSE_CHARS
+
+
+def test_error_capture_is_on_by_default_without_any_env_flag(tmp_path):
+    env, log = _env(tmp_path, enabled=False)
+    assert "NFL_STAT_ENABLE_ERROR_IPC" not in env
+    out = _run(tmp_path, "epa per play\n/error wrong\nn\nquit\n", env)
+    assert "saved to the local error IPC folder" in out
+    assert len(_pending(tmp_path)) == 1
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("name,value", [("NFL_STAT_DISABLE_ERROR_IPC", "1"), ("NFL_STAT_ENABLE_ERROR_IPC", "0"),
+                                        ("NFL_STAT_ENABLE_ERROR_IPC", "false")])
+def test_error_capture_can_be_turned_off(tmp_path, name, value):
+    env, _ = _env(tmp_path, enabled=False)
+    env[name] = value
+    out = _run(tmp_path, "epa per play\n/error wrong\nquit\n", env)
+    assert "turned off" in out
+    assert _pending(tmp_path) == []
+
+
+def test_error_ipc_enabled_flag_logic(monkeypatch):
+    for k in ("NFL_STAT_ENABLE_ERROR_IPC", "NFL_STAT_DISABLE_ERROR_IPC"):
+        monkeypatch.delenv(k, raising=False)
+    assert cli.error_ipc_enabled() is True
+    monkeypatch.setenv("NFL_STAT_ENABLE_ERROR_IPC", "1")
+    assert cli.error_ipc_enabled() is True
+    monkeypatch.setenv("NFL_STAT_DISABLE_ERROR_IPC", "yes")
+    assert cli.error_ipc_enabled() is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_default_report_dir_is_private_and_outside_the_repo(tmp_path, monkeypatch):
+    monkeypatch.delenv("NFL_STAT_IPC_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    d = cli.get_ipc_dir()
+    repo_root = Path(cli.__file__).resolve().parent.parent
+    assert repo_root not in d.resolve().parents
+    assert str(d).startswith(str(tmp_path / "home"))
+    assert (d.stat().st_mode & 0o077) == 0
+    assert ((d / "pending").stat().st_mode & 0o077) == 0
+
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0, reason="needs a non-root POSIX user")
+def test_unwritable_report_dir_fails_gracefully(tmp_path):
+    env, _ = _env(tmp_path)
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o500)
+    env["NFL_STAT_IPC_DIR"] = str(ro / "ipc")
+    try:
+        out = _run(tmp_path, "epa per play\n/error wrong\nquit\n", env)
+    finally:
+        ro.chmod(0o700)
+    assert "Could not save the error report" in out

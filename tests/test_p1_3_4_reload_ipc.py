@@ -184,11 +184,13 @@ def test_tui_error_command_is_opt_in_and_never_force_reloads(tmp_path):
     env.pop("NFL_STAT_ENABLE_ERROR_IPC", None)
     base_args = [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025"]
 
-    # Disabled by default: no report written
+    # Explicit opt-out: no report written
+    env["NFL_STAT_DISABLE_ERROR_IPC"] = "1"
     res = subprocess.run(base_args, input="epa per play\n/error bad\nquit\n", capture_output=True, text=True, env=env, cwd=str(tmp_path))
     out = cli.strip_ansi(res.stdout)
-    assert "disabled by default" in out
+    assert "turned off" in out
     assert not (tmp_path / "ipc" / "pending").exists() or not list((tmp_path / "ipc" / "pending").glob("err_*.json"))
+    env.pop("NFL_STAT_DISABLE_ERROR_IPC")
 
     # Enabled: a resolution file planted with ANSI text must not trigger a reload without consent
     env["NFL_STAT_ENABLE_ERROR_IPC"] = "1"

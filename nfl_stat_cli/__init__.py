@@ -9590,7 +9590,8 @@ def render_stats_catalog(engine: StatEngine) -> str:
 # IPC Error Reporting & Self-Healing Agent Signaling
 # ==============================================================================
 
-ERROR_IPC_ENV = "NFL_STAT_ENABLE_ERROR_IPC"
+ERROR_IPC_ENV = "NFL_STAT_ENABLE_ERROR_IPC"  # set to 0/false to turn local /error capture off
+ERROR_IPC_DISABLE_ENV = "NFL_STAT_DISABLE_ERROR_IPC"  # set to 1 to turn local /error capture off
 GIT_UPDATE_ENV = "NFL_STAT_ALLOW_GIT_UPDATE"
 IPC_WAIT_TIMEOUT_SECONDS = 600.0
 _IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
@@ -9603,8 +9604,16 @@ def _truthy_env(name: str) -> bool:
 
 
 def error_ipc_enabled() -> bool:
-    """The `/error` agent hand-off is opt-in (set NFL_STAT_ENABLE_ERROR_IPC=1)."""
-    return _truthy_env(ERROR_IPC_ENV)
+    """
+    Local `/error` report capture is ON by default: nothing is written unless the user types `/error`,
+    reports go only to a private per-user folder, and nothing is sent anywhere. Opt out with
+    NFL_STAT_DISABLE_ERROR_IPC=1 or NFL_STAT_ENABLE_ERROR_IPC=0. Force-reload and git updates are
+    separate and are never enabled by this.
+    """
+    if _truthy_env(ERROR_IPC_DISABLE_ENV):
+        return False
+    raw = os.environ.get(ERROR_IPC_ENV, "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def validate_report_id(report_id: str) -> str:
@@ -9832,7 +9841,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/export-stats{C.RESET} [file.json]       Export custom stats catalog to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
-    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save a local error report (opt-in: NFL_STAT_ENABLE_ERROR_IPC=1)
+    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save the last query + answer as a local error report (nothing is sent anywhere)
     {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs NFL_STAT_ALLOW_GIT_UPDATE=1)
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
@@ -10263,8 +10272,8 @@ def interactive_tui(
                         print(f"  {C.DIM}No natural-language query has been run in this session yet.{C.RESET}")
                 elif cmd_token in ("/error", "/bug", "/report"):
                     if not error_ipc_enabled():
-                        print(f"  {C.YELLOW}⚠ Error-report hand-off is disabled by default.{C.RESET}")
-                        print(f"  {C.DIM}Set {ERROR_IPC_ENV}=1 to write reports to the private local IPC folder.{C.RESET}")
+                        print(f"  {C.YELLOW}⚠ Error reporting is turned off ({ERROR_IPC_DISABLE_ENV} / {ERROR_IPC_ENV}=0 is set).{C.RESET}")
+                        print(f"  {C.DIM}Unset it to let /error save reports to the private local folder.{C.RESET}")
                         continue
                     if not last_parsed_nl or not last_query_raw:
                         print(f"  {C.YELLOW}⚠ No natural-language query has been run in this session yet.{C.RESET}")
@@ -10285,13 +10294,18 @@ def interactive_tui(
                             print(f"\n  {C.DIM}Error report cancelled.{C.RESET}")
                             continue
 
-                    rep = create_error_report(
-                        query_raw=last_query_raw,
-                        parsed_nl=last_parsed_nl,
-                        user_explanation=user_notes,
-                        season=active_season,
-                        response_text=last_response_text,
-                    )
+                    try:
+                        rep = create_error_report(
+                            query_raw=last_query_raw,
+                            parsed_nl=last_parsed_nl,
+                            user_explanation=user_notes,
+                            season=active_season,
+                            response_text=last_response_text,
+                        )
+                    except OSError as save_err:
+                        print(f"  {C.RED}✖ Could not save the error report: {sanitize_ipc_text(save_err, 200)}{C.RESET}")
+                        print(f"  {C.DIM}Set NFL_STAT_IPC_DIR to a writable folder and try again.{C.RESET}")
+                        continue
                     rep_id = rep["id"]
                     print(f"\n  {C.GREEN}✔ Error report `{rep_id}` saved to the local error IPC folder.{C.RESET}")
                     print(f"  {C.DIM}Saved to: {get_ipc_dir() / 'pending' / 'latest.json'}{C.RESET}")
