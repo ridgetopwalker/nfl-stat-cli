@@ -40,3 +40,9 @@ def test_launcher_runs_package_from_any_directory(tmp_path):
     result = subprocess.run(["bash", str(ROOT / "nfl-stat"), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout
+
+
+def test_stale_upload_helper_removed():
+    # upload_to_github.py claimed the repo was private, omitted the package and tests, and
+    # pushed with a token; the repository now exists and is published via normal git/PRs.
+    assert not (ROOT / "upload_to_github.py").exists()
