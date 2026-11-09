@@ -128,3 +128,32 @@ def test_play_action_with_unknown_air_yards_does_not_claim_depth():
 
 def test_run_gap_tackle_is_not_guessed():
     assert _run(run_gap="tackle", run_location="left")["play_concept"] == "rush"
+
+
+def test_an_explicit_screen_flag_is_labelled_explicit_and_a_guess_inferred():
+    assert _pass(air_yards=12.0, is_screen=1)["play_concept_source"] == "explicit"
+    assert _pass(air_yards=-2.0, complete_pass=1)["play_concept_source"] == "inferred"
+
+
+def test_a_run_whose_description_mentions_a_screen_is_still_a_run():
+    row = _run(desc="run up the middle, screen blockers", run_location="middle")
+    assert row["play_concept"] == "rush_inside"
+
+
+def test_unparseable_air_yards_is_unknown_not_zero():
+    row = _pass(air_yards="abc", complete_pass=1)
+    assert row["play_concept"] == "pass" and row["is_screen"] == 0
+
+
+def test_row_without_play_type_or_attempts_does_not_emit_a_run():
+    row = _row()
+    assert row["play_type"] == "" and row["play_concept"] == "unknown"
+
+
+def test_run_gap_end_wins_over_a_middle_location():
+    assert _run(run_gap="end", run_location="middle")["play_concept"] == "rush_outside"
+
+
+def test_old_play_action_and_outside_labels_do_not_leak_into_other_plays():
+    assert _pass(air_yards=40.0, play_action=0)["play_concept"] != "play_action_deep"
+    assert _row(play_type="punt")["play_concept"] != "rush_outside"

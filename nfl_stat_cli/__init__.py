@@ -1371,7 +1371,7 @@ SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
 
 def _infer_play_concept(
     r: Dict[str, Any], raw_play_type: str, pass_attempt: int, rush_attempt: int,
-    is_screen: int, play_action: int, air_yards: float, air_known: bool,
+    is_screen: int, play_action: int, air_yards: float, air_known: bool, screen_explicit: bool = False,
 ) -> Tuple[str, str]:
     """
     Play concept and where it came from: "explicit" (a play_concept/play_type column), "inferred"
@@ -1386,9 +1386,9 @@ def _infer_play_concept(
     pt = raw_play_type.lower()
     if pt and pt not in ("pass", "run"):
         return pt, "explicit"  # punt, kickoff, field_goal, no_play, qb_kneel, ...
-    if is_screen:
-        # is_screen is the CSV/R flag when present, else a description / air_yards <= 0 heuristic
-        return "screen", "inferred"
+    if is_screen and pt != "run":
+        # is_screen is the CSV/R flag when present (explicit), else a description / air_yards <= 0 heuristic
+        return "screen", ("explicit" if screen_explicit else "inferred")
     if pt == "pass" or (not pt and pass_attempt):
         if play_action:
             return ("play_action_deep" if air_known and air_yards >= 18 else "play_action"), "inferred"
@@ -1667,8 +1667,9 @@ class NFLDataBridge:
         defteam = _safe_str(r.get("defteam"), "")
         conf = _safe_str(r.get("conf"), "") or ("AFC" if posteam in AFC_TEAMS else ("NFC" if posteam in NFC_TEAMS else "NFL"))
         division = _safe_str(r.get("division"), "") or TEAM_DIVISIONS.get(posteam, f"{conf} Division")
-        air_yards = _safe_float(r.get("air_yards"), 0.0)
-        air_known = not _is_missing(r.get("air_yards"))
+        air_val = _safe_float(r.get("air_yards"), float("nan"))
+        air_known = not math.isnan(air_val)  # missing or unparseable air_yards is unknown, not 0
+        air_yards = air_val if air_known else 0.0
         desc = _safe_str(r.get("desc"), "")
         pass_attempt = _safe_int(r.get("pass_attempt"), 0)
         rush_attempt = _safe_int(r.get("rush_attempt"), 0)
@@ -1681,14 +1682,14 @@ class NFLDataBridge:
             1 if ("screen" in desc.lower() or (pass_attempt == 1 and sack == 0 and air_known and air_yards <= 0.0 and complete_pass == 1)) else 0
         )
 
-        play_type = _safe_str(r.get("play_type"), "") or ("pass" if pass_attempt else "run")
+        play_type = _safe_str(r.get("play_type"), "") or ("pass" if pass_attempt else ("run" if rush_attempt else ""))
         raw_pa = _safe_opt_flag(r.get("play_action"))
         play_action = raw_pa if raw_pa is not None else (
             1 if ("play-action" in desc.lower() or "play action" in desc.lower()) else 0
         )
         play_concept, play_concept_source = _infer_play_concept(
             r, _safe_str(r.get("play_type"), ""), pass_attempt, rush_attempt,
-            is_screen, play_action, air_yards, air_known,
+            is_screen, play_action, air_yards, air_known, raw_screen is not None,
         )
         direction = _infer_play_direction(r, desc)
         yards_gained = _safe_float(r.get("yards_gained"), 0.0)
