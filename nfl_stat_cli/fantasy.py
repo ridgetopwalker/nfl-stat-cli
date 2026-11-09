@@ -113,6 +113,32 @@ def calculate_player_fantasy_points(
     return round(pts, 2)
 
 
+_ROLE_FIELDS = ("qb_name", "passer_player_name", "rusher_player_name", "receiver_player_name")
+
+
+def _player_name_fallback_role(p: Dict[str, Any]) -> Optional[str]:
+    """
+    Role ("pass", "rush" or "rec") that a bare ``player_name`` plays on this play, or None.
+
+    ``player_name`` is a generic "main player" column (normalized rows set it to the receiver on pass plays),
+    so it must never earn QB points on top of a named receiver. It is only used when the play has no
+    passer/rusher/receiver field at all, and then it gets exactly one role.
+    """
+    if not str(p.get("player_name") or "").strip():
+        return None
+    if any(str(p.get(k) or "").strip() for k in _ROLE_FIELDS):
+        return None
+    pt = str(p.get("play_type", "")).lower()
+    complete = int(p.get("reception", 0) or 0) == 1 or int(p.get("complete_pass", 0) or 0) == 1
+    if complete:
+        return "rec"
+    if int(p.get("rush_attempt", 0) or 0) == 1 or pt == "run":
+        return "rush"
+    if int(p.get("pass_attempt", 0) or 0) == 1 or pt == "pass":
+        return "pass"
+    return None
+
+
 def compute_player_fantasy_profile(player_name: str, plays: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Aggregate all play-by-play events involving a player (as QB, rusher, or receiver)
@@ -142,14 +168,19 @@ def compute_player_fantasy_profile(player_name: str, plays: List[Dict[str, Any]]
             return False
         return v_clean[-1].lower() == p_clean[0].lower()
 
+    # Each role is matched on its own field(s) only; a bare player_name is used for exactly one role
+    # (see _player_name_fallback_role), so a receiver is never also scored as the passer.
     def _matches_qb(p: Dict[str, Any]) -> bool:
-        return any(_match_val(p.get(k)) for k in ("qb_name", "passer_player_name", "player_name"))
+        return any(_match_val(p.get(k)) for k in ("qb_name", "passer_player_name")) or (
+            _player_name_fallback_role(p) == "pass" and _match_val(p.get("player_name")))
 
     def _matches_rusher(p: Dict[str, Any]) -> bool:
-        return any(_match_val(p.get(k)) for k in ("rusher_player_name", "player_name"))
+        return _match_val(p.get("rusher_player_name")) or (
+            _player_name_fallback_role(p) == "rush" and _match_val(p.get("player_name")))
 
     def _matches_rec(p: Dict[str, Any]) -> bool:
-        return any(_match_val(p.get(k)) for k in ("receiver_player_name", "player_name"))
+        return _match_val(p.get("receiver_player_name")) or (
+            _player_name_fallback_role(p) == "rec" and _match_val(p.get("player_name")))
 
     # Filter to plays where player was QB, rusher, receiver, or main player
     relevant = [
@@ -788,7 +819,9 @@ def compute_all_fantasy_leaders(
         posteam = str(p.get("posteam", ""))
 
         # 1. Passing
-        qb = str(p.get("passer_player_name") or p.get("qb_name") or p.get("player_name") or "").strip()
+        fallback_role = _player_name_fallback_role(p)
+        fallback_name = str(p.get("player_name") or "").strip()
+        qb = str(p.get("passer_player_name") or p.get("qb_name") or (fallback_name if fallback_role == "pass" else "") or "").strip()
         if qb and qb.lower() not in ("unknown qb", "unknown player", "none", ""):
             is_pass = int(p.get("pass_attempt", 0)) == 1 or pt == "pass"
             is_sack = int(p.get("sack", 0)) == 1
@@ -812,7 +845,7 @@ def compute_all_fantasy_leaders(
                 rec["interceptions"] += 1
 
         # 2. Rushing
-        rusher = str(p.get("rusher_player_name") or (p.get("player_name") if pt == "run" else "") or "").strip()
+        rusher = str(p.get("rusher_player_name") or (fallback_name if fallback_role == "rush" else "") or "").strip()
         if rusher and rusher.lower() not in ("unknown player", "unknown rusher", "none", ""):
             is_rush = int(p.get("rush_attempt", 0)) == 1 or pt == "run"
             if is_rush:
@@ -831,7 +864,7 @@ def compute_all_fantasy_leaders(
                 rec["rush_tds"] += r_td
 
         # 3. Receiving
-        receiver = str(p.get("receiver_player_name") or (p.get("player_name") if int(p.get("reception", 0)) == 1 else "") or "").strip()
+        receiver = str(p.get("receiver_player_name") or (fallback_name if fallback_role == "rec" else "") or "").strip()
         if receiver and receiver.lower() not in ("unknown player", "unknown receiver", "none", ""):
             rec = get_record(receiver)
             c_name = rec["player"]
