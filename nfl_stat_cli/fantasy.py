@@ -52,6 +52,12 @@ def _flag(p: Dict[str, Any], key: str) -> int:
         return 0
 
 
+def _team_str(v: Any) -> str:
+    """Upper-cased team abbreviation; None, NaN and "NA"/"NONE" placeholders become ""."""
+    t = str(v or "").strip().upper()
+    return "" if t in ("NAN", "NA", "NONE") else t
+
+
 def _dst_play_events(p: Dict[str, Any], team_abbr: str) -> Dict[str, int]:
     """
     Classify one play, seen from the defending team `team_abbr`, into D/ST scoring events (0/1 each).
@@ -71,8 +77,8 @@ def _dst_play_events(p: Dict[str, Any], team_abbr: str) -> Dict[str, int]:
     if _flag(p, "touchdown") == 1 or "touchdown" in desc:
         is_pass_td = _flag(p, "pass_touchdown") == 1 or "pass to" in desc
         is_rush_td = _flag(p, "rush_touchdown") == 1 or "run for" in desc or "rush for" in desc
-        scoring_team = str(p.get("td_team") or "").strip().upper()
-        offence_team = str(p.get("posteam") or "").strip().upper()
+        scoring_team = _team_str(p.get("td_team"))
+        offence_team = _team_str(p.get("posteam"))
         # The possessing team scored (td_team == posteam): never a D/ST touchdown, whatever else happened
         offence_scored = bool(scoring_team) and scoring_team == offence_team and scoring_team != team_abbr.strip().upper()
         if not offence_scored and (

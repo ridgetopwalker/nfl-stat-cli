@@ -88,7 +88,7 @@ def test_profile_and_leaderboard_agree_on_every_total():
     profile, board = _both(plays)
     for key in ("sacks", "interceptions", "fumbles_recovered", "safeties", "blocked_kicks", "defensive_tds", "points_allowed"):
         assert profile[key] == board[key], key
-    assert profile["fantasy_points"] == board["points_ppr"]
+    assert profile["fantasy_points"] == pytest.approx(board["points_ppr"])
     assert profile["defensive_tds"] == 1
 
 
@@ -132,3 +132,26 @@ def test_missing_flag_values_do_not_crash_the_classifier(bad):
                    away_score=7, desc="plain play")]
     profile, board = _both(plays)
     assert profile["defensive_tds"] == 0 and board["defensive_tds"] == 0
+
+
+@pytest.mark.parametrize("missing", [None, float("nan"), "", "NA"])
+def test_missing_team_fields_do_not_suppress_a_real_defensive_td(missing):
+    # td_team and posteam both absent must not compare equal and read as "the offence scored"
+    plays = [_play(1, interception=1, touchdown=1, td_team=missing, posteam=missing,
+                   desc="pass intercepted, returned for TOUCHDOWN")]
+    profile, board = _both(plays)
+    assert profile["defensive_tds"] == 1 and board["defensive_tds"] == 1
+
+
+@pytest.mark.parametrize("order", [(0, 1, 2, 3), (3, 2, 1, 0), (1, 3, 0, 2), (2, 0, 3, 1)])
+def test_totals_do_not_depend_on_play_order(order):
+    # one pick-six plus offensive TDs: the result must be identical however the plays are ordered
+    pool = [
+        _play(1, interception=1, touchdown=1, td_team="DDD", desc="pass intercepted, returned for TOUCHDOWN"),
+        _offensive_pass_td(2), _offensive_rush_td(3), _offensive_pass_td(4),
+    ]
+    for p in pool:
+        p["home_score"], p["away_score"] = 10, 14
+    profile, board = _both([pool[i] for i in order])
+    assert profile["defensive_tds"] == board["defensive_tds"] == 1
+    assert profile["fantasy_points"] == pytest.approx(board["points_ppr"])
