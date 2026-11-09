@@ -1,6 +1,7 @@
 import importlib.util
 from importlib import resources
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -1817,6 +1818,101 @@ def test_custom_stat_formula_with_contracts_and_results_for_money_regression(tmp
     assert "Plays" in out
     assert "#1" in out
     assert "X.Worthy" in out
+
+
+def test_export_last_result_csv_and_json(tmp_path):
+    """
+    Test export of last query/stat result data to CSV and JSON formats,
+    including default extension behavior and error handling when no data exists.
+    """
+    engine = cli.StatEngine()
+
+    # 1. Evaluate a query that produces a leaderboard table
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query("who has the most pass yards", engine=engine, slm_model="off")
+    out = cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS)
+    assert "Passing Yards" in out
+
+    # 2. Export to CSV
+    csv_file = tmp_path / "last_results.csv"
+    ok, msg = cli.export_last_result(csv_file)
+    assert ok is True
+    assert "Exported" in msg
+    assert csv_file.exists()
+    csv_content = csv_file.read_text(encoding="utf-8")
+    assert "Rank" in csv_content
+    assert "P.Mahomes" in csv_content
+
+    # 3. Export to JSON
+    json_file = tmp_path / "last_results.json"
+    ok_json, msg_json = cli.export_last_result(json_file)
+    assert ok_json is True
+    assert json_file.exists()
+    payload = json.loads(json_file.read_text(encoding="utf-8"))
+    assert "records" in payload
+    assert payload["count"] > 0
+    assert payload["records"][0]["QB"] == "P.Mahomes"
+
+    # 4. Export without extension defaults to .csv
+    no_ext_file = tmp_path / "query_data_dump"
+    ok_no_ext, msg_no_ext = cli.export_last_result(no_ext_file)
+    assert ok_no_ext is True
+    assert (tmp_path / "query_data_dump.csv").exists()
+
+
+def test_cli_autocomplete_case_insensitive_and_options(tmp_path):
+    """
+    Test CLICompleter case-insensitive tab autocompletion:
+    - /stat metric names (e.g. 'epa' -> 'epa_per_play', 'PASS' -> 'passing_yards')
+    - /team names ('kc' -> 'KC', 'chie' -> 'Chiefs')
+    - /player names ('mah' -> 'Mahomes')
+    - /export & /export-stats file matching
+    - Slash commands ('/ex' -> '/example', '/export', '/export-stats')
+    """
+    engine = cli.StatEngine()
+    completer = cli.CLICompleter(engine=engine)
+
+    # 1. /stat case-insensitive completion
+    epa_matches = [c for c in completer.get_candidates("/stat epa", 6, "epa") if c.lower().startswith("epa")]
+    assert "epa_per_play" in epa_matches
+
+    pass_matches = [c for c in completer.get_candidates("/stat PASS", 6, "PASS") if c.lower().startswith("pass")]
+    assert "passer_rating" in pass_matches
+    assert "passing_yards" in pass_matches
+
+    # 2. /team case-insensitive completion
+    kc_matches = [c for c in completer.get_candidates("/team kc", 6, "kc") if c.lower().startswith("kc")]
+    assert "KC" in kc_matches
+
+    chiefs_matches = [c for c in completer.get_candidates("/team chie", 6, "chie") if c.lower().startswith("chie")]
+    assert "Chiefs" in chiefs_matches
+
+    # 3. /player case-insensitive completion
+    mah_matches = [c for c in completer.get_candidates("/player mah", 8, "mah") if c.lower().startswith("mah")]
+    assert any("Mahomes" in m for m in mah_matches)
+
+    # 4. Slash command matching
+    ex_matches = [c for c in completer.get_candidates("/ex", 0, "/ex") if c.lower().startswith("/ex")]
+    assert "/export" in ex_matches
+    assert "/export-stats" in ex_matches
+    assert "/example" in ex_matches
+
+    # 5. File matching for /export
+    test_file = tmp_path / "custom_test_export.json"
+    test_file.write_text("{}", encoding="utf-8")
+    cwd = os.getcwd()
+    try:
+        os.chdir(str(tmp_path))
+        file_matches = completer.get_file_options("custom")
+        assert any("custom_test_export.json" in f for f in file_matches)
+    finally:
+        os.chdir(cwd)
+
+    # 6. Context override for sub-prompts
+    completer.set_context("stat")
+    ctx_matches = completer.get_candidates("", 0, "epa")
+    assert "epa_per_play" in ctx_matches
+    completer.set_context(None)
+
 
 
 

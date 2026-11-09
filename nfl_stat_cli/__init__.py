@@ -14,6 +14,7 @@ import csv
 import datetime as dt
 import difflib
 import functools
+import glob
 import json
 import math
 import operator
@@ -153,9 +154,14 @@ try:
     _HAS_READLINE = True
     _IS_LIBEDIT = "libedit" in ((_readline.__doc__ or "").lower())
 except ImportError:
-    _readline = None
-    _HAS_READLINE = False
-    _IS_LIBEDIT = False
+    try:
+        import pyreadline3 as _readline  # type: ignore[import]
+        _HAS_READLINE = True
+        _IS_LIBEDIT = False
+    except ImportError:
+        _readline = None
+        _HAS_READLINE = False
+        _IS_LIBEDIT = False
 
 
 def strip_ansi(text: str) -> str:
@@ -205,6 +211,261 @@ def pad_ansi(text: str, width: int, align: str = "left") -> str:
         right = pad - left
         return (" " * left) + text + (" " * right)
     return text + (" " * pad)
+
+
+# ---------------------------------------------------------------------------
+# Last Query / Stat Result State & Export Manager
+# ---------------------------------------------------------------------------
+
+LAST_RENDERED_TABLE: Optional[Dict[str, Any]] = None
+LAST_RAW_OUTPUT: str = ""
+LAST_RESULT_RECORDS: Optional[List[Dict[str, Any]]] = None
+
+
+def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
+    """
+    Export the data rows from the last executed query or stat result to CSV or JSON.
+    Returns (success, message).
+    """
+    global LAST_RENDERED_TABLE, LAST_RAW_OUTPUT, LAST_RESULT_RECORDS
+
+    if not LAST_RENDERED_TABLE and not LAST_RESULT_RECORDS and not LAST_RAW_OUTPUT:
+        return False, "No query or stat result available to export. Run a stat query or natural-language query first."
+
+    path = Path(target_path)
+    if not path.suffix:
+        path = path.with_suffix(".csv")
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    ext = path.suffix.lower()
+
+    try:
+        if ext == ".json":
+            if LAST_RENDERED_TABLE and LAST_RENDERED_TABLE.get("headers") and LAST_RENDERED_TABLE.get("rows"):
+                headers = LAST_RENDERED_TABLE["headers"]
+                records = [dict(zip(headers, row)) for row in LAST_RENDERED_TABLE["rows"]]
+                payload = {
+                    "title": LAST_RENDERED_TABLE.get("title", "NFL Stat Query Result"),
+                    "count": len(records),
+                    "headers": headers,
+                    "records": records,
+                }
+            elif LAST_RESULT_RECORDS:
+                payload = {
+                    "title": "NFL Stat Query Result",
+                    "count": len(LAST_RESULT_RECORDS),
+                    "records": LAST_RESULT_RECORDS,
+                }
+            else:
+                payload = {
+                    "title": "NFL Stat Query Result",
+                    "text": LAST_RAW_OUTPUT,
+                }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            num_rows = len(payload.get("records", [])) if "records" in payload else 1
+            return True, f"Exported {num_rows} records to {path.resolve()}"
+
+        elif ext == ".csv":
+            if LAST_RENDERED_TABLE and LAST_RENDERED_TABLE.get("headers") and LAST_RENDERED_TABLE.get("rows"):
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(LAST_RENDERED_TABLE["headers"])
+                    for row in LAST_RENDERED_TABLE["rows"]:
+                        writer.writerow(row)
+                return True, f"Exported {len(LAST_RENDERED_TABLE['rows'])} rows to {path.resolve()}"
+            elif LAST_RESULT_RECORDS:
+                keys = list(LAST_RESULT_RECORDS[0].keys())
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
+                    writer.writeheader()
+                    for r in LAST_RESULT_RECORDS:
+                        writer.writerow({k: (v if not isinstance(v, (dict, list)) else json.dumps(v)) for k, v in r.items()})
+                return True, f"Exported {len(LAST_RESULT_RECORDS)} rows to {path.resolve()}"
+            else:
+                lines = [l for l in LAST_RAW_OUTPUT.splitlines() if l.strip()]
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["Line"])
+                    for l in lines:
+                        writer.writerow([l])
+                return True, f"Exported {len(lines)} lines to {path.resolve()}"
+        else:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(LAST_RAW_OUTPUT or (LAST_RENDERED_TABLE.get("title", "") if LAST_RENDERED_TABLE else ""))
+            return True, f"Exported output to {path.resolve()}"
+    except Exception as e:
+        return False, f"Failed to export data to {path.resolve()}: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Command Line Case-Insensitive Autocompleter (Matching Shell File Autocomplete)
+# ---------------------------------------------------------------------------
+
+SLASH_COMMAND_OPTIONS: List[str] = [
+    "/help", "/stats", "/stat", "/create", "/delete", "/team", "/coaches", "/coach",
+    "/player", "/play", "/games", "/fantasy", "/sportsbook", "/contract", "/camera",
+    "/season", "/why", "/error", "/reload", "/update", "/query", "/page", "/example",
+    "/screen-pass", "/play-efficiency", "/export", "/export-stats", "/import",
+    "/clear", "/quit", "/exit"
+]
+
+
+class CLICompleter:
+    """
+    Case-insensitive tab autocompleter for nfl-stat-cli slash commands,
+    stat metric IDs, NFL teams, player names, and filenames, following
+    the standard command-line autocompletion behavior when matching files in a folder.
+    """
+    def __init__(self, engine: Optional[Any] = None):
+        self.engine = engine
+        self._context_override: Optional[str] = None
+        self._matches: List[str] = []
+
+    def set_context(self, ctx: Optional[str]) -> None:
+        self._context_override = ctx
+
+    def get_stat_options(self) -> List[str]:
+        if self.engine and hasattr(self.engine, "stats"):
+            return sorted(list(self.engine.stats.keys()))
+        return sorted(list(globals().get("BASE_METRIC_KEYS", set())))
+
+    def get_team_options(self) -> List[str]:
+        afc = globals().get("AFC_TEAMS", set())
+        nfc = globals().get("NFC_TEAMS", set())
+        abbrevs = sorted(list(afc | nfc))
+        assistant = globals().get("NaturalLanguageStatAssistant")
+        nicknames = sorted([t.title() for t in assistant.TEAM_NICKNAME_MAP.keys()]) if assistant else []
+        return abbrevs + nicknames
+
+    def get_player_options(self) -> List[str]:
+        names: Set[str] = set()
+        try:
+            from .contracts import NFL_CONTRACTS
+            for c in NFL_CONTRACTS:
+                names.add(c.name)
+                parts = c.name.split()
+                if len(parts) >= 2:
+                    names.add(parts[-1])
+                    names.add(f"{parts[0][0]}.{parts[-1]}")
+        except Exception:
+            pass
+        try:
+            sample_plays = globals().get("SAMPLE_PBP_PLAYS", [])
+            for p in sample_plays:
+                for k in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name"):
+                    val = p.get(k)
+                    if val and str(val).strip():
+                        names.add(str(val).strip())
+        except Exception:
+            pass
+        return sorted(list(names))
+
+    def get_file_options(self, text: str) -> List[str]:
+        pattern = text + "*" if text else "*"
+        try:
+            candidates = glob.glob(pattern)
+            res = []
+            for c in candidates:
+                if os.path.isdir(c):
+                    res.append(c + ("/" if not c.endswith(("/", "\\")) else ""))
+                else:
+                    res.append(c)
+            return sorted(res)
+        except Exception:
+            return []
+
+    def get_candidates(self, line: str, begidx: int, text: str) -> List[str]:
+        if self._context_override == "stat":
+            return self.get_stat_options()
+        if self._context_override in ("team", "coaches", "coach"):
+            return self.get_team_options()
+        if self._context_override in ("player", "players"):
+            return self.get_player_options()
+        if self._context_override in ("file", "files", "export", "import"):
+            return self.get_file_options(text)
+
+        prefix = line[:begidx].lstrip()
+        tokens = prefix.split()
+        if not tokens:
+            return SLASH_COMMAND_OPTIONS
+
+        cmd = tokens[0].lower()
+        if cmd in ("/stat", "/leaderboard"):
+            return self.get_stat_options()
+        if cmd in ("/team", "/team-stats", "/team-drilldown", "/coaches", "/coach", "/staff"):
+            return self.get_team_options()
+        if cmd in ("/player", "/player-stats", "/player-drilldown", "/drilldown"):
+            return self.get_player_options()
+        if cmd in ("/fantasy", "/fant", "/fp"):
+            return [
+                "ppr", "half-ppr", "std", "standard", "leaders", "matchups", "projections",
+                "qb", "rb", "wr", "te", "dst", "defense"
+            ] + self.get_team_options() + self.get_player_options()
+        if cmd in ("/sportsbook", "/odds", "/handicap", "/lines", "/betting"):
+            return ["board", "underdogs", "power_ratings", "lines", "matchup"] + self.get_team_options()
+        if cmd in ("/contract", "/contracts", "/contrat", "/payroll", "/salary", "/salaries"):
+            return ["coaches", "leaders", "apy", "guaranteed", "total"] + self.get_team_options() + self.get_player_options()
+        if cmd in ("/camera", "/perspective"):
+            return ["behind-offense", "behind-defense", "sideline", "broadcast", "endzone", "all22"]
+        if cmd == "/season":
+            return ["2024", "2025", "2026"]
+        if cmd in ("/export", "/export-stats", "/export-stat", "/import"):
+            return self.get_file_options(text)
+        if cmd in ("/delete", "/delete-stat", "/rm-stat", "/remove-stat"):
+            if self.engine and hasattr(self.engine, "stats"):
+                return sorted([s.name for s in self.engine.stats.values() if s.category == "custom"])
+            return []
+        if cmd in ("/games", "/game", "/matchup", "/boxscore"):
+            return [str(w) for w in range(1, 19)] + self.get_team_options()
+
+        return SLASH_COMMAND_OPTIONS
+
+    def complete(self, text: str, state: int) -> Optional[str]:
+        if state == 0:
+            line = ""
+            begidx = 0
+            if _readline and hasattr(_readline, "get_line_buffer"):
+                try:
+                    line = _readline.get_line_buffer()
+                    begidx = _readline.get_begidx()
+                except Exception:
+                    pass
+            candidates = self.get_candidates(line, begidx, text)
+            t_low = text.lower()
+            self._matches = [c for c in candidates if c.lower().startswith(t_low)]
+
+        if state < len(self._matches):
+            return self._matches[state]
+        return None
+
+
+_GLOBAL_COMPLETER: Optional[CLICompleter] = None
+
+
+def setup_readline_completer(engine: Optional[Any] = None) -> Optional[CLICompleter]:
+    """Configure GNU readline / pyreadline3 with case-insensitive tab autocompletion."""
+    global _GLOBAL_COMPLETER
+    if not _HAS_READLINE or _readline is None:
+        return None
+    try:
+        _GLOBAL_COMPLETER = CLICompleter(engine=engine)
+        _readline.set_completer(_GLOBAL_COMPLETER.complete)
+        _readline.set_completer_delims(" \t\n")
+        if _IS_LIBEDIT:
+            _readline.parse_and_bind("bind ^I rl_complete")
+        else:
+            _readline.parse_and_bind("tab: complete")
+            try:
+                _readline.parse_and_bind("set completion-ignore-case on")
+            except Exception:
+                pass
+        return _GLOBAL_COMPLETER
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -3458,8 +3719,11 @@ class AsciiArtRenderer:
 
     @staticmethod
     def render_table(title: str, headers: List[str], rows: List[List[Any]], alignments: Optional[List[str]] = None) -> str:
+        global LAST_RENDERED_TABLE, LAST_RAW_OUTPUT
         if not rows:
-            return f"\n{C.BOLD}{C.GOLD}▶ {title}{C.RESET}\n  {C.DIM}(No matching records found){C.RESET}"
+            msg = f"\n{C.BOLD}{C.GOLD}▶ {title}{C.RESET}\n  {C.DIM}(No matching records found){C.RESET}"
+            LAST_RAW_OUTPUT = strip_ansi(msg)
+            return msg
         if not alignments:
             alignments = ["left"] + ["right"] * (len(headers) - 1)
         str_rows = [[str(cell) for cell in r] for r in rows]
@@ -3477,7 +3741,19 @@ class AsciiArtRenderer:
             cells = [pad_ansi(r[i], widths[i], alignments[i]) for i in range(len(headers))]
             out.append("│ " + " │ ".join(cells) + " │")
         out.append(bot)
-        return "\n".join(out)
+        rendered = "\n".join(out)
+        try:
+            clean_headers = [strip_ansi(h) for h in headers]
+            clean_rows = [[strip_ansi(c) for c in r] for r in str_rows]
+            LAST_RENDERED_TABLE = {
+                "title": strip_ansi(title).lstrip("▶ ").strip(),
+                "headers": clean_headers,
+                "rows": clean_rows,
+            }
+            LAST_RAW_OUTPUT = strip_ansi(rendered)
+        except Exception:
+            pass
+        return rendered
 
     @staticmethod
     def _place_token(row_chars: List[str], col: int, token: str, color: str) -> None:
@@ -5035,6 +5311,30 @@ class NaturalLanguageStatAssistant:
                 "explanation": "Display Saved Stat Page with historical lookback and forward tracking.",
             }
 
+        # Check if user is asking to EXPORT data or EXPORT stats via natural language
+        if any(ql.startswith(prefix) for prefix in ("export data", "export last", "export result", "export results", "export to csv", "export to json", "save data")):
+            file_m = re.search(r"(?:to|as|into|file)\s+([a-zA-Z0-9_\-./\\]+\.(?:csv|json|txt))", ql)
+            target = file_m.group(1) if file_m else "last_query_result.csv"
+            return {
+                "intent": "export_data",
+                "query": query,
+                "target_file": target,
+                "season": season,
+                "show_field": False,
+                "explanation": f"Export data from last query result to `{target}`.",
+            }
+        if any(ql.startswith(prefix) for prefix in ("export stats", "export custom stats", "save stats", "backup stats")):
+            file_m = re.search(r"(?:to|as|into|file)\s+([a-zA-Z0-9_\-./\\]+\.json)", ql)
+            target = file_m.group(1) if file_m else "custom_stats_export.json"
+            return {
+                "intent": "export_stats",
+                "query": query,
+                "target_file": target,
+                "season": season,
+                "show_field": False,
+                "explanation": f"Export custom stats catalog to `{target}`.",
+            }
+
         # Check if user is asking to DELETE a custom stat
         del_m = re.match(r"^(?:delete|remove|drop)\s+(?:custom\s+)?stat\s+([a-zA-Z0-9_]+)$", ql)
         if del_m:
@@ -6348,6 +6648,18 @@ def handle_nl_query_result(
 
     slm_tag = f" [SLM: {parsed['slm_model_used']}]" if parsed.get("slm_model_used") else " [Local Rule/AST Parser]"
     header = f"\n{C.BOLD}{C.CYAN}🤖 Query Interpretation{slm_tag}:{C.RESET} {parsed.get('explanation', '')}"
+
+    if intent == "export_data":
+        target = parsed.get("target_file") or "last_query_result.csv"
+        ok, msg = export_last_result(target)
+        status_color = C.GREEN if ok else C.RED
+        status_icon = "✔" if ok else "✖"
+        return header + f"\n  {status_color}{status_icon} {msg}{C.RESET}"
+
+    if intent == "export_stats":
+        target = parsed.get("target_file") or "custom_stats_export.json"
+        out_p = engine.export_custom_stats_json(Path(target))
+        return header + f"\n  {C.GREEN}✔ Exported custom stats catalog to {out_p.resolve()}{C.RESET}"
 
     if intent == "dataset_info":
         return header + "\n" + render_dataset_info_view(all_plays, parsed)
@@ -8707,7 +9019,8 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/stats{C.RESET}                          List all registered traditional and custom stats & formulas
     {C.BOLD}{C.CYAN}/page{C.RESET}                           View Saved Stat Page (prior-season lookback & current-season tracking)
     {C.BOLD}{C.CYAN}/example{C.RESET}                        Guide on how to build custom stats (featuring MLB-style QB Wins)
-    {C.BOLD}{C.CYAN}/export{C.RESET} [file.json]             Export custom stats to JSON
+    {C.BOLD}{C.CYAN}/export{C.RESET} [file.csv|json]         Export data rows from the last query/stat result to CSV or JSON
+    {C.BOLD}{C.CYAN}/export-stats{C.RESET} [file.json]       Export custom stats catalog to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
     {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Report parsing or interpretation error to Antigravity AI agent
@@ -8865,8 +9178,12 @@ def interactive_tui(
     last_parsed_nl: Optional[Dict[str, Any]] = None
     last_query_raw: Optional[str] = None
 
+    setup_readline_completer(engine)
+
     while True:
         try:
+            if _GLOBAL_COMPLETER:
+                _GLOBAL_COMPLETER.set_context(None)
             raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat > {C.RESET}").lstrip("\ufeff").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting nfl-stat-cli.")
@@ -8908,7 +9225,11 @@ def interactive_tui(
                         for i, sname in enumerate(stat_names, 1):
                             s = engine.stats[sname]
                             print(f"    [{i:2d}] {C.BOLD}{s.name:<28}{C.RESET} — {s.title} [{s.category.upper()} • by {s.group_by}]")
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context("stat")
                         sel = prompt_input("  Pick stat number or name (default: 1): ").strip() or "1"
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context(None)
                         chosen_stat = stat_names[0]
                         if sel.isdigit() and 1 <= int(sel) <= len(stat_names):
                             chosen_stat = stat_names[int(sel) - 1]
@@ -8970,7 +9291,11 @@ def interactive_tui(
                         print(render_team_drilldown_view(engine, plays, season=s_val, team=res_t))
                     else:
                         def_t = default_team or "KC"
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context("team")
                         t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions) (default: {def_t}): ").strip() or def_t
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context(None)
                         res_t = resolve_team_abbr(t_in) or t_in.upper()
                         print(render_team_drilldown_view(engine, plays, season=active_season, team=res_t))
                 elif cmd_token in ("/coaches", "/coach", "/staff"):
@@ -8978,7 +9303,11 @@ def interactive_tui(
                         t_in = cmd_args[0]
                     else:
                         def_t = default_team or "KC"
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context("team")
                         t_in = prompt_input(f"  Enter Team abbreviation or nickname (e.g. KC, BUF, Chiefs, Lions) (default: {def_t}): ").strip() or def_t
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context(None)
                     res_t = resolve_team_abbr(t_in) or t_in.upper()
                     print(render_coaching_staff_view(res_t))
                 elif cmd_token in ("/player", "/player-stats", "/player-drilldown"):
@@ -8986,7 +9315,11 @@ def interactive_tui(
                         p_arg = " ".join(cmd_args)
                         print(render_player_drilldown_view(engine, plays, season=active_season, player_name=p_arg, interactive=True))
                     else:
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context("player")
                         p_in = prompt_input("  Enter Player name (e.g. Mahomes, Allen, Goff, Worthy) (default: Mahomes): ").strip() or "Mahomes"
+                        if _GLOBAL_COMPLETER:
+                            _GLOBAL_COMPLETER.set_context(None)
                         print(render_player_drilldown_view(engine, plays, season=active_season, player_name=p_in, interactive=True))
                 elif cmd_token in ("/play", "/diagram", "/field"):
                     if cmd_args:
@@ -9215,12 +9548,31 @@ def interactive_tui(
                     conf_arg = cmd_args[0].upper() if (cmd_args and cmd_args[0].upper() in ("AFC", "NFC")) else (default_conf or "AFC")
                     s_plays = require_season_plays(plays, active_season)
                     print(render_play_efficiency_view(engine, s_plays, active_season, conf_arg, view_mode="table", team=default_team))
-                elif cmd_token == "/export":
-                    path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename (default: custom_stats_export.json): ").strip() or "custom_stats_export.json")
+                elif cmd_token in ("/export-stats", "/export-stat", "/exportstats", "/save-stats"):
+                    if _GLOBAL_COMPLETER:
+                        _GLOBAL_COMPLETER.set_context("file")
+                    path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename for custom stats (default: custom_stats_export.json): ").strip() or "custom_stats_export.json")
+                    if _GLOBAL_COMPLETER:
+                        _GLOBAL_COMPLETER.set_context(None)
                     out_p = engine.export_custom_stats_json(Path(path_str))
-                    print(f"  {C.GREEN}✔ Exported custom stats to {out_p.resolve()}{C.RESET}")
+                    print(f"  {C.GREEN}✔ Exported custom stats catalog to {out_p.resolve()}{C.RESET}")
+                elif cmd_token in ("/export", "/export-data", "/savedata"):
+                    if _GLOBAL_COMPLETER:
+                        _GLOBAL_COMPLETER.set_context("file")
+                    path_str = cmd_args[0] if cmd_args else (prompt_input("  Export filename for last result data [.csv/.json] (default: last_query_result.csv): ").strip() or "last_query_result.csv")
+                    if _GLOBAL_COMPLETER:
+                        _GLOBAL_COMPLETER.set_context(None)
+                    ok, msg = export_last_result(path_str)
+                    if ok:
+                        print(f"  {C.GREEN}✔ {msg}{C.RESET}")
+                    else:
+                        print(f"  {C.RED}✖ {msg}{C.RESET}")
                 elif cmd_token == "/import":
+                    if _GLOBAL_COMPLETER:
+                        _GLOBAL_COMPLETER.set_context("file")
                     path_str = cmd_args[0] if cmd_args else prompt_input("  Path to JSON file to import: ").strip()
+                    if _GLOBAL_COMPLETER:
+                        _GLOBAL_COMPLETER.set_context(None)
                     if path_str and Path(path_str).exists():
                         names = engine.import_custom_stats_json(Path(path_str))
                         print(f"  {C.GREEN}✔ Imported {len(names)} custom stats: {', '.join(names)}{C.RESET}")
@@ -9241,7 +9593,9 @@ def interactive_tui(
                 parsed["camera"] = default_camera
             last_parsed_nl = parsed
             last_query_raw = raw_in
-            print(handle_nl_query_result(parsed, engine, plays, interactive=is_interactive))
+            res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
+            LAST_RAW_OUTPUT = strip_ansi(res_str)
+            print(res_str)
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
         except Exception as exc:
