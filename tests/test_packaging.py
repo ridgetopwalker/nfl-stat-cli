@@ -41,29 +41,40 @@ def test_no_top_level_import_shim_or_launcher_references():
         assert "-m nfl_stat_cli" in text, name
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
-def test_launcher_runs_package_from_any_directory(tmp_path):
-    env = dict(os.environ, HOME=str(tmp_path))
-    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+def _launcher_project(tmp_path):
+    """A copy of the launcher in a directory with no .venv, so the PATH python3 is the one used."""
+    project = tmp_path / "proj"
+    (project / "bin").mkdir(parents=True)
+    shutil.copy(ROOT / "nfl-stat", project / "nfl-stat")
+    (project / "nfl_stat_cli").symlink_to(ROOT / "nfl_stat_cli", target_is_directory=True)
+    env = dict(os.environ, HOME=str(tmp_path / "home"))
     env.pop("PYTHONPATH", None)
-    result = subprocess.run(["bash", str(ROOT / "nfl-stat"), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True)
+    return project, env
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or not hasattr(os, "symlink"), reason="bash/symlinks not available")
+def test_launcher_runs_package_from_any_directory(tmp_path):
+    project, env = _launcher_project(tmp_path)
+    (project / "bin" / "python3").symlink_to(sys.executable)
+    env["PATH"] = str(project / "bin") + os.pathsep + env.get("PATH", "")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    result = subprocess.run(["bash", str(project / "nfl-stat"), "--help"], cwd=elsewhere, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@pytest.mark.skipif(shutil.which("bash") is None or not hasattr(os, "symlink"), reason="bash/symlinks not available")
 def test_launcher_puts_project_dir_on_pythonpath(tmp_path):
     """Independent of whether the package happens to be pip-installed: the launcher itself must set PYTHONPATH."""
-    stub = tmp_path / "bin" / "python3"
-    stub.parent.mkdir()
+    project, env = _launcher_project(tmp_path)
+    stub = project / "bin" / "python3"
     stub.write_text('#!/usr/bin/env bash\necho "PYTHONPATH=$PYTHONPATH"\necho "ARGS=$*"\n')
     stub.chmod(0o755)
-    env = dict(os.environ, PATH=str(stub.parent) + os.pathsep + os.environ.get("PATH", ""))
-    env.pop("PYTHONPATH", None)
-    env["HOME"] = str(tmp_path)
-    result = subprocess.run(["bash", str(ROOT / "nfl-stat"), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True)
+    env["PATH"] = str(project / "bin") + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(["bash", str(project / "nfl-stat"), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert f"PYTHONPATH={ROOT}" in result.stdout
+    assert f"PYTHONPATH={project.resolve()}" in result.stdout
     assert "ARGS=-m nfl_stat_cli --help" in result.stdout
 
 
@@ -89,3 +100,11 @@ def test_metadata_is_honest_and_export_json_not_shipped():
     assert "custom_stats_export.json" not in (ROOT / "MANIFEST.in").read_text()
     assert not (ROOT / "custom_stats_export.json").exists() or \
         "custom_stats_export.json" in (ROOT / ".gitignore").read_text()
+
+
+def test_windows_launcher_copies_do_not_drift():
+    bat = (ROOT / "nfl-stat.bat").read_text().replace("\r\n", "\n").strip()
+    assert (ROOT / "nfl-stat-cli.bat").read_text().replace("\r\n", "\n").strip() == bat
+    ps1 = (ROOT / "install.ps1").read_text().replace("\r\n", "\n")
+    embedded = ps1.split('$LauncherContent = @"\n', 1)[1].split('\n"@', 1)[0].strip()
+    assert embedded == bat, "install.ps1 generates a different launcher than the checked-in .bat files"
