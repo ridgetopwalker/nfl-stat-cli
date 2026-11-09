@@ -41,6 +41,7 @@ POWER_DIFF_WEIGHT = 0.35
 TOTAL_EPA_SCALE = 24.0
 TOTAL_MIN = 37.0
 TOTAL_MAX = 56.0
+TOTAL_ROUNDING_STEP = 0.5
 
 # Moneyline conversion: each side's win probability is clamped to [MONEYLINE_PROB_MIN, MONEYLINE_PROB_MAX],
 # multiplied by MONEYLINE_MARGIN_FACTOR (the modeled margin), capped at MONEYLINE_IMPLIED_CAP, then converted.
@@ -123,7 +124,7 @@ def compute_team_power_ratings(plays: List[Dict[str, Any]], season: int) -> Dict
         pt_diff = avg_pts_for - avg_pts_against
 
         # Quantitative power rating scaled to points relative to average NFL team (0.0):
-        # Net EPA scaled by ~25.0 points per EPA/play unit, blended with scoring differential
+        # Net EPA scaled by POWER_EPA_SCALE points per EPA/play unit, blended with scoring differential
         power_rating = (net_epa * POWER_EPA_SCALE) * POWER_EPA_WEIGHT + (pt_diff * POWER_DIFF_WEIGHT)
 
         raw_stats[t] = {
@@ -322,17 +323,15 @@ def summarize_model_accuracy(results: List[Dict[str, Any]]) -> Optional[Dict[str
     if not done:
         return None
     n = len(done)
-    winner_ok = 0
-    for r in done:
-        proj, act = r["expected_margin"], r["actual_margin"]
-        if act == 0 or (proj > 0) == (act > 0):
-            winner_ok += 1
+    decided = [r for r in done if r["actual_margin"] != 0]  # ties have no winner to project
+    winner_ok = sum(1 for r in decided if (r["expected_margin"] > 0) == (r["actual_margin"] > 0))
     margin_err = sum(abs(r["actual_margin"] - r["expected_margin"]) for r in done) / n
     total_err = sum(abs(r["actual_total"] - r["total"]) for r in done) / n
     return {
         "games": n,
+        "winner_games": len(decided),
         "winner_correct": winner_ok,
-        "winner_pct": round(winner_ok / n * 100.0, 1),
+        "winner_pct": round(winner_ok / len(decided) * 100.0, 1) if decided else 0.0,
         "avg_margin_error": round(margin_err, 1),
         "avg_total_error": round(total_err, 1),
     }
@@ -343,7 +342,7 @@ def render_accuracy_line(summary: Optional[Dict[str, Any]]) -> str:
         return ""
     return (
         f"Model accuracy vs. actual results ({summary['games']} completed games): projected winner "
-        f"{summary['winner_correct']}/{summary['games']} ({summary['winner_pct']:.1f}%), "
+        f"{summary['winner_correct']}/{summary['winner_games']} ({summary['winner_pct']:.1f}%), "
         f"average margin error {summary['avg_margin_error']:.1f} pts, "
         f"average total error {summary['avg_total_error']:.1f} pts."
     )
@@ -369,7 +368,10 @@ def render_sportsbook_board_view(
         games = [g for g in games if int(g.get("week", -1)) == int(week_filter)]
 
     if not games:
-        return f"\n{C.YELLOW}⚠ No games recorded in dataset for season {season}{f' Week {week_filter}' if week_filter else ''}.{C.RESET}"
+        return (
+            f"{render_disclaimer_block()}\n{C.YELLOW}⚠ No games recorded in dataset for season {season}"
+            f"{f' Week {week_filter}' if week_filter else ''}.{C.RESET}"
+        )
 
     title_str = f"📊 {PROJECTIONS_TITLE} ({season}{f' • Week {week_filter}' if week_filter else ''})"
     headers = ["Week", "Matchup", "Model Spread", "Model Total", "Model Moneyline (H / A)", "Model Score", "Actual", "Model vs. Actual"]
@@ -587,7 +589,7 @@ def render_underdog_leaderboard_view(
 
     leaders = compute_underdog_leaders(plays, season, team_filter=team_filter, limit=limit)
     if not leaders:
-        return f"\n{C.YELLOW}⚠ No underdog games recorded for season {season}.{C.RESET}"
+        return f"{render_disclaimer_block()}\n{C.YELLOW}⚠ No underdog games recorded for season {season}.{C.RESET}"
 
     sub_parts = [str(season)]
     if team_filter:
@@ -802,7 +804,7 @@ def render_model_explanation() -> str:
         "",
         f"{C.BOLD}5. Projected total and score{C.RESET}",
         f"   total = {n(LEAGUE_AVERAGE_TOTAL)} + {n(TOTAL_EPA_SCALE)} x (EPA adjustment from both teams' offense and defense EPA/play),"
-        f" limited to {n(TOTAL_MIN)}-{n(TOTAL_MAX)} and rounded to the nearest {n(SPREAD_ROUNDING_STEP)}",
+        f" limited to {n(TOTAL_MIN)}-{n(TOTAL_MAX)} and rounded to the nearest {n(TOTAL_ROUNDING_STEP)}",
         "   projected score: home = (total - spread) / 2, away = (total + spread) / 2",
         "",
         f"{C.BOLD}6. Model accuracy vs. actual results{C.RESET}",

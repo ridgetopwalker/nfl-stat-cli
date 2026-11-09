@@ -309,7 +309,7 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
 
 SLASH_COMMAND_OPTIONS: List[str] = [
     "/help", "/stats", "/stat", "/create", "/delete", "/team", "/coaches", "/coach",
-    "/player", "/play", "/games", "/fantasy", "/projections", "/explain", "/contract", "/camera",
+    "/player", "/play", "/games", "/fantasy", "/projections", "/explain", "/formula", "/contract", "/camera",
     "/season", "/why", "/error", "/reload", "/update", "/query", "/page", "/example",
     "/screen-pass", "/play-efficiency", "/export", "/export-stats", "/import",
     "/clear", "/quit", "/exit"

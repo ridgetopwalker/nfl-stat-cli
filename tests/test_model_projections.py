@@ -123,10 +123,6 @@ def test_every_string_literal_in_the_module_avoids_banned_words():
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             text = node.value.replace(DISCLAIMER, "")
-            # the disclaimer is assembled from two literals; exempt its two halves
-            if text in (DISCLAIMER.split("Not betting advice. ")[0] + "Not betting advice. ",
-                        "We don't take bets or link to sportsbooks, and we aren't affiliated with the NFL."):
-                continue
             if BANNED.search(text):
                 offenders.append(text[:80])
     assert not offenders, offenders
@@ -203,7 +199,7 @@ def test_backtest_is_presented_as_model_accuracy(season_plays):
     board = cli.strip_ansi(sb.render_sportsbook_board_view(season_plays, 2025))
     assert "Model accuracy vs. actual results (6 completed games)" in board
     assert "Model vs. Actual" in board
-    assert re.search(r"projected winner \d+/6", board)
+    assert re.search(r"projected winner \d+/\d+", board)
     assert "above projection" in board or "At projection" in board
     hc = sb.handicap_matchup("H", "A", {"H": {"power_rating": 3.0}, "A": {"power_rating": 0.0}}, home_score=30, away_score=10)
     assert hc["ats_result"] == "H above projection"
@@ -219,8 +215,12 @@ def test_accuracy_summary_math():
         {"actual_margin": None, "expected_margin": 1.0, "actual_total": None, "total": 40.0},
     ]
     s = sb.summarize_model_accuracy(rows)
-    assert s["games"] == 2 and s["winner_correct"] == 1 and s["winner_pct"] == 50.0
+    assert s["games"] == 2 and s["winner_games"] == 2 and s["winner_correct"] == 1 and s["winner_pct"] == 50.0
     assert s["avg_margin_error"] == 5.5 and s["avg_total_error"] == 5.0
+    tie = sb.summarize_model_accuracy(rows[:1] + [{"actual_margin": 0, "expected_margin": 2.0, "actual_total": 30, "total": 44.0}])
+    assert tie["games"] == 2 and tie["winner_games"] == 1 and tie["winner_correct"] == 1 and tie["winner_pct"] == 100.0
+    only_tie = sb.summarize_model_accuracy([{"actual_margin": 0, "expected_margin": 2.0, "actual_total": 30, "total": 44.0}])
+    assert only_tie["winner_games"] == 0 and only_tie["winner_pct"] == 0.0
 
 
 # --- season look-ahead (#24-compatible) ------------------------------------------------------
@@ -329,7 +329,8 @@ def test_explain_mentions_every_formula_with_real_constants():
     ("POWER_EPA_SCALE", 20.0, ["power rating = 20 x net EPA/play x 0.65"], ["26 x net"]),
     ("POWER_EPA_WEIGHT", 0.5, ["x net EPA/play x 0.5 +"], ["x 0.65"]),
     ("POWER_DIFF_WEIGHT", 0.5, ["point differential x 0.5"], ["x 0.35"]),
-    ("SPREAD_ROUNDING_STEP", 0.25, ["nearest 0.25 point"], ["nearest 0.5 point"]),
+    ("SPREAD_ROUNDING_STEP", 0.25, ["spread (home view) = -(expected home margin), rounded to the nearest 0.25 point"], ["margin), rounded to the nearest 0.5"]),
+    ("TOTAL_ROUNDING_STEP", 0.25, ["limited to 37-56 and rounded to the nearest 0.25"], ["56 and rounded to the nearest 0.5"]),
     ("MONEYLINE_MARGIN_FACTOR", 1.05, ["multiplied by 1.05,", "modeled 5% margin"], ["2.5%", "1.025"]),
     ("MONEYLINE_IMPLIED_CAP", 0.9, ["capped at 0.9."], ["capped at 0.98"]),
     ("MONEYLINE_PROB_MIN", 0.05, ["limited to 0.05-0.99"], ["0.01-0.99"]),
@@ -369,9 +370,10 @@ def test_behaviour_follows_the_same_constants(monkeypatch):
     monkeypatch.undo()
     monkeypatch.setattr(sb, "SPREAD_ROUNDING_STEP", 0.25)
     assert sb.snap_to_sportsbook_spread(-3.3) == -3.25
+    assert sb.handicap_matchup("H", "A", ratings)["spread"] == -4.75   # margin 4.8 rounds to 4.75 with the 0.25 step
     monkeypatch.undo()
     monkeypatch.setattr(sb, "MONEYLINE_MARGIN_FACTOR", 1.0)
-    assert sb.calculate_american_moneyline(0.5) == (100, 100) or sb.calculate_american_moneyline(0.5) == (-100, -100)
+    assert sb.calculate_american_moneyline(0.5) == (-100, -100)
     monkeypatch.undo()
     monkeypatch.setattr(sb, "POWER_EPA_SCALE", 0.0)
     monkeypatch.setattr(sb, "POWER_DIFF_WEIGHT", 0.0)
@@ -387,7 +389,8 @@ def test_total_constants_match_the_handicap_matchup_literals():
         return sb.handicap_matchup("H", "A", r)["total"]
 
     assert total_for(0.0, 0.0) == sb.LEAGUE_AVERAGE_TOTAL
-    step = sb.SPREAD_ROUNDING_STEP
+    step = sb.TOTAL_ROUNDING_STEP
+    assert step == 0.5   # literal inside handicap_matchup
     expect = round(round((sb.LEAGUE_AVERAGE_TOTAL + sb.TOTAL_EPA_SCALE * 0.08) / step) * step, 1)
     assert total_for(0.05, 0.03) == expect
     assert total_for(10.0, 10.0) == sb.TOTAL_MAX
@@ -426,7 +429,13 @@ def test_cli_formula_option_of_create_stat_is_unaffected():
     assert parser.parse_args(["--formula"]).explain is True
 
 
+def test_empty_states_keep_the_disclaimer():
+    assert DISCLAIMER in cli.strip_ansi(sb.render_sportsbook_board_view([], 2025))
+    assert DISCLAIMER in cli.strip_ansi(sb.render_underdog_leaderboard_view([], 2025))
+
+
 def test_tui_projection_commands(tmp_path):
+    # --engine offline uses the bundled sample rows (no network); HOME is a temp dir
     stdin = "\n".join(["/projections", "q", "/sportsbook 1", "/explain", "/formula", "/help", "quit"]) + "\n"
     res = _run(tmp_path, "tui", "--engine", "offline", "--season", "2025", "--no-color", "--slm-model", "off", stdin=stdin)
     assert res.returncode == 0, res.stderr
@@ -439,4 +448,4 @@ def test_tui_projection_commands(tmp_path):
 
 def test_slash_completer_offers_projection_commands():
     assert "/projections" in cli.SLASH_COMMAND_OPTIONS and "/explain" in cli.SLASH_COMMAND_OPTIONS
-    assert "/sportsbook" not in cli.SLASH_COMMAND_OPTIONS
+    assert "/formula" in cli.SLASH_COMMAND_OPTIONS and "/sportsbook" not in cli.SLASH_COMMAND_OPTIONS
