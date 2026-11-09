@@ -28,20 +28,24 @@ def win_reports():
 
 def wsl_reports():
     out = {}
+    # Use `wsl.exe -e` (no shell) so nothing gets re-expanded by an outer shell.
     try:
-        r = subprocess.run(
-            ["wsl.exe", "bash", "-c",
-             f"for f in {WSL_PENDING}/err_*.json; do [ -f \"$f\" ] && cat \"$f\" && echo '@@END@@'; done"],
+        ls = subprocess.run(
+            ["wsl.exe", "-e", "ls", WSL_PENDING],
             capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
         )
-        for chunk in r.stdout.split("@@END@@"):
-            chunk = chunk.strip()
-            if chunk.startswith("{"):
-                try:
-                    d = json.loads(chunk)
-                    out[d["id"]] = ("wsl", d)
-                except Exception:
-                    pass
+        for name in ls.stdout.split():
+            if not (name.startswith("err_") and name.endswith(".json")):
+                continue
+            cat = subprocess.run(
+                ["wsl.exe", "-e", "cat", f"{WSL_PENDING}/{name}"],
+                capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
+            )
+            try:
+                d = json.loads(cat.stdout)
+                out[d["id"]] = ("wsl", d)
+            except Exception:
+                pass
     except Exception:
         pass
     return out
