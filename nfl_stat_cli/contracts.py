@@ -10,9 +10,12 @@ Provides comprehensive, publicly sourced contract data from OverTheCap & Spotrac
 from __future__ import annotations
 
 import difflib
+import functools
+import math
 import re
+import unicodedata
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 @dataclass
@@ -235,7 +238,8 @@ def get_all_coach_contracts() -> List[ContractRecord]:
 
 
 _NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
-_SURNAME_PARTICLES = {"st", "de", "di", "del", "la", "le", "van", "von", "mac"}
+_SURNAME_PARTICLES = {"st", "de", "di", "del", "la", "le", "van", "von"}
+_ROI_SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}  # positions that appear in the play-by-play name fields
 _PLAY_NAME_FIELDS = ("player_name", "qb_name", "rusher_player_name", "receiver_player_name")
 
 
@@ -243,9 +247,11 @@ def name_match_key(name: Any) -> Optional[Tuple[str, str]]:
     """
     Normalize a player name to (first initial, surname) so full contract names ("Patrick Mahomes",
     "C.J. Stroud", "Patrick Surtain II") match play-by-play forms ("P.Mahomes", "C.Stroud", "P.Surtain II").
-    Returns None for blank names.
+    Accents are folded ("Jose"), and a leading numeric id prefix ("00-") is ignored. Returns None for blank names.
     """
-    raw = re.sub(r"^\d+-", "", str(name or "").strip())
+    raw = unicodedata.normalize("NFKD", str(name or "").strip())
+    raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
+    raw = re.sub(r"^\d+-", "", raw)
     if not raw:
         return None
     raw = re.sub(r"\.(?=\S)", ". ", raw.replace("'", "").replace("\u2019", ""))
@@ -262,14 +268,19 @@ def name_match_key(name: Any) -> Optional[Tuple[str, str]]:
     return (tokens[0][0], surname)
 
 
-def _colliding_name_keys() -> set:
-    """Name keys shared by more than one cataloged contract (need the team to tell them apart)."""
+@functools.lru_cache(maxsize=8)
+def _colliding_keys_for(names: Tuple[str, ...]) -> Set[Tuple[str, str]]:
     seen: Dict[Tuple[str, str], int] = {}
-    for c in NFL_CONTRACTS:
-        k = name_match_key(c.name)
+    for n in names:
+        k = name_match_key(n)
         if k:
             seen[k] = seen.get(k, 0) + 1
     return {k for k, n in seen.items() if n > 1}
+
+
+def _colliding_name_keys() -> Set[Tuple[str, str]]:
+    """Name keys shared by more than one cataloged contract (need the team to tell them apart)."""
+    return _colliding_keys_for(tuple(c.name for c in NFL_CONTRACTS))
 
 
 def _safe_epa(value: Any) -> float:
@@ -277,7 +288,7 @@ def _safe_epa(value: Any) -> float:
         f = float(value)
     except (TypeError, ValueError):
         return 0.0
-    return f if f == f else 0.0  # NaN -> 0.0
+    return f if math.isfinite(f) else 0.0  # NaN / inf -> 0.0
 
 
 def calculate_contract_performance_efficiency(
@@ -299,8 +310,9 @@ def calculate_contract_performance_efficiency(
     from .fantasy import compute_player_fantasy_profile
 
     p_low = contract.name.strip().lower()
-    c_key = name_match_key(contract.name)
-    ambiguous = c_key in _colliding_name_keys() if c_key else False
+    # Coaches are only matched on the exact full name: an abbreviated "J.Harbaugh" row is a player, not a coach
+    c_key = name_match_key(contract.name) if contract.contract_type != "coach" else None
+    ambiguous = bool(c_key) and c_key in _colliding_name_keys()
 
     def _play_matches(p: Dict[str, Any]) -> bool:
         for field in _PLAY_NAME_FIELDS:
@@ -310,7 +322,7 @@ def calculate_contract_performance_efficiency(
             if val.lower() == p_low:
                 return True
             if c_key and name_match_key(val) == c_key:
-                if ambiguous and str(p.get("posteam", "")).strip().upper() not in ("", contract.team.upper()):
+                if ambiguous and str(p.get("posteam") or "").strip().upper() not in ("", contract.team.upper()):
                     continue
                 return True
         return False
@@ -445,7 +457,7 @@ def render_player_contract_view(
     if plays and season:
         eff = calculate_contract_performance_efficiency(c, plays, season)
         no_epa_match = eff["epa_matched_plays"] == 0
-        if no_epa_match and c.contract_type == "player":
+        if no_epa_match and c.contract_type == "player" and c.position in _ROI_SKILL_POSITIONS:
             # Say so instead of showing an empty-looking ROI card
             lines.extend([
                 "",

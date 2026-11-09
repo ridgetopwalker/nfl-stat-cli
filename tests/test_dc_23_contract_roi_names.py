@@ -68,8 +68,8 @@ def test_unmatched_name_reports_zero_matched_plays():
 
 
 def test_shared_name_key_is_split_by_team(monkeypatch):
-    a = _contract("Jon Harlow", team="ZZZ", pos="HC", ctype="coach")
-    b = _contract("Jim Harlow", team="YYY", pos="HC", ctype="coach")
+    a = _contract("Jon Harlow", team="ZZZ", pos="RB")
+    b = _contract("Jim Harlow", team="YYY", pos="RB")
     monkeypatch.setattr(ct, "NFL_CONTRACTS", [a, b])
     plays = [_play(rush="J.Harlow", epa=0.2, posteam="ZZZ"), _play(rush="J.Harlow", epa=0.7, posteam="YYY")]
     assert ct.calculate_contract_performance_efficiency(a, plays, 2025)["total_epa"] == pytest.approx(0.2)
@@ -97,3 +97,58 @@ def test_dossier_warns_instead_of_silently_omitting_when_no_name_matches(monkeyp
     monkeypatch.setattr(ct, "NFL_CONTRACTS", [c])
     out = cli.strip_ansi(ct.render_player_contract_view("Quincy Testarro", plays=[_play(qb="N.Nobody", epa=0.8)], season=2025))
     assert "EPA unavailable" in out
+
+
+def test_shared_key_play_without_team_is_still_matched(monkeypatch):
+    a = _contract("Jon Harlow", team="ZZZ", pos="RB")
+    b = _contract("Jim Harlow", team="YYY", pos="RB")
+    monkeypatch.setattr(ct, "NFL_CONTRACTS", [a, b])
+    play = _play(rush="J.Harlow", epa=0.5, posteam=None)
+    assert ct.calculate_contract_performance_efficiency(a, [play], 2025)["epa_matched_plays"] == 1
+
+
+def test_coach_contract_is_not_fuzzy_matched_to_player_rows():
+    coach = _contract("Quincy Testarro", pos="HC", ctype="coach")
+    eff = ct.calculate_contract_performance_efficiency(coach, [_play(qb="Q.Testarro", epa=0.5)], 2025)
+    assert eff["epa_matched_plays"] == 0
+
+
+def test_nan_and_inf_epa_values_are_ignored():
+    c = _contract("Quincy Testarro")
+    plays = [_play(qb="Q.Testarro", epa=float("nan")), _play(qb="Q.Testarro", epa=float("inf")), _play(qb="Q.Testarro", epa=0.5)]
+    eff = ct.calculate_contract_performance_efficiency(c, plays, 2025)
+    assert eff["total_epa"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Quincy Testarro", ("q", "testarro")),
+    ("Q.Testarro", ("q", "testarro")),
+    ("Sam Rivers Jr.", ("s", "rivers")),
+    ("Zed St. Marlow", ("z", "st marlow")),
+    ("Jos\u00e9 Alvarez", ("j", "alvarez")),
+    ("Mac Jones", ("m", "jones")),
+    ("Cher", ("", "cher")),
+    ("", None),
+    (None, None),
+    ("   ", None),
+])
+def test_name_match_key_forms(raw, expected):
+    assert ct.name_match_key(raw) == expected
+
+
+def test_dossier_does_not_warn_for_positions_that_never_appear_in_name_fields(monkeypatch):
+    c = _contract("Quincy Testarro", pos="DEF")
+    monkeypatch.setattr(ct, "NFL_CONTRACTS", [c])
+    out = cli.strip_ansi(ct.render_player_contract_view("Quincy Testarro", plays=[_play(qb="N.Nobody", epa=0.8)], season=2025))
+    assert "EPA unavailable" not in out
+
+
+def test_roi_card_labels_epa_unavailable_when_only_fantasy_points_match(monkeypatch):
+    c = _contract("Quincy Testarro")
+    monkeypatch.setattr(ct, "NFL_CONTRACTS", [c])
+    monkeypatch.setattr(
+        "nfl_stat_cli.fantasy.compute_player_fantasy_profile", lambda name, plays: {"points_ppr": 12.0}
+    )
+    out = cli.strip_ansi(ct.render_player_contract_view("Quincy Testarro", plays=[_play(qb="N.Nobody")], season=2025))
+    assert "unavailable (no name match)" in out
+    assert "Season Fantasy Points:    12.0" in out
