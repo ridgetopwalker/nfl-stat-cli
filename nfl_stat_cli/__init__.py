@@ -839,8 +839,9 @@ def get_team_coaching_staff(team_abbr: str, season: Optional[int] = None) -> Dic
     """
     if not coaching_season_cataloged(season):
         return {}
+    # NFL_COACHING_STAFFS is the one cataloged snapshot (see COACHING_STAFFS_BY_SEASON)
     resolved = resolve_team_abbr(team_abbr) or team_abbr.upper()
-    return NFL_COACHING_STAFFS.get(resolved, {})  # the one cataloged snapshot (COACHING_STAFFS_BY_SEASON)
+    return NFL_COACHING_STAFFS.get(resolved, {})
 
 
 def get_team_head_coach(team_abbr: str, season: Optional[int] = None) -> str:
