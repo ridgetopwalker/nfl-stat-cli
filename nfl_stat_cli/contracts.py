@@ -171,11 +171,6 @@ def contract_season_cataloged(season: Optional[int]) -> bool:
     return True if season is None else as_season(season) in CONTRACT_SEASONS
 
 
-def contracts_cataloged_for(seasons: Any) -> bool:
-    """True when at least one season in ``seasons`` is cataloged; unknown seasons (0) and other seasons never count."""
-    return any(as_season(s) in CONTRACT_SEASONS for s in seasons)
-
-
 def contract_catalog_note(season: Optional[int] = None) -> str:
     """One-line statement of what the contract data can and cannot say for ``season``."""
     cataloged = sorted(CONTRACT_SEASONS)

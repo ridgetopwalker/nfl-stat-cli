@@ -66,7 +66,6 @@ from .contracts import (
     NFL_CONTRACTS,
     contract_catalog_note,
     contract_season_cataloged,
-    contracts_cataloged_for,
     find_contract_by_name,
     get_contracts_by_team,
     get_contracts_by_position,
@@ -3500,11 +3499,6 @@ class StatEngine:
             "guaranteed_m": gtd_val,
             "contract_value_m": tot_val,
         }
-        if not contracts_cataloged_for(p.get("season") for p in plays):
-            # contracts are cataloged for some seasons only: with no play from one, report 0, not another year's row.
-            # (A multi-season set keeps the snapshot figure; the query handler always filters to one season.)
-            for key in sorted(_CONTRACT_STAT_NAMES):
-                base[key] = 0.0
         return base
 
     @staticmethod
@@ -6907,6 +6901,9 @@ def handle_nl_query_result(
 
     if intent == "coaching_staff" and season and not coaching_season_cataloged(season):
         return header + "\n" + render_coaching_staff_view(team or "", season=season)
+    if parsed.get("stat_name") in _CONTRACT_STAT_NAMES and season and not contract_season_cataloged(season):
+        # the note above says why; a ranking built from another season's contracts would be misleading
+        return header + f"\n  {C.YELLOW}⚠ No contract-based ranking is shown for season {season}.{C.RESET}"
 
     if intent == "coaching_staff":
         resolved_t = resolve_team_abbr(team) or team or "KC"

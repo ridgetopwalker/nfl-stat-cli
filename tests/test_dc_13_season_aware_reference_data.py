@@ -90,13 +90,23 @@ def _mahomes_rows(season):
                  qb_name="Patrick Mahomes", play_type="pass", pass_attempt=0, rush_attempt=0)]
 
 
-def test_contract_stats_are_not_attached_to_plays_of_an_uncataloged_season(tmp_path):
+def _contract_query(tmp_path, season):
     eng = cli.StatEngine(storage_dir=tmp_path)
-    in_snapshot = eng._compute_base_metrics(_mahomes_rows(SNAP_CONTRACT))
-    assert in_snapshot["cap_hit"] > 0 and in_snapshot["apy"] > 0
+    parsed = {"intent": "stat_query", "query": f"cap hit leaders {season}", "season": season,
+              "stat_name": "cap_hit", "group_by": "player"}
+    return cli.strip_ansi(cli.handle_nl_query_result(parsed, eng, _mahomes_rows(season)))
+
+
+def test_contract_rankings_are_withheld_for_an_uncataloged_season(tmp_path):
     for season in (SNAP_CONTRACT + 1, SNAP_CONTRACT - 1):
-        m = eng._compute_base_metrics(_mahomes_rows(season))
-        assert m["cap_hit"] == 0 and m["apy"] == 0 and m["salary"] == 0 and m["contract_value_m"] == 0
+        out = _contract_query(tmp_path, season)
+        assert "Contract data is not cataloged" in out and "No contract-based ranking is shown" in out
+    assert "No contract-based ranking" not in _contract_query(tmp_path, SNAP_CONTRACT)
+
+
+def test_the_engine_itself_stays_season_blind_for_contract_metrics(tmp_path):
+    eng = cli.StatEngine(storage_dir=tmp_path)  # gating is a query-layer decision, not a metrics decision
+    assert eng._compute_base_metrics(_mahomes_rows(SNAP_CONTRACT + 1))["cap_hit"] > 0
 
 
 def test_query_notes_explain_missing_reference_data():
@@ -166,21 +176,11 @@ def test_surname_only_registry_players_still_resolve_from_an_initial_form():
 
 # --- mixed, unknown and malformed seasons -----------------------------------------------------------
 
-def test_contracts_attach_when_any_play_is_from_a_cataloged_season(tmp_path):
-    eng = cli.StatEngine(storage_dir=tmp_path)
-    mixed = _mahomes_rows(SNAP_CONTRACT) + _mahomes_rows(SNAP_CONTRACT + 1)
-    assert eng._compute_base_metrics(mixed)["cap_hit"] > 0
-    only_unknown = eng._compute_base_metrics(_mahomes_rows(0))
-    assert only_unknown["cap_hit"] == 0 and only_unknown["apy"] == 0
-    assert eng._compute_base_metrics([])["cap_hit"] == 0
-
-
 @pytest.mark.parametrize("bad", [float("nan"), "n/a", ""])
 def test_a_malformed_season_is_unknown_not_an_error(bad):
     assert ct.as_season(bad) == 0 and ct.as_season(None) == 0
     assert ct.contract_season_cataloged(bad) is False
     assert cli.coaching_season_cataloged(bad) is False
-    assert ct.contracts_cataloged_for([bad]) is False
 
 
 def test_team_view_distinguishes_a_missing_team_from_a_missing_season(monkeypatch, tmp_path):
