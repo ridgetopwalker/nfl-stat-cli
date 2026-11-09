@@ -21,8 +21,10 @@ import operator
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -9385,21 +9387,68 @@ def render_stats_catalog(engine: StatEngine) -> str:
 # IPC Error Reporting & Self-Healing Agent Signaling
 # ==============================================================================
 
+ERROR_IPC_ENV = "NFL_STAT_ENABLE_ERROR_IPC"
+GIT_UPDATE_ENV = "NFL_STAT_ALLOW_GIT_UPDATE"
+IPC_WAIT_TIMEOUT_SECONDS = 600.0
+_IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
+IPC_MAX_FILE_BYTES = 65536
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def error_ipc_enabled() -> bool:
+    """The `/error` agent hand-off is opt-in (set NFL_STAT_ENABLE_ERROR_IPC=1)."""
+    return _truthy_env(ERROR_IPC_ENV)
+
+
+def validate_report_id(report_id: str) -> str:
+    """Return the id unchanged if it is a well-formed report id, otherwise raise ValueError."""
+    if not isinstance(report_id, str) or not _IPC_REPORT_ID_RE.fullmatch(report_id):
+        raise ValueError(f"Invalid error report id: {str(report_id)[:40]!r}")
+    return report_id
+
+
+def sanitize_ipc_text(value: Any, limit: int = 500) -> str:
+    """Make text read from the IPC directory safe to print: strip ANSI/control characters and cap length."""
+    text = strip_ansi(str(value if value is not None else ""))
+    text = "".join(ch if (ch.isprintable() or ch == " ") else " " for ch in text)
+    return text[:limit]
+
+
 def get_ipc_dir() -> Path:
-    """Returns the .error_ipc directory path, creating pending/resolved/history subfolders."""
-    try:
-        pkg_root = Path(__file__).resolve().parent.parent
-        if (pkg_root / ".git").exists() or (pkg_root / "pyproject.toml").exists():
-            ipc_path = pkg_root / ".error_ipc"
-        else:
-            ipc_path = Path.cwd() / ".error_ipc"
-    except Exception:
-        ipc_path = Path.cwd() / ".error_ipc"
-    ipc_path.mkdir(parents=True, exist_ok=True)
-    (ipc_path / "pending").mkdir(parents=True, exist_ok=True)
-    (ipc_path / "resolved").mkdir(parents=True, exist_ok=True)
-    (ipc_path / "history").mkdir(parents=True, exist_ok=True)
+    """
+    Returns the error-report IPC directory (pending/resolved/history), creating it with owner-only
+    permissions. Lives in the user's private state dir; override with NFL_STAT_IPC_DIR.
+    """
+    override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
+    ipc_path = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
+    for sub in ("", "pending", "resolved", "history"):
+        d = ipc_path / sub if sub else ipc_path
+        d.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            st = os.lstat(d)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+                raise PermissionError(f"Refusing to use IPC directory not owned by the current user or reached through a symlink: {d.name}")
+            try:
+                os.chmod(d, 0o700)
+            except OSError:
+                pass
     return ipc_path
+
+
+def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
+    """Read a small regular JSON file from the IPC dir; never follows symlinks or blocks on special files."""
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > IPC_MAX_FILE_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 def create_error_report(
@@ -9408,10 +9457,10 @@ def create_error_report(
     user_explanation: str = "",
     season: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Serializes an error report for a natural-language query and writes it to .error_ipc/pending/."""
+    """Serializes an error report for a natural-language query and writes it to the IPC pending dir."""
     ipc_dir = get_ipc_dir()
     now_dt = dt.datetime.now()
-    report_id = f"err_{now_dt.strftime('%Y%m%d_%H%M%S')}"
+    report_id = f"err_{now_dt.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
     report_data = {
         "id": report_id,
         "timestamp": now_dt.isoformat(),
@@ -9422,10 +9471,8 @@ def create_error_report(
         "version": __version__,
         "status": "pending",
     }
-    with open(ipc_dir / "pending" / f"{report_id}.json", "w", encoding="utf-8") as f:
-        json.dump(report_data, f, indent=2)
-    with open(ipc_dir / "pending" / "latest.json", "w", encoding="utf-8") as f:
-        json.dump(report_data, f, indent=2)
+    _atomic_write_json(ipc_dir / "pending" / f"{report_id}.json", report_data)
+    _atomic_write_json(ipc_dir / "pending" / "latest.json", report_data)
     return report_data
 
 
@@ -9436,6 +9483,7 @@ def write_resolution(
     status: str = "resolved",
 ) -> Dict[str, Any]:
     """Writes a resolution signal file indicating an error report has been addressed."""
+    validate_report_id(report_id)
     ipc_dir = get_ipc_dir()
     res_data = {
         "id": report_id,
@@ -9444,10 +9492,8 @@ def write_resolution(
         "summary": summary,
         "timestamp": dt.datetime.now().isoformat(),
     }
-    with open(ipc_dir / "resolved" / f"{report_id}.json", "w", encoding="utf-8") as f:
-        json.dump(res_data, f, indent=2)
-    with open(ipc_dir / "resolved" / "latest.json", "w", encoding="utf-8") as f:
-        json.dump(res_data, f, indent=2)
+    _atomic_write_json(ipc_dir / "resolved" / f"{report_id}.json", res_data)
+    _atomic_write_json(ipc_dir / "resolved" / "latest.json", res_data)
     pending_file = ipc_dir / "pending" / f"{report_id}.json"
     if pending_file.exists():
         history_file = ipc_dir / "history" / f"{report_id}.json"
@@ -9470,40 +9516,38 @@ def write_resolution(
 def wait_for_resolution(
     report_id: str,
     poll_interval: float = 1.0,
+    timeout: Optional[float] = IPC_WAIT_TIMEOUT_SECONDS,
 ) -> Optional[Dict[str, Any]]:
-    """Polls .error_ipc/resolved/ until the resolution payload appears or the user interrupts."""
+    """
+    Polls the IPC resolved dir until a matching resolution payload appears.
+    Returns None when the timeout elapses (never waits forever). Raises ValueError for a malformed id.
+    Returns the payload only; it never reloads code or acts on the payload.
+    """
+    validate_report_id(report_id)
     ipc_dir = get_ipc_dir()
     target_res = ipc_dir / "resolved" / f"{report_id}.json"
     latest_res = ipc_dir / "resolved" / "latest.json"
+    deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
 
     while True:
         for p in (target_res, latest_res):
-            if p.exists():
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if data.get("id") == report_id and data.get("status") == "resolved":
-                        return data
-                except Exception:
-                    pass
+            data = _read_ipc_json(p)
+            if data is not None and data.get("id") == report_id and data.get("status") == "resolved":
+                return data
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
         time.sleep(poll_interval)
 
 
 def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
     """
     Cleanly reload nfl-stat-cli and all its submodules in-place.
-    Optionally pulls git updates first.
     Purges cached submodules from sys.modules to ensure fresh imports.
+    ``pull_git`` is accepted for backward compatibility but is ignored: reloading never runs git.
+    Use git_update_package() for an explicit, gated update.
     """
     import sys
     import importlib
-
-    if pull_git:
-        try:
-            import subprocess
-            subprocess.run(["git", "pull"], capture_output=True, text=True, timeout=25)
-        except Exception:
-            pass
 
     # Purge cached submodules so fresh code is loaded from disk
     for m in list(sys.modules.keys()):
@@ -9515,6 +9559,31 @@ def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
 
     import nfl_stat_cli as _cur_mod
     return importlib.reload(_cur_mod)
+
+
+def git_update_package() -> Tuple[bool, str]:
+    """
+    Explicit, opt-in self-update: `git pull --ff-only` pinned to this package's own checkout.
+    Requires NFL_STAT_ALLOW_GIT_UPDATE=1, an interactive terminal, and a `.git` directory at the package root.
+    Never invoked by /reload.
+    """
+    if not _truthy_env(GIT_UPDATE_ENV):
+        return False, f"Git update is disabled. Set {GIT_UPDATE_ENV}=1 to allow `/update --git`."
+    if not (hasattr(sys.stdin, "isatty") and sys.stdin.isatty() and hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
+        return False, "Git update requires an interactive terminal."
+    pkg_root = Path(__file__).resolve().parent.parent
+    git_bin = shutil.which("git")
+    if not git_bin or not (pkg_root / ".git").exists():
+        return False, "This install is not a git checkout; update it with your package manager instead."
+    try:
+        res = subprocess.run(
+            [git_bin, "-C", str(pkg_root), "pull", "--ff-only"],
+            cwd=str(pkg_root), capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"git pull failed: {sanitize_ipc_text(exc, 200)}"
+    out = sanitize_ipc_text((res.stdout or "") + " " + (res.stderr or ""), 400).strip()
+    return res.returncode == 0, out or ("Already up to date." if res.returncode == 0 else f"git exited {res.returncode}")
 
 
 
@@ -9553,8 +9622,8 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/export-stats{C.RESET} [file.json]       Export custom stats catalog to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
-    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Report parsing or interpretation error to Antigravity AI agent
-    {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place with latest patches from Antigravity
+    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save a local error report (opt-in: NFL_STAT_ENABLE_ERROR_IPC=1)
+    {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs NFL_STAT_ALLOW_GIT_UPDATE=1)
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
@@ -9981,6 +10050,10 @@ def interactive_tui(
                     else:
                         print(f"  {C.DIM}No natural-language query has been run in this session yet.{C.RESET}")
                 elif cmd_token in ("/error", "/bug", "/report"):
+                    if not error_ipc_enabled():
+                        print(f"  {C.YELLOW}⚠ Error-report hand-off is disabled by default.{C.RESET}")
+                        print(f"  {C.DIM}Set {ERROR_IPC_ENV}=1 to write reports to the private local IPC folder.{C.RESET}")
+                        continue
                     if not last_parsed_nl or not last_query_raw:
                         print(f"  {C.YELLOW}⚠ No natural-language query has been run in this session yet.{C.RESET}")
                         print(f"  {C.DIM}Run a query first (e.g. 'which coach has called the most timeouts in the 4th qrt'), then type `/error`.{C.RESET}")
@@ -10004,59 +10077,83 @@ def interactive_tui(
                         season=active_season,
                     )
                     rep_id = rep["id"]
-                    print(f"\n  {C.GREEN}✔ Error report `{rep_id}` created & sent to Antigravity IPC!{C.RESET}")
+                    print(f"\n  {C.GREEN}✔ Error report `{rep_id}` saved to the local error IPC folder.{C.RESET}")
                     print(f"  {C.DIM}Saved to: {get_ipc_dir() / 'pending' / 'latest.json'}{C.RESET}")
-                    print(f"  {C.CYAN}💡 Antigravity agent will inspect the AST parser, patch the code, run tests, and push the commit.{C.RESET}")
+                    print(f"  {C.CYAN}💡 A developer or agent you run locally can inspect the report and write a resolution.{C.RESET}")
 
                     try:
-                        wait_choice = prompt_input(f"\n  {C.BOLD}Wait for Antigravity AI fix and auto-reload now? [Y/n]: {C.RESET}").strip().lower()
+                        wait_choice = prompt_input(f"\n  {C.BOLD}Wait up to {int(IPC_WAIT_TIMEOUT_SECONDS // 60)} min for a resolution signal? [y/N]: {C.RESET}").strip().lower()
                     except (EOFError, KeyboardInterrupt):
                         wait_choice = "n"
 
-                    if wait_choice in ("", "y", "yes"):
-                        print(f"\n  {C.GOLD}⏳ Waiting for Antigravity signal... (Press Ctrl+C to stop waiting and return to prompt){C.RESET}")
+                    if wait_choice in ("y", "yes"):
+                        print(f"\n  {C.GOLD}⏳ Waiting for a resolution signal... (Press Ctrl+C to stop waiting and return to prompt){C.RESET}")
                         try:
                             res = wait_for_resolution(rep_id)
                         except KeyboardInterrupt:
                             print(f"\n  {C.YELLOW}Stopped waiting. Report `{rep_id}` remains pending.{C.RESET}")
-                            print(f"  {C.DIM}Once the fix is committed, type `/reload` to apply the update.{C.RESET}")
+                            print(f"  {C.DIM}Once a fix is deployed, type `/reload` to apply it.{C.RESET}")
                             continue
 
-                        if res:
-                            print(f"\n  {C.GREEN}{C.BOLD}🎉 Issue has been solved by Antigravity!{C.RESET}")
+                        if res is None:
+                            print(f"  {C.YELLOW}⚠ Timed out waiting. Report `{rep_id}` remains pending; type `/reload` after a fix is deployed.{C.RESET}")
+                        else:
+                            print(f"\n  {C.GREEN}{C.BOLD}✔ A resolution signal was received for `{rep_id}`.{C.RESET}")
                             if res.get("commit"):
-                                print(f"  {C.BOLD}Commit:{C.RESET} {res.get('commit')}")
+                                print(f"  {C.BOLD}Commit:{C.RESET} {sanitize_ipc_text(res.get('commit'), 80)}")
                             if res.get("summary"):
-                                print(f"  {C.BOLD}Fix Details:{C.RESET} {res.get('summary')}")
-                            print(f"  {C.CYAN}🔄 Reloading programming and re-evaluating query...{C.RESET}\n")
+                                print(f"  {C.BOLD}Fix Details:{C.RESET} {sanitize_ipc_text(res.get('summary'))}")
+                            print(f"  {C.DIM}The text above came from a local file and is not verified.{C.RESET}")
                             try:
-                                _cur_mod = reload_nfl_stat_cli(pull_git=False)
-                                engine = _cur_mod.StatEngine()
-                                re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
-                                    last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
-                                )
-                                last_parsed_nl = re_parsed
-                                print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive))
-                            except Exception as re_err:
-                                print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
+                                reload_choice = prompt_input(f"\n  {C.BOLD}Reload the code and re-run your query now? [y/N]: {C.RESET}").strip().lower()
+                            except (EOFError, KeyboardInterrupt):
+                                reload_choice = "n"
+                            if reload_choice in ("y", "yes"):
+                                try:
+                                    _cur_mod = reload_nfl_stat_cli()
+                                    engine = _cur_mod.StatEngine()
+                                    re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
+                                        last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
+                                    )
+                                    last_parsed_nl = re_parsed
+                                    print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive))
+                                except Exception as re_err:
+                                    print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
+                            else:
+                                print(f"  {C.DIM}Not reloading. Type `/reload` whenever you want to apply updated code.{C.RESET}")
                     else:
-                        print(f"  {C.DIM}Report saved. Type `/reload` or `/update` once the fix is deployed to update your programming.{C.RESET}")
+                        print(f"  {C.DIM}Report saved. Type `/reload` once a fix is deployed to update your programming.{C.RESET}")
                 elif cmd_token in ("/reload", "/update", "/refresh"):
-                    print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place...{C.RESET}")
+                    if cmd_token == "/update" and "--git" in cmd_args:
+                        try:
+                            go = prompt_input(f"  {C.BOLD}Run `git pull --ff-only` in the nfl-stat-cli checkout? [y/N]: {C.RESET}").strip().lower() in ("y", "yes") if is_interactive else False
+                        except (EOFError, KeyboardInterrupt):
+                            go = False
+                        if not go:
+                            print(f"  {C.DIM}Git update skipped.{C.RESET}")
+                            continue
+                        ok_git, git_msg = git_update_package()
+                        print(f"  {(C.GREEN if ok_git else C.YELLOW)}{'✔' if ok_git else '⚠'} {git_msg}{C.RESET}")
+                        if not ok_git:
+                            continue
+                        try:
+                            if prompt_input(f"  {C.BOLD}Reload the updated code now? [y/N]: {C.RESET}").strip().lower() not in ("y", "yes"):
+                                print(f"  {C.DIM}Not reloading. Type `/reload` when ready.{C.RESET}")
+                                continue
+                        except (EOFError, KeyboardInterrupt):
+                            continue
+                    print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place (no git pull)...{C.RESET}")
                     try:
-                        _cur_mod = reload_nfl_stat_cli(pull_git=True)
+                        _cur_mod = reload_nfl_stat_cli()
                         engine = _cur_mod.StatEngine()
-                        ipc_dir = get_ipc_dir()
-                        latest_res_p = ipc_dir / "resolved" / "latest.json"
                         res_info = ""
-                        if latest_res_p.exists():
+                        if error_ipc_enabled():
                             try:
-                                with open(latest_res_p, "r", encoding="utf-8") as f:
-                                    r_data = json.load(f)
-                                if r_data.get("summary"):
-                                    res_info = f" (Latest resolution: {r_data.get('summary')})"
+                                r_data = _read_ipc_json(get_ipc_dir() / "resolved" / "latest.json")
                             except Exception:
-                                pass
+                                r_data = None
+                            if r_data and r_data.get("summary"):
+                                res_info = f" (Latest resolution note: {sanitize_ipc_text(r_data.get('summary'))})"
                         print(f"  {C.GREEN}✔ Programming successfully reloaded!{res_info}{C.RESET}")
                     except Exception as r_err:
                         print(f"  {C.RED}✖ Reload failed: {r_err}{C.RESET}")
