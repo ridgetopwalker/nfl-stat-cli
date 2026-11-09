@@ -1467,6 +1467,33 @@ def _downcast_dataframe_floats(df: Any) -> Any:
     return df
 
 
+SAMPLE_DATA_SOURCE_LABEL = "SAMPLE DATA - built-in demo plays, NOT live NFL data"
+SAMPLE_DATA_WARNING = (
+    "SAMPLE DATA: no live NFL data backend was available. Results below are computed from a few "
+    "built-in demo plays and are NOT real season statistics."
+)
+
+
+class LiveDataUnavailableError(RuntimeError):
+    """Raised when live data is required (require_live) but only sample data is available."""
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _one_line(text: Any, limit: int = 200) -> str:
+    """Printable single-line form of backend error text (no ANSI, control characters or newlines)."""
+    return "".join(ch if ch.isprintable() else " " for ch in strip_ansi(str(text)))[:limit]
+
+
+def sample_data_footer(plays: Optional[List[Dict[str, Any]]]) -> str:
+    """Return a SAMPLE DATA footer when any of the given plays came from the built-in sample set."""
+    if plays and any(p.get("is_sample") for p in plays):
+        return f"\n  {C.BOLD}{C.YELLOW}\u26a0 {SAMPLE_DATA_WARNING}{C.RESET}"
+    return ""
+
+
 class NFLDataBridge:
     """
     Loads NFL Play-by-Play and Roster/Team data from:
@@ -1475,16 +1502,21 @@ class NFLDataBridge:
     3. Local cache / built-in sample dataset for instant offline operation
     """
 
-    def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto") -> None:
+    def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto", require_live: Optional[bool] = None) -> None:
         self.cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.engine = engine.lower()
-        self.last_source_used = "built-in-nflverse-sample"
+        self.require_live = _env_flag("NFL_STAT_REQUIRE_LIVE") if require_live is None else bool(require_live)
+        self.last_source_used = SAMPLE_DATA_SOURCE_LABEL
         self.last_error: Optional[str] = None
+        self.is_sample = False
 
     def load_pbp(self, seasons: List[int], spinner: Optional[Any] = None) -> List[Dict[str, Any]]:
         """Load play-by-play rows for the requested seasons using the selected engine."""
         seasons_label = ", ".join(map(str, seasons))
+        # Reset per-load state so a previous load's error/source never leaks into this one
+        self.last_error = None
+        self.is_sample = False
         if spinner:
             spinner.update(f"Loading NFL play-by-play data for years [{seasons_label}]...")
 
@@ -1500,11 +1532,23 @@ class NFLDataBridge:
                 self.last_source_used = "nflverse / nflreadr (R)"
                 return rows
 
-        if spinner:
-            spinner.update("Downcasting floats & preparing offline dataset...")
+        if self.require_live:
+            detail = f" ({_one_line(self.last_error)})" if self.last_error else " (no live backend loaded any rows)"
+            raise LiveDataUnavailableError(
+                "Live NFL data is required (--require-live / NFL_STAT_REQUIRE_LIVE) but no live backend "
+                "could load it; refusing to fall back to sample data" + detail
+            )
 
-        self.last_source_used = "built-in nflverse/sdv offline dataset"
+        if spinner:
+            spinner.update("Preparing built-in SAMPLE dataset (not live data)...")
+
+        self.is_sample = True
+        self.last_source_used = SAMPLE_DATA_SOURCE_LABEL
+        if not self.last_error:
+            self.last_error = "no live data backend available (nothing installed or all backends failed)"
         norm_sample = [self._normalize_row(r, idx) for idx, r in enumerate(SAMPLE_PBP_PLAYS, 1)]
+        for r in norm_sample:
+            r["is_sample"] = True
         # Never substitute another season's rows for the requested ones
         return [r for r in norm_sample if int(r.get("season", 0)) in seasons]
 
@@ -6737,6 +6781,22 @@ def handle_nl_query_result(
     camera_override: Optional[str] = None,
     interactive: bool = False,
 ) -> str:
+    """Render a parsed NL query; stamps a SAMPLE DATA footer when sample plays back the answer."""
+    out = _handle_nl_query_result_impl(
+        parsed, engine, all_plays,
+        view_override=view_override, camera_override=camera_override, interactive=interactive,
+    )
+    return out + sample_data_footer(all_plays)
+
+
+def _handle_nl_query_result_impl(
+    parsed: Dict[str, Any],
+    engine: StatEngine,
+    all_plays: List[Dict[str, Any]],
+    view_override: str = "auto",
+    camera_override: Optional[str] = None,
+    interactive: bool = False,
+) -> str:
     intent = parsed.get("intent", "stat_query")
     if intent == "ambiguous":
         stat_list = ", ".join(list(engine.stats.keys())[:8]) + "..."
@@ -9695,10 +9755,12 @@ def interactive_tui(
             plays = bridge.load_pbp(seasons_to_load, spinner=sp)
     detected_slm = NaturalLanguageStatAssistant.detect_ollama_model(slm_model)
     slm_status = f"Ollama SLM ({detected_slm})" if detected_slm else "Built-in Deterministic AST Parser (Offline)"
+    if any(p.get("is_sample") for p in plays):
+        print(f"  {C.BOLD}{C.RED}\u26a0 {SAMPLE_DATA_WARNING}{C.RESET}")
+        if bridge.last_error:
+            print(f"  {C.YELLOW}  Live backend note: {_one_line(bridge.last_error, 95)}{C.RESET}")
     if not is_interactive:
         print(f"  {C.GREEN}✔ Loaded {len(plays)} play-by-play records via [{bridge.last_source_used}]{C.RESET}")
-        if bridge.last_error and "offline" in bridge.last_source_used:
-            print(f"  {C.YELLOW}⚠ Live backend note ({bridge.last_error[:95]}) — using built-in offline dataset.{C.RESET}")
         print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}] • Season: [{active_season}] • Camera: [{default_camera}]{C.RESET}")
         if not plays_for_season(plays, active_season):
             avail = ", ".join(map(str, available_seasons(plays))) or "none"
@@ -9714,7 +9776,8 @@ def interactive_tui(
         try:
             if _GLOBAL_COMPLETER:
                 _GLOBAL_COMPLETER.set_context(None)
-            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat > {C.RESET}").lstrip("\ufeff").strip()
+            _sample_tag = f"{C.BOLD}{C.RED}[SAMPLE DATA]{C.RESET} " if any(p.get("is_sample") for p in plays) else ""
+            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat {_sample_tag}{C.BOLD}{C.GOLD}> {C.RESET}").lstrip("\ufeff").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting nfl-stat-cli.")
             break
@@ -9962,12 +10025,20 @@ def interactive_tui(
                         print(f"  Current play camera: {C.BOLD}{default_camera}{C.RESET} (Usage: `/camera behind-offense`, `/camera behind-defense`, or `/camera sideline`)")
                 elif cmd_token == "/season":
                     if cmd_args and cmd_args[0].isdigit():
+                        previous_season = active_season
                         active_season = int(cmd_args[0])
                         if not plays_for_season(plays, active_season):
-                            with ConsoleSpinner(f"Loading year {active_season} & downcasting floats...", enabled=is_interactive) as sp:
-                                more = bridge.load_pbp([active_season], spinner=sp)
+                            try:
+                                with ConsoleSpinner(f"Loading year {active_season} & downcasting floats...", enabled=is_interactive) as sp:
+                                    more = bridge.load_pbp([active_season], spinner=sp)
+                            except LiveDataUnavailableError as exc:
+                                print(f"  {C.RED}\u2716 {_one_line(exc)}{C.RESET}")
+                                active_season = previous_season
+                                continue
                             if more:
                                 plays.extend(more)
+                                if any(p.get("is_sample") for p in more):
+                                    print(f"  {C.BOLD}{C.RED}\u26a0 {SAMPLE_DATA_WARNING}{C.RESET}")
                         print(f"  {C.GREEN}✔ Active season set to: {active_season}{C.RESET}")
                         if not plays_for_season(plays, active_season):
                             avail = ", ".join(map(str, available_seasons(plays))) or "none"
@@ -10154,6 +10225,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Camera perspective when rendering a play on the ASCII field (default: behind-offense)",
     )
     common.add_argument("--slm-model", default=argparse.SUPPRESS, help="Optional local Ollama SLM model name (e.g. qwen2.5:1.5b, llama3.2:1b) for NL queries")
+    common.add_argument("--require-live", action="store_true", default=argparse.SUPPRESS, help="Fail instead of falling back to built-in sample data when no live NFL data backend is available (also NFL_STAT_REQUIRE_LIVE=1)")
     common.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help="Disable ANSI color codes")
 
     parser = argparse.ArgumentParser(
@@ -10258,7 +10330,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.no_color:
         C.disable()
 
-    bridge = NFLDataBridge(engine=args.engine)
+    bridge = NFLDataBridge(engine=args.engine, require_live=True if getattr(args, "require_live", False) else None)
     engine = StatEngine()
     resolved_camera = args.camera or "behind-offense"
     cmd = args.command or "tui"
@@ -10312,6 +10384,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             all_plays = bridge.load_pbp(sorted({target_season - 1, target_season}))
             print(AsciiArtRenderer.banner())
             print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
+            if bridge.is_sample:
+                print(f"  {C.BOLD}{C.RED}\u26a0 {SAMPLE_DATA_WARNING}{C.RESET}")
             print(handle_nl_query_result(parsed, engine, all_plays, view_override=args.view, camera_override=args.camera))
             return 0
 
@@ -10320,6 +10394,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         print(AsciiArtRenderer.banner())
         print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
+        if bridge.is_sample:
+            print(f"  {C.BOLD}{C.RED}\u26a0 {SAMPLE_DATA_WARNING}{C.RESET}")
         season_plays = require_season_plays(all_plays, args.season) if cmd != "stat-page" else plays_for_season(all_plays, args.season)
 
         if cmd == "stat":
@@ -10414,8 +10490,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 unit="idx",
             )
             print(render_stat_page(engine, all_plays))
+        if bridge.is_sample:
+            print(sample_data_footer(all_plays))
         return 0
-    except (KeyError, ValueError, SyntaxError, FileNotFoundError, json.JSONDecodeError) as exc:
+    except (LiveDataUnavailableError, KeyError, ValueError, SyntaxError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(f"\n{C.RED}✖ Error: {exc}{C.RESET}", file=sys.stderr)
         return 1
 
