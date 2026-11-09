@@ -4,8 +4,8 @@ import pytest
 import nfl_stat_cli as cli
 from nfl_stat_cli import contracts as ct
 
-SNAP_COACH = cli.COACHING_SNAPSHOT_SEASON
-SNAP_CONTRACT = ct.CONTRACT_SNAPSHOT_SEASON
+SNAP_COACH = getattr(cli, "COACHING_SNAPSHOT_SEASON", 2025)
+SNAP_CONTRACT = getattr(ct, "CONTRACT_SNAPSHOT_SEASON", 2024)
 
 
 def _row(**kw):
