@@ -314,21 +314,130 @@ def compute_all_fantasy_leaders(
 ) -> List[Dict[str, Any]]:
     """
     Extract all players who touched the ball (or threw/caught passes) in plays,
-    evaluate their complete fantasy scoring profile, and sort by fantasy points.
+    evaluate their complete fantasy scoring profile in a single O(N) pass,
+    and sort by fantasy points.
     """
     target_plays = plays
     if week is not None:
         target_plays = [p for p in target_plays if int(p.get("week", -1)) == int(week)]
 
-    # Collect distinct player keys across qb, rusher, and receiver roles
-    player_keys = set()
-    for p in target_plays:
-        for k in ("qb_name", "rusher_player_name", "receiver_player_name", "player_name"):
-            val = str(p.get(k, "")).strip()
-            if val and val.lower() not in ("unknown qb", "unknown player", "none", ""):
-                player_keys.add(val)
+    from . import KNOWN_PLAYER_POSITIONS
 
-    from . import KNOWN_PLAYER_POSITIONS, get_player_position
+    # First pass: map abbreviations to full names if present
+    canonical_names: Dict[str, str] = {}
+    for p in target_plays:
+        full_name = str(p.get("player_name") or "").strip()
+        if full_name and len(full_name.split()) >= 2:
+            for k in ("passer_player_name", "rusher_player_name", "receiver_player_name"):
+                abbr = str(p.get(k) or "").strip()
+                if abbr and abbr != full_name and abbr.startswith(full_name[0]) and abbr.split(".")[-1] in full_name:
+                    canonical_names[abbr] = full_name
+                    canonical_names[abbr.lower()] = full_name
+
+    player_data: Dict[str, Dict[str, Any]] = {}
+    player_games: Dict[str, Set[str]] = {}
+    player_team: Dict[str, str] = {}
+    player_pos: Dict[str, str] = {}
+
+    def get_record(raw_name: str) -> Dict[str, Any]:
+        c_name = canonical_names.get(raw_name, canonical_names.get(raw_name.lower(), raw_name))
+        if c_name not in player_data:
+            player_data[c_name] = {
+                "player": c_name,
+                "pass_yards": 0.0,
+                "pass_tds": 0,
+                "interceptions": 0,
+                "rush_yards": 0.0,
+                "rush_tds": 0,
+                "rush_attempts": 0,
+                "receptions": 0,
+                "targets": 0,
+                "rec_yards": 0.0,
+                "rec_tds": 0,
+                "fumbles_lost": 0,
+                "two_point_conversions": 0,
+            }
+            player_games[c_name] = set()
+        return player_data[c_name]
+
+    for p in target_plays:
+        gid = str(p.get("game_id", ""))
+        pt = str(p.get("play_type", "")).lower()
+        posteam = str(p.get("posteam", ""))
+
+        # 1. Passing
+        qb = str(p.get("passer_player_name") or p.get("qb_name") or p.get("player_name") or "").strip()
+        if qb and qb.lower() not in ("unknown qb", "unknown player", "none", ""):
+            is_pass = int(p.get("pass_attempt", 0)) == 1 or pt == "pass"
+            is_sack = int(p.get("sack", 0)) == 1
+            if is_pass and not is_sack:
+                rec = get_record(qb)
+                c_name = rec["player"]
+                player_games[c_name].add(gid)
+                if posteam:
+                    player_team[c_name] = posteam
+                player_pos[c_name] = "QB"
+                p_yds = float(p.get("passing_yards") if p.get("passing_yards") is not None else p.get("yards_gained", 0.0))
+                rec["pass_yards"] += p_yds
+                p_td = int(p.get("pass_touchdown") if p.get("pass_touchdown") is not None else p.get("touchdown", 0))
+                rec["pass_tds"] += p_td
+
+            if int(p.get("interception", 0)) == 1:
+                rec = get_record(qb)
+                c_name = rec["player"]
+                player_games[c_name].add(gid)
+                player_pos[c_name] = "QB"
+                rec["interceptions"] += 1
+
+        # 2. Rushing
+        rusher = str(p.get("rusher_player_name") or (p.get("player_name") if pt == "run" else "") or "").strip()
+        if rusher and rusher.lower() not in ("unknown player", "unknown rusher", "none", ""):
+            is_rush = int(p.get("rush_attempt", 0)) == 1 or pt == "run"
+            if is_rush:
+                rec = get_record(rusher)
+                c_name = rec["player"]
+                player_games[c_name].add(gid)
+                if posteam:
+                    player_team[c_name] = posteam
+                if c_name not in player_pos:
+                    raw_pos = str(p.get("rusher_position") or p.get("position") or "").upper()
+                    player_pos[c_name] = raw_pos if raw_pos in ("QB", "RB", "WR", "TE") else "RB"
+                rec["rush_attempts"] += 1
+                r_yds = float(p.get("rushing_yards") if p.get("rushing_yards") is not None else p.get("yards_gained", 0.0))
+                rec["rush_yards"] += r_yds
+                r_td = int(p.get("rush_touchdown") if p.get("rush_touchdown") is not None else p.get("touchdown", 0))
+                rec["rush_tds"] += r_td
+
+        # 3. Receiving
+        receiver = str(p.get("receiver_player_name") or (p.get("player_name") if int(p.get("reception", 0)) == 1 else "") or "").strip()
+        if receiver and receiver.lower() not in ("unknown player", "unknown receiver", "none", ""):
+            rec = get_record(receiver)
+            c_name = rec["player"]
+            player_games[c_name].add(gid)
+            if posteam:
+                player_team[c_name] = posteam
+            if c_name not in player_pos:
+                raw_pos = str(p.get("receiver_position") or p.get("position") or "").upper()
+                player_pos[c_name] = raw_pos if raw_pos in ("QB", "RB", "WR", "TE") else "WR"
+            if (int(p.get("pass_attempt", 0)) == 1 or pt == "pass") and int(p.get("sack", 0)) == 0:
+                rec["targets"] += 1
+            if int(p.get("reception") if p.get("reception") is not None else p.get("complete_pass", 0)) == 1:
+                rec["receptions"] += 1
+                rc_yds = float(p.get("receiving_yards") if p.get("receiving_yards") is not None else p.get("yards_gained", 0.0))
+                rec["rec_yards"] += rc_yds
+                rc_td = int(p.get("touchdown", 0))
+                rec["rec_tds"] += rc_td
+
+        # 4. Fumbles lost & 2-point conversions
+        if int(p.get("fumble_lost", 0)) == 1:
+            fumb_player = rusher or receiver or qb or str(p.get("player_name", "")).strip()
+            if fumb_player:
+                get_record(fumb_player)["fumbles_lost"] += 1
+
+        if int(p.get("two_point_conversion", 0)) == 1:
+            two_pt_player = rusher or receiver or qb or str(p.get("player_name", "")).strip()
+            if two_pt_player:
+                get_record(two_pt_player)["two_point_conversions"] += 1
 
     results: List[Dict[str, Any]] = []
     fmt = scoring_format.strip().lower()
@@ -336,17 +445,42 @@ def compute_all_fantasy_leaders(
         "points_half_ppr" if fmt in ("half", "half_ppr", "0.5") else "points_std"
     )
 
-    for p_name in player_keys:
-        prof = compute_player_fantasy_profile(p_name, target_plays)
-        if prof["games_played"] == 0:
-            continue
-        # Only include players with fantasy contribution (yards > 0, attempts > 0, or points != 0)
-        if prof["pass_yards"] == 0 and prof["rush_yards"] == 0 and prof["rec_yards"] == 0 and prof[sort_key] == 0:
+    for name, r in player_data.items():
+        gp = max(1, len(player_games[name]))
+        std_pts = calculate_player_fantasy_points(
+            pass_yards=r["pass_yards"], pass_tds=r["pass_tds"], interceptions=r["interceptions"],
+            rush_yards=r["rush_yards"], rush_tds=r["rush_tds"], receptions=r["receptions"],
+            rec_yards=r["rec_yards"], rec_tds=r["rec_tds"], fumbles_lost=r["fumbles_lost"],
+            two_point_conversions=r["two_point_conversions"], format_type="standard"
+        )
+        ppr_pts = calculate_player_fantasy_points(
+            pass_yards=r["pass_yards"], pass_tds=r["pass_tds"], interceptions=r["interceptions"],
+            rush_yards=r["rush_yards"], rush_tds=r["rush_tds"], receptions=r["receptions"],
+            rec_yards=r["rec_yards"], rec_tds=r["rec_tds"], fumbles_lost=r["fumbles_lost"],
+            two_point_conversions=r["two_point_conversions"], format_type="ppr"
+        )
+        half_pts = calculate_player_fantasy_points(
+            pass_yards=r["pass_yards"], pass_tds=r["pass_tds"], interceptions=r["interceptions"],
+            rush_yards=r["rush_yards"], rush_tds=r["rush_tds"], receptions=r["receptions"],
+            rec_yards=r["rec_yards"], rec_tds=r["rec_tds"], fumbles_lost=r["fumbles_lost"],
+            two_point_conversions=r["two_point_conversions"], format_type="half_ppr"
+        )
+
+        r["games_played"] = gp
+        r["team"] = player_team.get(name, "")
+        r["points_std"] = std_pts
+        r["points_ppr"] = ppr_pts
+        r["points_half_ppr"] = half_pts
+        r["ppg_std"] = round(std_pts / gp, 2)
+        r["ppg_ppr"] = round(ppr_pts / gp, 2)
+        r["ppg_half_ppr"] = round(half_pts / gp, 2)
+
+        # Skip players with 0 contribution
+        if r["pass_yards"] == 0 and r["rush_yards"] == 0 and r["rec_yards"] == 0 and r[sort_key] == 0:
             continue
 
-        # Position resolution
-        pos = get_player_position(p_name, target_plays) or KNOWN_PLAYER_POSITIONS.get(p_name.lower(), "")
-        prof["position"] = pos
+        pos = KNOWN_PLAYER_POSITIONS.get(name.lower(), player_pos.get(name, "WR"))
+        r["position"] = pos
 
         if position_filter:
             pf = position_filter.strip().upper()
@@ -356,7 +490,7 @@ def compute_all_fantasy_leaders(
             elif pos != pf:
                 continue
 
-        results.append(prof)
+        results.append(r)
 
     results.sort(key=lambda x: (x.get(sort_key, 0.0), x.get("rush_yards", 0.0) + x.get("rec_yards", 0.0) + x.get("pass_yards", 0.0)), reverse=True)
     return results[:limit] if (limit and limit > 0) else results
