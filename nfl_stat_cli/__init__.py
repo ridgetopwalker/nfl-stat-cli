@@ -9726,6 +9726,7 @@ def interactive_tui(
     is_interactive = hasattr(sys.stdout, "isatty") and sys.stdout.isatty() and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
     active_season = default_season
     startup_seasons = seasons_to_load(active_season, load_seasons)
+    warn_if_season_not_loaded(active_season, load_seasons)
     show_startup_loading(is_interactive=is_interactive, seasons=startup_seasons)
     print(AsciiArtRenderer.banner())
     if initial_plays is not None:

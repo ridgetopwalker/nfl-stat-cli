@@ -124,8 +124,22 @@ def test_tui_loads_the_requested_seasons(monkeypatch, tmp_path):
         assert len(seen) == before + 1 and seen[-1] == expected
 
 
-def test_help_mentions_seasons_option_and_lookback_tradeoff(capsys):
+def test_help_mentions_seasons_option_and_lookback_tradeoff(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")
     with pytest.raises(SystemExit):
         cli.main(["stat", "--help"])
     out = " ".join(capsys.readouterr().out.split())
-    assert "--seasons" in out and "prior-season data" in out
+    assert "--seasons" in out and "lookback" in out
+
+
+def test_tui_warns_when_the_default_season_is_not_loaded(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "prompt_input", lambda prompt: "/quit")
+    eng = cli.StatEngine(storage_dir=tmp_path)
+    try:
+        cli.interactive_tui(
+            eng, cli.NFLDataBridge(cache_dir=tmp_path / "c", engine="offline"), slm_model="off", default_season=2025,
+            initial_plays=list(cli.SAMPLE_PBP_PLAYS), load_seasons=[2023],
+        )
+    except SystemExit:
+        pass
+    assert "season 2025 is not in --seasons (2023)" in capsys.readouterr().err
