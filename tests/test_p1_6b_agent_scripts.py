@@ -176,3 +176,20 @@ def test_watcher_ignores_oversized_report_files(tmp_path):
     (pend / f"{rid}.json").write_text(json.dumps({"id": rid, "query": "x" * 400000}))
     res = _run("watch_errors.py", ["--timeout", "0.5", "--interval", "0.1"], _env(tmp_path), tmp_path)
     assert res.returncode == 1
+
+
+def test_resolve_accepts_dash_leading_summary_after_double_dash_and_rejects_abbrev_flags(tmp_path):
+    rep = _make_report(tmp_path)
+    res = _run("resolve.py", ["local", rep["id"], "abc1234", "--", "-1 off-by-one in the parser"], _env(tmp_path), tmp_path)
+    assert res.returncode == 0, res.stderr
+    assert json.loads((tmp_path / "ipc" / "resolved" / f"{rep['id']}.json").read_text())["summary"] == "-1 off-by-one in the parser"
+    res = _run("resolve.py", ["local", rep["id"], "abc1234", "--pu", "x"], _env(tmp_path), tmp_path)
+    assert res.returncode == 2
+
+
+def test_resolve_wsl_requires_an_absolute_repo_path(monkeypatch):
+    mod = _load_resolve()
+    monkeypatch.setenv("NFL_STAT_WSL_REPO", "~/checkout")
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["wsl", "err_20260101_010203_0a1b2c3d", "c", "s"])
+    assert "absolute" in str(exc.value)

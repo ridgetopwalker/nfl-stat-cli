@@ -235,6 +235,12 @@ def test_create_error_report_survives_unserializable_parse(tmp_path, monkeypatch
     circular = {}
     circular["self"] = circular
     rep = cli.create_error_report("q", circular, "n")
-    assert "unserializable_parse" in rep["parsed"]
+    assert "self" in rep["parsed"]  # circular reference is cut off instead of crashing
     rep2 = cli.create_error_report("q", {(1, 2): "tuple key"}, "n")
     assert rep2["id"]
+
+
+def test_unserializable_keys_keep_the_rest_of_the_parse(tmp_path, monkeypatch):
+    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    rep = cli.create_error_report("q", {"stat_name": "epa_per_play", (1, 2): "tuple key"}, "n")
+    assert rep["parsed"]["stat_name"] == "epa_per_play" and rep["parsed"]["(1, 2)"] == "tuple key"

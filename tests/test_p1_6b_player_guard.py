@@ -146,3 +146,16 @@ def test_position_or_team_word_mislabeled_as_player_does_not_refuse(engine, play
               "player": player, "team": None, "group_by": None}
     out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, plays))
     assert "I can't answer that" not in out
+
+
+@pytest.mark.parametrize("player", ["running back", "wide receivers", "tight end", "head coach"])
+def test_multiword_position_word_mislabeled_as_player_does_not_refuse(engine, plays, player):
+    parsed = {"intent": "stat_query", "query": "passing yards", "season": SEASON, "stat_name": "passing_yards",
+              "player": player, "team": None, "group_by": None}
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, plays))
+    assert "I can't answer that" not in out
+
+
+def test_surname_that_is_also_a_common_word_is_not_flagged_unknown(engine):
+    assert cli._unknown_name_tokens("Breece Hall rushing yards", [], engine) == []
+    assert cli._unknown_name_tokens("Zorblax rushing yards", [], engine) == ["zorblax"]

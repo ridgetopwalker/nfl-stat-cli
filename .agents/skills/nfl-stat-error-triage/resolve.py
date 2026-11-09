@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Signal that an nfl-stat error report is fixed, so the waiting nfl-stat session can pick it up.
 
-Usage: python3 resolve.py <local|wsl> <report_id> <commit> "<summary>" [--pull]
+Usage: python3 resolve.py <local|wsl> <report_id> <commit> [--pull] -- "<summary>"
+       (put `--` before the summary if it can start with a dash)
 
   local  write the resolution into $NFL_STAT_IPC_DIR (default ~/.nfl_stat_cli/error_ipc) using the
          nfl_stat_cli package of this checkout (override the checkout with $NFL_STAT_REPO).
-  wsl    do the same inside WSL: needs $NFL_STAT_WSL_REPO (checkout path inside WSL), optionally
+  wsl    do the same inside WSL: needs $NFL_STAT_WSL_REPO (absolute checkout path inside WSL), optionally
          $NFL_STAT_WSL_PYTHON (default: python3) and $NFL_STAT_WSL_IPC_DIR (exported as NFL_STAT_IPC_DIR there).
   --pull (wsl only) first run `git pull --ff-only` in that WSL checkout. Off by default; this is an agent-side
          step, nfl-stat itself never runs git on /reload.
@@ -52,6 +53,8 @@ def resolve_wsl(rid: str, commit: str, summary: str, pull: bool = False) -> int:
     repo = os.environ.get("NFL_STAT_WSL_REPO", "").strip()
     if not repo:
         raise SystemExit("Set NFL_STAT_WSL_REPO to the nfl-stat-cli checkout path inside WSL.")
+    if not repo.startswith("/"):
+        raise SystemExit("NFL_STAT_WSL_REPO must be an absolute path inside WSL (no ~ or $HOME: no shell expands it).")
     py = os.environ.get("NFL_STAT_WSL_PYTHON", "").strip() or "python3"
     # `wsl.exe -e` executes the program directly (no login shell), so the free-text summary is never
     # re-parsed by a shell.
@@ -63,7 +66,7 @@ def resolve_wsl(rid: str, commit: str, summary: str, pull: bool = False) -> int:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0], usage="%(prog)s {local,wsl} report_id commit summary [--pull]")
+    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0], usage="%(prog)s {local,wsl} report_id commit [--pull] -- summary", allow_abbrev=False)
     ap.add_argument("source", choices=["local", "wsl"])
     ap.add_argument("report_id")
     ap.add_argument("commit")

@@ -6840,10 +6840,10 @@ quarterback quarterbacks running back backs wide receivers tight end ends line l
 january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday
 export save load reload help delete create custom example page coaches coach head coordinator staff contract contracts salary payroll
 spread odds line lines bets betting favorite favorites underdog underdogs power
-find display sort count calculate name names give pull fetch lookup look search compute run render print output explain describe summarize
+find display sort count calculate name names give pull fetch lookup look search compute render print output explain describe summarize
 summary analyze analysis report reports data information info details breakdown versus super bowl pro bowl monday night football sunday
-fantasy points point score scores scoring scored game's thanksgiving christmas hall fame mvp rookie rookies veteran veterans draft
-overall combined average averages mean median percent percentage ratio rate rates number numbers amount value values index metric
+fantasy points point score scores scoring scored game's thanksgiving christmas mvp rookie rookies veteran veterans 
+overall combined average averages percent percentage ratio rate rates number numbers amount index metric
 metrics measure ranking position positions player players quarterbacks coaching starter starters backup backups""".split())
 
 
@@ -7191,7 +7191,7 @@ def handle_nl_query_result(
             player_filtered = find_player_plays(s_plays, str(player))
         if player_filtered:
             s_plays = player_filtered
-        elif str(player).strip().lower() in _NL_NON_NAME_WORDS or resolve_team_abbr(str(player)):
+        elif all(w in _NL_NON_NAME_WORDS or w.rstrip("s") in _NL_NON_NAME_WORDS for w in str(player).strip().lower().split()) or resolve_team_abbr(str(player)):
             pass  # a position/team word the parser mislabeled as a player: keep the unfiltered stat
         else:
             return _render_unanswered(parsed, f"no plays were found for '{_one_line_text(player, 60)}' in the {season} data, so I won't answer from other players' numbers.", engine)
@@ -9673,8 +9673,17 @@ def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
 
 def _json_safe(value: Any) -> Any:
     """Round-trip through JSON, stringifying non-JSON values; fall back to a repr for unserializable structures."""
+    def _clean(v: Any, depth: int = 0) -> Any:
+        if depth > 20:
+            return str(v)[:200]
+        if isinstance(v, dict):
+            return {(k if isinstance(k, str) else str(k)): _clean(x, depth + 1) for k, x in v.items()}
+        if isinstance(v, (list, tuple, set, frozenset)):
+            return [_clean(x, depth + 1) for x in v]
+        return v
+
     try:
-        return json.loads(json.dumps(value, default=str))
+        return json.loads(json.dumps(_clean(value), default=str))
     except (TypeError, ValueError, RecursionError):
         return {"unserializable_parse": repr(value)[:2000]}
 

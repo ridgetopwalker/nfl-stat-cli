@@ -21,7 +21,7 @@ description: Watch for /error reports filed from nfl-stat-cli (local, or a WSL c
 - `NFL_STAT_IPC_DIR` - report folder to watch and to resolve into (default `~/.nfl_stat_cli/error_ipc`).
 - `NFL_STAT_WATCH_DIRS` - extra report folders to watch (separated by `os.pathsep`).
 - `NFL_STAT_REPO` - checkout whose `nfl_stat_cli` writes the resolution (default: the checkout containing this skill).
-- For a WSL copy of nfl-stat: `NFL_STAT_WSL_IPC_DIR` (report folder inside WSL), `NFL_STAT_WSL_REPO` (checkout inside WSL),
+- For a WSL copy of nfl-stat: `NFL_STAT_WSL_IPC_DIR` (report folder inside WSL), `NFL_STAT_WSL_REPO` (absolute checkout path inside WSL; `~` is not expanded),
   `NFL_STAT_WSL_PYTHON` (default `python3`). Reach WSL only through `wsl.exe`.
 
 ## Workflow
@@ -33,7 +33,7 @@ description: Watch for /error reports filed from nfl-stat-cli (local, or a WSL c
 3. Fix in `nfl_stat_cli/__init__.py`; add a regression test under `tests/`.
 4. Verify: `python3 -m pytest` fully green.
 5. Commit on a branch and open a PR (merging is the maintainer's call).
-6. Signal: `python3 .agents/skills/nfl-stat-error-triage/resolve.py <local|wsl> <id> <commit> "<summary>"`
+6. Signal: `python3 .agents/skills/nfl-stat-error-triage/resolve.py <local|wsl> <id> <commit> -- "<summary>"`
    (add `--pull` for wsl only if you want it to `git pull --ff-only` that checkout first). The waiting nfl-stat session
    shows the summary and, only if the user answers yes, reloads the code in place and re-runs the query. `/reload` itself
    never runs git.
