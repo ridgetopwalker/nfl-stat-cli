@@ -191,7 +191,8 @@ def transform_text(text: str) -> str:
     out = protect_github(text)
     for old, new in CONTENT_SUBS:
         out = out.replace(old, new)
-    out = _NFL_STAT_TOKEN.sub("pro-football-slm", out)
+    # Intentionally do NOT rewrite bare "nfl-stat" tokens: the deprecated one-release
+    # console-script shim and docs that mention the old command must survive a re-run.
     out = restore_github(out)
     return out
 
