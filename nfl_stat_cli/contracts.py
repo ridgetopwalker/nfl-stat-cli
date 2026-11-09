@@ -298,9 +298,11 @@ def _play_season(p: Dict[str, Any]) -> int:
 def _name_key_identities(plays: List[Dict[str, Any]], key: Tuple[str, str]) -> Dict[int, set]:
     """
     Distinct players that share an abbreviated name ``key`` in each season of ``plays``, by player id when the
-    row has one, else by (key, team). A row with neither an id nor a team says nothing about who played, so it adds none.
+    row has one, else by (key, team). A team-only identity is the same player as an id-bearing one on that team
+    (rows with and without ids can be mixed), and a row with neither an id nor a team adds nothing.
     """
-    seen: Dict[int, set] = {}
+    ids: Dict[int, Dict[str, set]] = {}
+    teams_without_id: Dict[int, set] = {}
     for p in plays:
         for field, id_fields in _PLAY_ID_FIELDS.items():
             val = str(p.get(field, "") or "").strip()
@@ -308,9 +310,20 @@ def _name_key_identities(plays: List[Dict[str, Any]], key: Tuple[str, str]) -> D
                 continue
             pid = next((str(p.get(i)).strip() for i in id_fields if str(p.get(i) or "").strip()), "")
             team = _team_code(p.get("posteam"))
-            ident = ("id", pid) if pid else (("name", key, team) if team else None)
-            if ident is not None:
-                seen.setdefault(_play_season(p), set()).add(ident)
+            season = _play_season(p)
+            if pid:
+                ids.setdefault(season, {}).setdefault(pid, set())
+                if team:
+                    ids[season][pid].add(team)
+            elif team:
+                teams_without_id.setdefault(season, set()).add(team)
+    seen: Dict[int, set] = {}
+    for season in set(ids) | set(teams_without_id):
+        by_id = ids.get(season, {})
+        covered = set().union(*by_id.values()) if by_id else set()
+        seen[season] = {("id", pid) for pid in by_id} | {
+            ("name", key, t) for t in teams_without_id.get(season, set()) - covered
+        }
     return seen
 
 
@@ -351,6 +364,7 @@ def calculate_contract_performance_efficiency(
     gated: List[Dict[str, Any]] = []
 
     def _play_matches(p: Dict[str, Any]) -> bool:
+        rejected = False
         for field in _PLAY_NAME_FIELDS:
             val = str(p.get(field, "") or "").strip()
             if not val:
@@ -363,7 +377,9 @@ def calculate_contract_performance_efficiency(
                 # contract's team (rows without a team are accepted)
                 if len(identities.get(_play_season(p), ())) <= 1 or not p_team or p_team == c_team:
                     return True
-                gated.append(p)
+                rejected = True
+        if rejected:
+            gated.append(p)  # once per row, and only when no field accepted it
         return False
 
     p_plays = [p for p in plays if _play_matches(p)]

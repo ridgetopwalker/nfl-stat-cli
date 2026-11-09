@@ -127,3 +127,33 @@ def test_ids_on_the_other_fields_identify_players_too():
         r.update(rusher_player_name="J.Smith", rusher_player_id=pid, rush_attempt=1, pass_attempt=0)
         rows.append(r)
     assert _eff(c, rows)["epa_matched_plays"] == 2
+
+
+# --- review follow-ups ----------------------------------------------------------------------------------
+
+def test_a_row_naming_the_player_in_several_fields_is_gated_once_and_not_when_a_later_field_accepts_it():
+    c = _contract("Jordan Smith", team="ZZZ", pos="QB")
+    shared = _play("J.Smith", "XXX", epa=0.9, pid="id-2")
+    shared.update(qb_name="J.Smith")                      # two fields carry the shared key on the other team
+    own = _play("J.Smith", "ZZZ", epa=0.3, pid="id-1")
+    eff = _eff(c, [own, shared])
+    assert eff["epa_team_gated_plays"] == 1 and eff["epa_matched_plays"] == 1
+    later_exact = _play("J.Smith", "XXX", epa=0.5, pid="id-2")
+    later_exact.update(rusher_player_name="Jordan Smith")  # an exact full-name field accepts the row on any team
+    eff = _eff(c, [own, shared, later_exact])
+    assert eff["epa_matched_plays"] == 2 and eff["epa_team_gated_plays"] == 1
+
+
+def test_rows_with_and_without_ids_for_the_same_player_and_team_are_one_player():
+    c = _contract("Jordan Smith", team="ZZZ")
+    plays = [_play("J.Smith", "XXX", epa=0.4, pid="id-1"), _play("J.Smith", "XXX", epa=0.2),
+             _play("J.Smith", "ZZZ", epa=0.3, pid="id-1")]
+    eff = _eff(c, plays)
+    assert eff["epa_matched_plays"] == 3 and not eff["epa_ambiguous_key"]
+
+
+def test_an_id_less_row_on_a_team_no_id_row_covers_still_counts_as_another_player():
+    c = _contract("Jordan Smith", team="ZZZ")
+    plays = [_play("J.Smith", "ZZZ", epa=0.3, pid="id-1"), _play("J.Smith", "XXX", epa=0.9)]
+    eff = _eff(c, plays)
+    assert eff["epa_ambiguous_key"] is True and eff["epa_matched_plays"] == 1 and eff["epa_team_gated_plays"] == 1
