@@ -1948,6 +1948,73 @@ def test_player_drilldown_name_matching_regression():
     assert "CHI" not in out.split("Team:")[1].split("\n")[0]
 
 
+def test_player_team_associations_all_players_regression(engine):
+    """
+    Regression test ensuring team associations are properly resolved across ALL players:
+    1. Christian McCaffrey (SF) is not conflated with Luke McCaffrey (WAS) or opponent punters/kickers (LA).
+    2. Luke McCaffrey (WAS) is attributed to WAS, not LA when returning punts.
+    3. Aaron Jones (MIN) is not conflated with Chris Jones (KC).
+    4. Traded players (e.g. Davante Adams across LV and NYJ) properly retain all genuine teams.
+    5. Stray noise (1 edge-case play out of many) is filtered out.
+    """
+    comprehensive_plays = [
+        # Christian McCaffrey on SF
+        {"season": 2026, "posteam": "SF", "defteam": "NYJ", "rusher_player_name": "C.McCaffrey", "desc": "(14:22) 23-C.McCaffrey up the middle for 4 yards"},
+        {"season": 2026, "posteam": "SF", "defteam": "ARI", "receiver_player_name": "C.McCaffrey", "desc": "(10:15) 13-B.Purdy pass short to 23-C.McCaffrey for 13 yards"},
+        # Luke McCaffrey on WAS
+        {"season": 2026, "posteam": "SF", "defteam": "WAS", "desc": "18-E.Pineiro kicks 62 yards to WAS 3. 11-L.McCaffrey to WAS 28 for 25 yards"},
+        {"season": 2026, "posteam": "WAS", "defteam": "SF", "receiver_player_name": "L.McCaffrey", "desc": "5-J.Daniels pass incomplete to 11-L.McCaffrey"},
+        {"season": 2026, "posteam": "LA", "defteam": "WAS", "desc": "42-E.Evans punts 52 yards. 11-L.McCaffrey to WAS 24 for 9 yards"},
+        # Aaron Jones on MIN
+        {"season": 2026, "posteam": "MIN", "defteam": "GB", "rusher_player_name": "A.Jones", "desc": "33-A.Jones right tackle for 8 yards"},
+        {"season": 2026, "posteam": "MIN", "defteam": "CHI", "receiver_player_name": "A.Jones", "desc": "14-S.Darnold pass short middle to 33-A.Jones for 12 yards"},
+        # Chris Jones on KC
+        {"season": 2026, "posteam": "LV", "defteam": "KC", "sack_player_name": "C.Jones", "desc": "G.Minshew sacked by 95-C.Jones for -8 yards"},
+        {"season": 2026, "posteam": "KC", "defteam": "DEN", "penalty_player_name": "C.Jones", "penalty_team": "KC", "desc": "PENALTY on KC-95-C.Jones, Roughing Passer"},
+        # Traded player (Davante Adams: LV and NYJ)
+        {"season": 2026, "posteam": "LV", "defteam": "LAC", "receiver_player_name": "D.Adams", "desc": "17-D.Adams 15 yd catch"},
+        {"season": 2026, "posteam": "LV", "defteam": "BAL", "receiver_player_name": "D.Adams", "desc": "17-D.Adams 25 yd catch"},
+        {"season": 2026, "posteam": "NYJ", "defteam": "NE", "receiver_player_name": "D.Adams", "desc": "17-D.Adams 12 yd catch"},
+        {"season": 2026, "posteam": "NYJ", "defteam": "HOU", "receiver_player_name": "D.Adams", "desc": "17-D.Adams 18 yd catch"},
+    ]
+
+    # 1. Christian McCaffrey -> Strictly ['SF']
+    cmc_plays = cli.find_player_plays(comprehensive_plays, "Christian McCaffrey", season=2026)
+    cmc_teams = cli.get_player_teams(cmc_plays, "Christian McCaffrey")
+    assert cmc_teams == ["SF"], f"Expected ['SF'], got {cmc_teams}"
+
+    # 2. Luke McCaffrey -> Strictly ['WAS'] (punt return from LA goes to WAS defteam)
+    luke_plays = cli.find_player_plays(comprehensive_plays, "Luke McCaffrey", season=2026)
+    luke_teams = cli.get_player_teams(luke_plays, "Luke McCaffrey")
+    assert luke_teams == ["WAS"], f"Expected ['WAS'], got {luke_teams}"
+
+    # 3. Aaron Jones -> Strictly ['MIN'], NOT KC
+    aj_plays = cli.find_player_plays(comprehensive_plays, "Aaron Jones", season=2026)
+    aj_teams = cli.get_player_teams(aj_plays, "Aaron Jones")
+    assert aj_teams == ["MIN"], f"Expected ['MIN'], got {aj_teams}"
+
+    # 4. Chris Jones -> Strictly ['KC'], NOT MIN or LV
+    cj_plays = cli.find_player_plays(comprehensive_plays, "Chris Jones", season=2026)
+    cj_teams = cli.get_player_teams(cj_plays, "Chris Jones")
+    assert cj_teams == ["KC"], f"Expected ['KC'], got {cj_teams}"
+
+    # 5. Traded player (Davante Adams) -> Both ['LV', 'NYJ']
+    adams_plays = cli.find_player_plays(comprehensive_plays, "Davante Adams", season=2026)
+    adams_teams = cli.get_player_teams(adams_plays, "Davante Adams")
+    assert adams_teams == ["LV", "NYJ"], f"Expected ['LV', 'NYJ'], got {adams_teams}"
+
+    # 6. Spurious noise filter test: 20 genuine plays for SF and 1 stray description play on SEA
+    noise_plays = [
+        {"season": 2026, "posteam": "SF", "defteam": "ARI", "rusher_player_name": "C.McCaffrey", "desc": "C.McCaffrey rush"}
+        for _ in range(20)
+    ] + [
+        {"season": 2026, "posteam": "SEA", "defteam": "LAR", "desc": "Review play involving McCaffrey on sideline"}
+    ]
+    sf_plays = cli.find_player_plays(noise_plays, "Christian McCaffrey", season=2026)
+    sf_teams = cli.get_player_teams(sf_plays, "Christian McCaffrey")
+    assert sf_teams == ["SF"], f"Stray 1-play noise should be filtered out, got {sf_teams}"
+
+
 
 
 

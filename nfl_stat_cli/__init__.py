@@ -32,6 +32,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from contextlib import nullcontext
+from collections import Counter
 from importlib import resources
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -7072,13 +7073,52 @@ def render_single_play_deep_dive(play: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+COMMON_NICKNAMES: Dict[str, Set[str]] = {
+    "chris": {"christopher", "chris"},
+    "pat": {"patrick", "pat"},
+    "dan": {"daniel", "dan", "danny"},
+    "josh": {"joshua", "josh"},
+    "mike": {"michael", "mike"},
+    "matt": {"matthew", "matt"},
+    "tom": {"thomas", "tom", "tommy"},
+    "rob": {"robert", "rob", "bobby", "bob"},
+    "tony": {"anthony", "tony"},
+    "mitch": {"mitchell", "mitch"},
+    "sam": {"samuel", "sam"},
+    "alex": {"alexander", "alex"},
+    "zach": {"zachary", "zach", "zack"},
+    "nick": {"nicholas", "nick"},
+    "greg": {"gregory", "greg"},
+    "dave": {"david", "dave"},
+    "ken": {"kenneth", "ken", "kenny"},
+    "will": {"william", "will", "bill", "billy"},
+    "ben": {"benjamin", "ben", "benny"},
+    "cam": {"cameron", "cam"},
+    "nate": {"nathaniel", "nathan", "nate"},
+    "jon": {"jonathan", "jon", "john"},
+}
+
+
+def _are_first_names_compatible(f1: str, f2: str) -> bool:
+    f1 = f1.lower().strip()
+    f2 = f2.lower().strip()
+    if f1 == f2:
+        return True
+    if len(f1) == 1 or len(f2) == 1:
+        return f1[0] == f2[0]
+    for nick, variants in COMMON_NICKNAMES.items():
+        if f1 in variants and f2 in variants:
+            return True
+    return False
+
+
 def _matches_player_name(target_name: str, cand_name: str) -> bool:
     """
     Robust player name matcher:
     - Matches exact full name (e.g. 'Patrick Mahomes' vs 'Patrick Mahomes')
     - Matches Initial.LastName abbreviations (e.g. 'Patrick Mahomes' vs 'P.Mahomes')
     - Matches surname only if single-token target (e.g. 'Mahomes' vs 'P.Mahomes')
-    - Does NOT match unrelated players sharing only a first name (e.g. 'Patrick Mahomes' does NOT match 'Patrick Taylor' or 'Patrick Queen')
+    - Does NOT match unrelated players sharing only a first name or only a surname
     """
     if not cand_name or not target_name:
         return False
@@ -7087,6 +7127,9 @@ def _matches_player_name(target_name: str, cand_name: str) -> bool:
     if t == c:
         return True
 
+    # Strip jersey number prefixes (e.g. '11-L.McCaffrey' -> 'L.McCaffrey', '23-C.McCaffrey' -> 'C.McCaffrey')
+    c = re.sub(r"^\d+-", "", c)
+
     t_clean = re.sub(r"[^\w\s]", " ", t)
     c_clean = re.sub(r"[^\w\s]", " ", c)
     t_tokens = t_clean.split()
@@ -7094,27 +7137,38 @@ def _matches_player_name(target_name: str, cand_name: str) -> bool:
     if not t_tokens or not c_tokens:
         return False
 
-    # Case 1: Target has first name and last name (e.g. "Patrick Mahomes", "Josh Allen")
+    # Case 1: Target has first name and last name (e.g. "Patrick Mahomes", "Josh Allen", "Christian McCaffrey")
     if len(t_tokens) >= 2:
         t_init = t_tokens[0][0]
+        t_first = t_tokens[0]
         t_surname = t_tokens[-1]
         c_surname = c_tokens[-1]
 
-        # The surname MUST match
+        # Surnames must match
         if c_surname != t_surname:
             if " ".join(t_tokens[1:]) == " ".join(c_tokens[1:]):
                 return t_init == c_tokens[0][0]
             return False
 
-        # If candidate has first initial or full first name, first initial must match
+        # First name / initial check
         if len(c_tokens) >= 2:
-            return c_tokens[0][0] == t_init
+            c_first = c_tokens[0]
+            c_init = c_first[0]
+            if c_init != t_init:
+                return False
+            if len(c_first) > 1 and len(t_first) > 1:
+                return _are_first_names_compatible(t_first, c_first)
+            return True
+
         if "." in cand_name:
             dot_part = cand_name.split(".")[0].strip().lower()
+            dot_part = re.sub(r"^\d+-", "", dot_part)
             if dot_part and dot_part[0] != t_init:
                 return False
-        # If candidate is just the surname alone (e.g. "Mahomes"), it matches
-        return True
+            return True
+
+        # Candidate is single-token surname alone: does NOT match multi-token target
+        return False
 
     # Case 2: Target is a single token (e.g. "Mahomes", "Allen", "Goff")
     target_tok = t_tokens[0]
@@ -7124,7 +7178,7 @@ def _matches_player_name(target_name: str, cand_name: str) -> bool:
 
 
 def find_player_plays(plays: List[Dict[str, Any]], player_name: str, season: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Locate all play records matching a player's name across passer, rusher, receiver, and kicking roles."""
+    """Locate all play records matching a player's name across passer, rusher, receiver, and kicking/defensive roles."""
     p_name = player_name.strip()
     if not p_name:
         return []
@@ -7133,8 +7187,10 @@ def find_player_plays(plays: List[Dict[str, Any]], player_name: str, season: Opt
     if len(p_clean) >= 2:
         init = p_clean[0][0]
         surname = p_clean[-1]
+        first = p_clean[0]
+        # Match either full name or initial.surname (ensuring no other preceding letter)
         desc_pattern = re.compile(
-            rf"\b(?:{re.escape(init)}\.?\s*{re.escape(surname)}|{re.escape(p_name)}|{re.escape(surname)})\b",
+            rf"(?:\b{re.escape(first)}\s+{re.escape(surname)}\b|(?<![a-zA-Z]){re.escape(init)}\.?\s*{re.escape(surname)}\b)",
             re.IGNORECASE,
         )
     else:
@@ -7151,8 +7207,11 @@ def find_player_plays(plays: List[Dict[str, Any]], player_name: str, season: Opt
                 "qb_name", "passer_player_name", "rusher_player_name",
                 "receiver_player_name", "kicker_player_name", "punter_player_name",
                 "player_name", "fantasy_player_name",
-                "sack_player_name", "interception_player_name",
-                "solo_tackle_1_player_name", "assist_tackle_1_player_name"
+                "sack_player_name", "half_sack_1_player_name", "half_sack_2_player_name",
+                "interception_player_name", "pass_defense_1_player_name", "tackle_for_loss_1_player_name",
+                "solo_tackle_1_player_name", "assist_tackle_1_player_name",
+                "returner_player_name", "kickoff_returner_player_name", "punt_returner_player_name",
+                "penalty_player_name"
             )
         )
         if is_match:
@@ -7166,57 +7225,138 @@ def find_player_plays(plays: List[Dict[str, Any]], player_name: str, season: Opt
     return matching
 
 
+def get_play_player_team(p: Dict[str, Any], player_name: str) -> Optional[str]:
+    """
+    Determine the exact NFL team abbreviation that player_name was playing for on this specific play.
+    Returns None if the play cannot be definitively attributed to the player.
+    """
+    post = str(p.get("posteam", "")).strip().upper()
+    defe = str(p.get("defteam", "")).strip().upper()
+
+    # 1. Direct offensive roles -> player's team is ALWAYS posteam
+    for k in ("qb_name", "passer_player_name", "rusher_player_name", "receiver_player_name", "kicker_player_name", "punter_player_name", "fantasy_player_name"):
+        val = str(p.get(k, "")).strip()
+        if val and _matches_player_name(player_name, val):
+            if post:
+                return post
+
+    # 2. Direct defensive roles -> player's team is ALWAYS defteam
+    for k in (
+        "sack_player_name", "half_sack_1_player_name", "half_sack_2_player_name",
+        "interception_player_name", "solo_tackle_1_player_name", "solo_tackle_2_player_name",
+        "assist_tackle_1_player_name", "assist_tackle_2_player_name", "assist_tackle_3_player_name", "assist_tackle_4_player_name",
+        "pass_defense_1_player_name", "pass_defense_2_player_name", "tackle_for_loss_1_player_name",
+        "forced_fumble_player_1_player_name", "forced_fumble_player_2_player_name"
+    ):
+        val = str(p.get(k, "")).strip()
+        if val and _matches_player_name(player_name, val):
+            if defe:
+                return defe
+
+    # 3. Forced fumble team override
+    if _matches_player_name(player_name, str(p.get("forced_fumble_player_1_player_name", ""))):
+        ff_team = str(p.get("forced_fumble_player_1_team", "")).strip().upper()
+        if ff_team:
+            return ff_team
+
+    # 4. Penalty team
+    pen_name = str(p.get("penalty_player_name", "")).strip()
+    if pen_name and _matches_player_name(player_name, pen_name):
+        pt = str(p.get("penalty_team", "")).strip().upper()
+        if pt:
+            return pt
+
+    # 5. Returners on punts and kickoffs -> receiving team is defteam
+    for k in ("returner_player_name", "kickoff_returner_player_name", "punt_returner_player_name"):
+        val = str(p.get(k, "")).strip()
+        if val and _matches_player_name(player_name, val):
+            if defe:
+                return defe
+
+    # 6. Description-based contextual extraction
+    desc = str(p.get("desc", ""))
+    if desc:
+        p_clean = re.sub(r"[^\w\s]", " ", player_name).split()
+        surname = p_clean[-1] if p_clean else player_name
+
+        # Check penalty in desc: PENALTY on SF-89-L.Farrell or PENALTY on SF-23-C.McCaffrey
+        m_pen = re.search(r"PENALTY\s+on\s+([A-Z]{2,3})-\d+-([A-Za-z\.'-]+)", desc, re.IGNORECASE)
+        if m_pen and _matches_player_name(player_name, m_pen.group(2)):
+            return m_pen.group(1).upper()
+
+        # Check tacklers in parentheses at end of play: e.g. (54-F.Warner; 97-N.Bosa) or (33-S.Neal)
+        # Tacklers are ALWAYS on defteam
+        paren_match = re.search(r"\(([^)]+)\)\s*\.?\s*$", desc)
+        if paren_match:
+            tacklers = re.findall(r"(?:[0-9]+-)?([A-Za-z]\.?[A-Za-z'-]+)", paren_match.group(1))
+            if any(_matches_player_name(player_name, t) for t in tacklers):
+                if defe:
+                    return defe
+
+        # Check punt/kickoff return in desc: e.g. "11-L.McCaffrey to WAS 24 for 9 yards"
+        play_type = str(p.get("play_type", "")).lower()
+        if play_type in ("punt", "kickoff") or "punts" in desc or "kicks" in desc:
+            if re.search(rf"\b(?:\d+-)?(?<![a-zA-Z]){re.escape(surname)}\s+to\s+[A-Z]{{2,3}}\b", desc, re.IGNORECASE):
+                if defe:
+                    return defe
+
+        # Check sacks in desc
+        if "sacked" in desc.lower():
+            if re.search(rf"\b(?:by|\()\s*(?:\d+-)?(?<![a-zA-Z]){re.escape(surname)}\b", desc, re.IGNORECASE):
+                if defe:
+                    return defe
+            if re.search(rf"^(?:\([^)]*\)\s*)?(?:\d+-)?(?<![a-zA-Z]){re.escape(surname)}\s+sacked\b", desc, re.IGNORECASE):
+                if post:
+                    return post
+
+        # Check ball carrier / passer in desc
+        if re.search(rf"\b(?:\d+-)?(?<![a-zA-Z]){re.escape(surname)}\s+(?:pass|left|right|middle|up\s+the\s+middle|scrambles|pushed\s+ob)\b", desc, re.IGNORECASE):
+            if post:
+                return post
+
+        if post:
+            return post
+        if defe:
+            return defe
+
+    # 7. General player_name field
+    gen_name = str(p.get("player_name", "")).strip()
+    if gen_name and _matches_player_name(player_name, gen_name):
+        pos = str(p.get("player_position") or p.get("position") or "").upper()
+        if pos in ("DE", "DT", "NT", "DL", "LB", "ILB", "OLB", "MLB", "CB", "DB", "S", "FS", "SS"):
+            if defe:
+                return defe
+        elif post:
+            return post
+
+    return None
+
+
 def get_player_teams(player_plays: List[Dict[str, Any]], player_name: str) -> List[str]:
     """
     List all unique NFL teams a player played for across the provided plays.
     Used for smart team detection (if exactly one team, do not prompt!).
+    Filters out spurious 1-play edge cases (<2% of total plays) when primary team has significant plays.
     """
-    teams: Set[str] = set()
+    team_counts: Counter[str] = Counter()
     for p in player_plays:
-        post = str(p.get("posteam", "")).strip().upper()
-        defe = str(p.get("defteam", "")).strip().upper()
+        tm = get_play_player_team(p, player_name)
+        if tm:
+            team_counts[tm] += 1
 
-        # 1. Offensive / ball-handler roles -> player's team is ALWAYS posteam
-        if any(
-            _matches_player_name(player_name, str(p.get(k, "")))
-            for k in ("qb_name", "passer_player_name", "rusher_player_name", "receiver_player_name", "kicker_player_name", "punter_player_name", "fantasy_player_name")
-        ):
-            if post:
-                teams.add(post)
+    if not team_counts:
+        return []
+
+    total_attributed = sum(team_counts.values())
+    max_count = max(team_counts.values())
+    valid_teams: List[str] = []
+    for t, cnt in team_counts.items():
+        # If player has a major team (>= 10 plays), filter out stray noise teams with <= 1 play that make up < 2% of total
+        if max_count >= 10 and cnt <= 1 and (cnt / total_attributed) < 0.02:
             continue
+        valid_teams.append(t)
 
-        # 2. Defensive roles -> player's team is defteam
-        if any(
-            _matches_player_name(player_name, str(p.get(k, "")))
-            for k in ("sack_player_name", "half_sack_1_player_name", "half_sack_2_player_name", "interception_player_name", "solo_tackle_1_player_name", "assist_tackle_1_player_name", "forced_fumble_player_1_team")
-        ):
-            if defe:
-                teams.add(defe)
-            continue
-
-        # 3. General player_name field
-        gen_name = str(p.get("player_name", ""))
-        if _matches_player_name(player_name, gen_name):
-            if post:
-                teams.add(post)
-            elif defe:
-                teams.add(defe)
-            continue
-
-        # 4. Description matching
-        desc = str(p.get("desc", ""))
-        p_clean = re.sub(r"[^\w\s]", " ", player_name).split()
-        surname = p_clean[-1] if p_clean else player_name
-        is_defender = re.search(rf"\b(?:sacked\s+by|intercepted\s+by|tackled\s+by|fumble\s+forced\s+by)\s+[^,;.]*\b{re.escape(surname)}\b", desc, re.IGNORECASE)
-        if is_defender:
-            if defe:
-                teams.add(defe)
-        elif post:
-            teams.add(post)
-        elif defe:
-            teams.add(defe)
-
-    return sorted(t for t in teams if t)
+    return sorted(valid_teams)
 
 
 def render_player_drilldown_view(
@@ -7259,7 +7399,9 @@ def render_player_drilldown_view(
             if interactive and sys.stdin.isatty():
                 print(f"\n  {C.BOLD}{C.CYAN}{player_name} played for {len(teams_played_for)} teams in {season}:{C.RESET}")
                 for idx, t in enumerate(teams_played_for, 1):
-                    t_count = sum(1 for p in matching_plays if str(p.get("posteam", "")).upper() == t)
+                    t_count = sum(1 for p in matching_plays if (get_play_player_team(p, player_name) == t) or (str(p.get("posteam", "")).upper() == t and not p.get("defteam")))
+                    if t_count == 0:
+                        t_count = sum(1 for p in matching_plays if str(p.get("posteam", "")).upper() == t or str(p.get("defteam", "")).upper() == t)
                     print(f"    [{idx}] {t} ({t_count} plays)")
                 print(f"    [{len(teams_played_for) + 1}] All Teams (Combined)")
                 try:
