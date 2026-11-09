@@ -101,7 +101,7 @@ def test_bridge_scripts_export_all_possession_plays_and_stay_identical():
     packaged = (root / "nfl_stat_cli" / "nflverse_bridge.R").read_text(encoding="utf-8")
     top = (root / "nflverse_bridge.R").read_text(encoding="utf-8")
     assert packaged == top
-    assert "out_df <- pbp[!is.na(pbp$posteam), keep_cols]" in packaged
+    assert "out_df <- as.data.frame(pbp)[!is.na(pbp$posteam), keep_cols, drop = FALSE]" in packaged
     assert "pass_attempt == 1) | (!is.na(pbp$rush_attempt)" not in packaged
     # every column the shared row predicate reads must be exported
     for col in ("posteam", "play_type", "pass_attempt", "rush_attempt", "penalty", "timeout", "desc"):
