@@ -48,6 +48,7 @@ LABEL_NFL_DATA_PY = "nfl_data_py (Python)"
 LABEL_SPORTSDATAVERSE = "sportsdataverse-py (Python, not nflverse)"
 LABEL_NFLREADR = "nflverse / nflreadr (R)"
 LABEL_SAMPLE = "built-in sample data (not nflverse)"
+LABEL_PYTHON_UNIDENTIFIED = "python data backend (unidentified)"  # classified as not-nflverse: no credit claimed
 
 # --- NOTICE (repo-root NOTICE must equal ``render_notice()``) --------------------------
 _NOTICE_HEAD = (
@@ -224,32 +225,35 @@ def about_text(source: Optional[DataSource] = None) -> str:
     return "\n".join(parts)
 
 
-# Slash commands whose output is *not* built from play-by-play rows (no data footer).
-NON_DATA_SLASH_COMMANDS = frozenset({
-    "/help", "/h", "/?", "/about", "/license", "/credits", "/notice", "/clear", "/cls", "/quit", "/exit", "/close", "/q",
-    "/export", "/export-data", "/savedata", "/export-stats", "/export-stat", "/exportstats",
-    "/save-stats", "/import", "/camera", "/perspective", "/season", "/why", "/error",
-    "/reload", "/update", "/refresh", "/stats", "/stat-list", "/create", "/delete",
-    "/coaches", "/coach", "/staff", "/explain", "/formula",
+# Slash commands whose output is built from the loaded play-by-play rows (these get the data footer).
+# An allowlist on purpose: static/bundled data (coaches, contracts, payrolls) is not nflverse and must
+# not be credited as such; a new command gets no footer until it is added here.
+DATA_SLASH_COMMANDS = frozenset({
+    "/stat", "/leaderboard", "/team", "/team-stats", "/team-drilldown", "/player", "/player-stats",
+    "/player-drilldown", "/play", "/diagram", "/field", "/games", "/game", "/matchup", "/matchups",
+    "/boxscore", "/pbp", "/fantasy", "/fant", "/fp", "/sportsbook", "/odds", "/handicap", "/lines",
+    "/betting", "/projections", "/projection", "/model", "/query", "/filter", "/page", "/stat-page", "/example", "/examples", "/ex", "/qb-wins",
+    "/screen-pass", "/play-efficiency",
+})
+
+# Natural-language intents whose answer is built from play-by-play rows.
+DATA_INTENTS = frozenset({
+    "stat_query", "specific_play", "qb_wins_report", "team_drilldown", "player_drilldown",
+    "fantasy_report", "sportsbook_report", "dataset_info", "stat_page", "create_stat",
 })
 
 
-# Natural-language intents whose answer is not built from play-by-play rows.
-NON_DATA_INTENTS = frozenset({"ambiguous", "export_data", "export_stats", "delete_stat", "coaching_staff"})
-
-
 def wants_footer(cmd_token: str) -> bool:
-    return cmd_token.lower() not in NON_DATA_SLASH_COMMANDS
+    return cmd_token.lower() in DATA_SLASH_COMMANDS
 
 
-def wants_footer_for_intent(intent: Optional[str]) -> bool:
-    return (intent or "") not in NON_DATA_INTENTS
+def wants_footer_for_intent(parsed: Optional[Dict[str, Any]]) -> bool:
+    """True when a parsed natural-language query was answered from play-by-play rows."""
+    parsed = parsed or {}
+    intent = parsed.get("intent")
+    if intent in DATA_INTENTS:
+        return True
+    # Contract answers are bundled third-party data, except the per-player view that adds nflverse EPA.
+    return intent == "contract_report" and parsed.get("subquery") == "player"
 
 
-def dataset_summary() -> List[Tuple[str, str]]:
-    """(dataset, loader) pairs the code can load, for docs and tests."""
-    return [
-        ("nflverse play-by-play", "nflreadpy.load_pbp / nfl_data_py.import_pbp_data / nflreadr::load_pbp"),
-        ("nflverse teams (R bridge)", "nflreadr::load_teams"),
-        ("sportsdataverse play-by-play (fallback, not nflverse)", "sportsdataverse.nfl.load_nfl_pbp"),
-    ]

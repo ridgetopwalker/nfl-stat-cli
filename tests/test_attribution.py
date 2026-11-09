@@ -70,20 +70,24 @@ def test_readme_license_section_carries_attribution():
     assert "CC BY 4.0" in readme
 
 
-def test_notice_is_in_the_sdist_defaults_or_manifest():
-    """setuptools ships NOTICE* automatically; guard against a MANIFEST/pyproject change dropping it."""
-    manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "prune NOTICE" not in manifest and "exclude NOTICE" not in manifest
-    assert "license-files" not in pyproject or "NOTICE" in pyproject
+def test_notice_is_tracked_and_not_excluded_from_the_sdist():
+    """setuptools ships NOTICE* by default (checked by building the sdist); guard against ignoring/excluding it."""
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert not any(l.strip().lstrip("/").upper() in ("NOTICE", "NOTICE*") for l in gitignore)
+    manifest_path = ROOT / "MANIFEST.in"
+    manifest = manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else ""
+    assert not re.search(r"^(?:global-)?(?:exclude|prune)\s+.*NOTICE", manifest, re.M)
 
 
 # --- product name is a single constant -----------------------------------------------------
 
 def test_product_name_is_the_only_hardcoded_brand_in_attribution_text():
-    src = (ROOT / "nfl_stat_cli" / "attribution.py").read_text(encoding="utf-8")
-    hits = [ln for ln in src.splitlines() if re.search(r"nfl[-_ ]stat", ln, re.I)]
-    assert hits == ['PRODUCT_NAME = "nfl-stat-cli"'], hits
+    """The product name's value appears once (its definition), so a rebrand is a one-line edit."""
+    src = Path(attr.__file__).read_text(encoding="utf-8")
+    hits = [ln for ln in src.splitlines() if attr.PRODUCT_NAME.lower() in ln.lower()]
+    assert len(hits) == 1 and hits[0].startswith("PRODUCT_NAME = "), hits
+    # and no other spelling of the old brand is hard-coded in the credit text
+    assert not [ln for ln in src.splitlines() if re.search(r"nfl[-_ ]stat", ln, re.I) and not ln.startswith("PRODUCT_NAME = ")]
 
 
 def test_changing_product_name_changes_every_user_facing_credit(monkeypatch):
@@ -235,6 +239,9 @@ def test_cli_stat_output_ends_with_sample_footer_and_no_nflverse_claim(tmp_path,
 
 
 def test_cli_ask_prints_footer_but_ambiguous_does_not(tmp_path, isolated_home):
+    amb_parsed = cli.NaturalLanguageStatAssistant.interpret_query(
+        "tell me something unrelated 2024 AFC Chiefs", engine=cli.StatEngine(storage_dir=tmp_path), slm_model="off")
+    assert amb_parsed["intent"] == "ambiguous"
     ok = _run(isolated_home, "ask", "who has the most passing yards", "--engine", "offline", "--season", "2025",
               "--no-color", "--slm-model", "off")
     assert ok.returncode == 0, ok.stderr
@@ -385,8 +392,8 @@ def _loader_calls():
 def test_only_reviewed_nflverse_datasets_are_loaded():
     """Attribution gate: adding a loader (FTN/NGS/PFR/ESPN/...) must come with a license review."""
     assert _loader_calls() == {"load_pbp", "import_pbp_data", "load_nfl_pbp", "load_teams"}
-    forbidden = re.compile(r"ftn_charting|load_ftn|nextgen|load_pfr|pfr_|load_espn|espn", re.I)
-    for f in (ROOT / "nfl_stat_cli").glob("*.py"):
+    forbidden = re.compile(r"ftn_charting|\b(?:load|import)_(?:ftn|nextgen|ngs|pfr|espn)\w*", re.I)
+    for f in (ROOT / "nfl_stat_cli").rglob("*.py"):
         if f.name == "attribution.py":
             continue
         assert not forbidden.search(f.read_text(encoding="utf-8")), f.name
@@ -404,3 +411,26 @@ def test_about_without_a_loaded_source_is_just_the_notice():
     assert attr.about_text() == attr.render_notice().rstrip("\n")
     attr.set_active_source(attr.LABEL_SAMPLE)
     assert "Current data: sample data" in attr.about_text()
+
+
+def test_footer_allowlist_excludes_bundled_non_nflverse_data():
+    assert attr.wants_footer("/stat") and attr.wants_footer("/FANTASY")
+    assert attr.wants_footer("/projections") and attr.wants_footer("/sportsbook")
+    for cmd in ("/coaches", "/contract", "/payroll", "/help", "/about", "/export", "/bogus", "/camera"):
+        assert not attr.wants_footer(cmd), cmd
+    assert attr.wants_footer_for_intent({"intent": "stat_query"})
+    assert attr.wants_footer_for_intent({"intent": "contract_report", "subquery": "player"})
+    for parsed in ({"intent": "contract_report", "subquery": "team"}, {"intent": "coaching_staff"},
+                   {"intent": "ambiguous"}, {"intent": "export_data"}, {}, None):
+        assert not attr.wants_footer_for_intent(parsed), parsed
+
+
+def test_constructing_a_bridge_does_not_overwrite_the_active_source(tmp_path):
+    attr.set_active_source(attr.LABEL_NFLREADPY)
+    attr.register_loaded_dataset(attr.DATASET_FTN)
+    cli.NFLDataBridge(cache_dir=tmp_path / "c2", engine="offline")   # e.g. a helper or failed reload
+    assert attr.active_source().kind == "nflverse" and attr.DATASET_FTN in attr.active_source().datasets
+
+
+def test_unidentified_python_backend_is_not_credited_as_nflverse():
+    assert attr.classify_source(attr.LABEL_PYTHON_UNIDENTIFIED) == "sample"

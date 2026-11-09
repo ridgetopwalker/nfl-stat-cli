@@ -74,7 +74,6 @@ from .contracts import (
     interactive_contracts_browser,
 )
 from . import attribution
-from .attribution import PRODUCT_NAME
 
 __version__ = "2.0.0"
 __author__ = "Sean McClain"
@@ -1498,7 +1497,7 @@ class NFLDataBridge:
         self.cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.engine = engine.lower()
-        self.last_source_used = attribution.LABEL_SAMPLE
+        self._last_source_used = attribution.LABEL_SAMPLE  # no data loaded yet; not a source change
         self.last_error: Optional[str] = None
         self._python_backend_label: Optional[str] = None
 
@@ -1528,7 +1527,7 @@ class NFLDataBridge:
             rows = self._try_sportsdataverse_py(seasons, spinner=spinner)
             if rows:
                 # Report the backend that really produced the rows (not a generic nflverse label)
-                self.last_source_used = self._python_backend_label or attribution.LABEL_NFLREADPY
+                self.last_source_used = self._python_backend_label or attribution.LABEL_PYTHON_UNIDENTIFIED
                 return rows
 
         if self.engine in ("auto", "r", "nflverse"):
@@ -10176,7 +10175,7 @@ def interactive_tui(
             res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
             LAST_RAW_OUTPUT = strip_ansi(res_str)
             print(res_str)
-            if attribution.wants_footer_for_intent(parsed.get("intent")):
+            if attribution.wants_footer_for_intent(parsed):
                 print(attribution_footer())
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
@@ -10369,7 +10368,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(AsciiArtRenderer.banner())
             print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
             print(handle_nl_query_result(parsed, engine, all_plays, view_override=args.view, camera_override=args.camera))
-            if attribution.wants_footer_for_intent(parsed.get("intent")):
+            if attribution.wants_footer_for_intent(parsed):
                 print(attribution_footer())
             return 0
 
