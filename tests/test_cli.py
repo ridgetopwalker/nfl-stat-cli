@@ -169,11 +169,11 @@ def test_play_phase_filtering():
 
 def test_cli_subcommands():
     root = Path(__file__).resolve().parents[1]
-    res_team = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "team", "KC", "--season", "2025"], capture_output=True, text=True)
+    res_team = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "team", "KC", "--season", "2025"], capture_output=True, text=True, cwd=root)
     assert res_team.returncode == 0, res_team.stderr
     assert "TEAM DRILL-DOWN : KANSAS CITY CHIEFS" in res_team.stdout
 
-    res_player = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "player", "Mahomes", "--season", "2025"], capture_output=True, text=True)
+    res_player = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "player", "Mahomes", "--season", "2025"], capture_output=True, text=True, cwd=root)
     assert res_player.returncode == 0, res_player.stderr
     assert "PLAYER DRILL-DOWN : P.MAHOMES" in res_player.stdout
     assert "auto-selected" in res_player.stdout
@@ -338,6 +338,7 @@ def test_cli_play_subcommand_player_flag():
         [sys.executable, "-m", "nfl_stat_cli", "play", "--player", "Worthy", "--season", "2025"],
         capture_output=True,
         text=True,
+        cwd=root,
     )
     assert res_player.returncode == 0, res_player.stderr
     assert "SPECIFIC PLAY DIAGRAM" in res_player.stdout
@@ -348,6 +349,7 @@ def test_cli_play_subcommand_player_flag():
         [sys.executable, "-m", "nfl_stat_cli", "play", "--qb", "Mahomes", "--season", "2025"],
         capture_output=True,
         text=True,
+        cwd=root,
     )
     assert res_qb.returncode == 0, res_qb.stderr
     assert "SPECIFIC PLAY DIAGRAM" in res_qb.stdout
