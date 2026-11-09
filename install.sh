@@ -207,7 +207,7 @@ if [ "$VERBOSE" -eq 1 ]; then
     if ! command -v python3 >/dev/null 2>&1; then
         echo "[1/5] Python 3 not found. Installing Python 3..."
         if command -v brew >/dev/null 2>&1; then
-            brew install python
+            brew install python || die "Python 3 installation failed (brew install python)."
         elif command -v apt-get >/dev/null 2>&1; then
             confirm_sudo "sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv"
             sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv
@@ -363,7 +363,7 @@ printf "\n"
 update_ui 5 "Checking Python 3 installation..."
 if ! command -v python3 >/dev/null 2>&1; then
     if command -v brew >/dev/null 2>&1; then
-        run_step 5 15 "brew install python" brew install python
+        run_step 5 15 "brew install python" brew install python || die "Python 3 installation failed."
     elif command -v apt-get >/dev/null 2>&1; then
         confirm_sudo "sudo apt-get install -y python3 python3-pip python3-venv"
         run_step 5 15 "sudo apt-get install -y python3 python3-pip python3-venv" bash -c "sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv" || die "Python 3 installation failed."

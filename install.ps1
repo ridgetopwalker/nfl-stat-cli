@@ -76,7 +76,7 @@ function Find-RealPython {
         $found = Get-Command $cmd -ErrorAction SilentlyContinue
         if ($found -and $found.Source -notmatch "WindowsApps") {
             try {
-                $ver = & $found.Source -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+                $ver = & $found.Source -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null | Select-Object -Last 1
                 if ($LASTEXITCODE -eq 0 -and $ver -match "^3\.(\d+)$" -and [int]$Matches[1] -ge 9) {
                     return $found.Source
                 }
@@ -149,7 +149,7 @@ if (-not $PythonExe) {
     }
     $PythonExe = Find-RealPython
     if (-not $PythonExe) {
-        if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+        if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $env:PROCESSOR_ARCHITEW6432 -eq "ARM64") {
             Stop-Install "Python 3.9+ is not installed and the bundled fallback installer is x64-only. Install Python for ARM64 from https://www.python.org/downloads/ (or with winget) and re-run."
         }
         $installerName = "python-$PythonInstallerVersion-amd64.exe"
@@ -168,7 +168,7 @@ if (-not $PythonExe) {
             Stop-Install "SHA-256 mismatch for the downloaded $installerName (expected $PythonInstallerSha256, got $actualHash). The installer was deleted and NOT run."
         }
         $signature = Get-AuthenticodeSignature -FilePath $installerPath
-        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
+        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "O=Python Software Foundation") {
             Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
             Stop-Install "The downloaded $installerName is not validly signed by the Python Software Foundation (status: $($signature.Status)). The installer was deleted and NOT run."
         }
