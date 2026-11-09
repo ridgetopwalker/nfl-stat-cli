@@ -103,7 +103,7 @@ bootstrap_pip_safe() {
 # ==============================================================================
 if [ "$VERBOSE" -eq 1 ]; then
     echo "======================================================================"
-    echo "  NFL-STAT-CLI : One-Step Automated Installer (*nix) [VERBOSE MODE]"
+    echo "  Pro Football SLM : One-Step Automated Installer (*nix) [VERBOSE MODE]"
     echo "======================================================================"
 
     if ! command -v python3 >/dev/null 2>&1; then

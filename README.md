@@ -9,7 +9,7 @@ A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and in
 ## Core Highlights
 
 - **One-Step Automated Installer (`install.sh` / `install.bat` / `install.ps1`)**:
-  - **Compact Progress UI (Default)**: Displays the colorized `NFL-STAT-CLI` ASCII art banner, a full-width progress bar matched to the banner width, and a single overwriting status line showing the current installer command.
+  - **Compact Progress UI (Default)**: Displays the colorized `Pro Football SLM` ASCII art banner, a full-width progress bar matched to the banner width, and a single overwriting status line showing the current installer command.
   - **Verbose Mode (`-v` / `--verbose`)**: Pass `-v` (`./install.sh -v` or `.\install.ps1 -v`) to view full step-by-step `pip` and environment logs.
   - **Zero-Prerequisite Setup**: Automatically detects or installs **Python 3** (`>=3.8`), bootstraps **`pip`**, creates/updates `.venv`, installs required Python packages (`pandas`, `pyarrow`, `polars`, `nfl_data_py`), and installs R's `nflreadr` if `Rscript` is present.
   - **`pro-football-slm` Command & Post-Install `PATH` Prompt**: Generates the `pro-football-slm` launcher in the project folder (`./pro-football-slm` on `*nix`/WSL and `.\pro-football-slm` on Windows) and, once installation verification succeeds, asks if you want to add `pro-football-slm` to your global `PATH` so you can run `pro-football-slm` from any directory.

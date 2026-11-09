@@ -72,7 +72,7 @@ function Update-CompactUI([int]$Percent, [string]$CommandText) {
 
 if ($VerboseMode) {
     Write-Host "======================================================================" -ForegroundColor Cyan
-    Write-Host "  NFL-STAT-CLI : One-Step Automated Installer (Windows) [VERBOSE MODE]" -ForegroundColor Yellow
+    Write-Host "  Pro Football SLM : One-Step Automated Installer (Windows) [VERBOSE MODE]" -ForegroundColor Yellow
     Write-Host "======================================================================" -ForegroundColor Cyan
 } else {
     $PythonPreview = Find-RealPython
@@ -80,7 +80,7 @@ if ($VerboseMode) {
         & $PythonPreview -c "import pro_football_slm; print(pro_football_slm.AsciiArtRenderer.banner())" 2>$null
     } else {
         Write-Host "+=======================================================================================+" -ForegroundColor Yellow
-        Write-Host "|  NFL-STAT-CLI : nflverse (R) + sportsdataverse-py (Python) Custom Stat & Play Engine  |" -ForegroundColor Cyan
+        Write-Host "|  Pro Football SLM : nflverse (R) + sportsdataverse-py (Python) Custom Stat & Play Engine  |" -ForegroundColor Cyan
         Write-Host "+=======================================================================================+" -ForegroundColor Yellow
     }
     Write-Host ""
