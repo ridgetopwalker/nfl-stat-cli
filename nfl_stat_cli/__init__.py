@@ -328,27 +328,28 @@ class CLICompleter:
         self._context_override: Optional[str] = None
         self._matches: List[str] = []
         self._plays: Optional[List[Dict[str, Any]]] = plays
-        self._play_names_key: Optional[Tuple[int, int]] = None
+        self._play_names_src: Optional[List[Dict[str, Any]]] = None
+        self._play_names_len = -1
         self._play_names: Set[str] = set()
 
     def set_plays(self, plays: Optional[List[Dict[str, Any]]]) -> None:
         """Bind player-name completion to the active dataset (live or sample)."""
         self._plays = plays
-        self._play_names_key = None
+        self._play_names_src = None
 
     def _names_from_active_plays(self) -> Set[str]:
         plays = self._plays
         if not plays:
             return set()
-        key = (id(plays), len(plays))
-        if key != self._play_names_key:
-            names: Set[str] = set()
+        if self._play_names_src is not plays or self._play_names_len != len(plays):
+            raw: Set[str] = set()
             for p in plays:
                 for k in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name"):
                     val = p.get(k)
-                    if val and str(val).strip():
-                        names.add(str(val).strip())
-            self._play_names, self._play_names_key = names, key
+                    if val:
+                        raw.add(str(val))
+            self._play_names = {v.strip() for v in raw if v.strip()}
+            self._play_names_src, self._play_names_len = plays, len(plays)
         return self._play_names
 
     def set_context(self, ctx: Optional[str]) -> None:
@@ -1497,22 +1498,29 @@ class NFLDataBridge:
 
     def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto") -> None:
         self._cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
+        self._cache_dir_ready = False
         self.engine = engine.lower()
         self.last_source_used = "built-in-nflverse-sample"
         self.last_error: Optional[str] = None
 
     @property
     def cache_dir(self) -> Path:
-        """Cache directory; created the first time it is needed (not when the bridge is constructed)."""
-        try:
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
+        """
+        Cache directory, created the first time it is read (callers read it to write a cache file; use
+        ``_cache_dir`` to peek at the path without creating it). A mkdir failure is left for the write to report.
+        """
+        if not self._cache_dir_ready:
+            try:
+                self._cache_dir.mkdir(parents=True, exist_ok=True)
+                self._cache_dir_ready = True
+            except OSError:
+                pass
         return self._cache_dir
 
     @cache_dir.setter
     def cache_dir(self, value: Path) -> None:
         self._cache_dir = Path(value)
+        self._cache_dir_ready = False
 
     def load_pbp(self, seasons: List[int], spinner: Optional[Any] = None) -> List[Dict[str, Any]]:
         """Load play-by-play rows for the requested seasons using the selected engine."""
@@ -9690,10 +9698,13 @@ def get_ipc_dir(create: bool = True) -> Path:
         d = ipc_path / sub if sub else ipc_path
         if create:
             d.mkdir(parents=True, exist_ok=True)
-        elif not os.path.lexists(d):
-            continue
         if os.name != "nt":
-            st = os.lstat(d)
+            try:
+                st = os.lstat(d)
+            except FileNotFoundError:
+                if create:
+                    raise
+                continue
             if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
                 raise PermissionError(f"Refusing to use IPC directory not owned by the current user or reached through a symlink: {d.name}")
             try:
@@ -10065,6 +10076,7 @@ def wait_for_resolution(
     deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
 
     while True:
+        get_ipc_dir(create=False)  # re-check ownership/symlinks of directories that appeared after the last poll
         for p in (target_res, latest_res):
             data = _read_ipc_json(p)
             if data is not None and data.get("id") == report_id and data.get("status") == "resolved":

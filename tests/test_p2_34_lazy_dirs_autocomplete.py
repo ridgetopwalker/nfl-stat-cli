@@ -163,6 +163,7 @@ def test_existing_contract_completion_still_works():
 
 def test_tui_binds_completer_to_the_loaded_plays(monkeypatch, tmp_path):
     bound = {}
+    monkeypatch.setattr(cli, "_GLOBAL_COMPLETER", None)
     orig = cli.CLICompleter.set_plays
 
     def spy(self, plays):
@@ -181,3 +182,32 @@ def test_tui_binds_completer_to_the_loaded_plays(monkeypatch, tmp_path):
     except SystemExit:
         pass
     assert bound.get("plays") is live
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink checks are POSIX-only")
+def test_wait_for_resolution_rechecks_directories_that_appear_while_polling(tmp_path, monkeypatch):
+    target = tmp_path / "ipc"
+    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(target))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    def swap_in_symlink(_seconds):
+        target.symlink_to(elsewhere, target_is_directory=True)
+
+    monkeypatch.setattr(cli.time, "sleep", swap_in_symlink)
+    with pytest.raises(PermissionError):
+        cli.wait_for_resolution("err_20260101_000000_deadbeef", timeout=5.0, poll_interval=0.01)
+
+
+def test_get_ipc_dir_read_only_tolerates_a_directory_vanishing(ipc_env, monkeypatch):
+    ipc_env.mkdir()
+    real_lstat = os.lstat
+
+    def flaky(path, *a, **k):
+        if Path(path).name == "pending":
+            raise FileNotFoundError(path)
+        return real_lstat(path, *a, **k)
+
+    (ipc_env / "pending").mkdir()
+    monkeypatch.setattr(cli.os, "lstat", flaky)
+    assert cli.get_ipc_dir(create=False) == ipc_env
