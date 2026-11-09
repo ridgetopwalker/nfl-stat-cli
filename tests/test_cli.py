@@ -1734,6 +1734,50 @@ def test_reload_nfl_stat_cli_purges_submodules():
     assert "nfl_stat_cli.fantasy" in sys.modules
 
 
+def test_sportsbook_underdog_leaders_and_error_regression():
+    from nfl_stat_cli.sportsbook import (
+        compute_underdog_leaders,
+        render_underdog_leaderboard_view,
+    )
+
+    # 1. Underdog leaders on SAMPLE_PBP_PLAYS
+    leaders = compute_underdog_leaders(cli.SAMPLE_PBP_PLAYS, season=2025, limit=5)
+    assert len(leaders) <= 5
+    assert len(leaders) > 0
+    # TB won as underdog
+    tb = next((r for r in leaders if r["team"] == "TB"), None)
+    assert tb is not None
+    assert tb["su_wins"] == 1
+    assert tb["games_as_dog"] == 1
+    assert tb["su_win_pct"] == 100.0
+
+    # 2. Rendering view
+    board = cli.strip_ansi(render_underdog_leaderboard_view(cli.SAMPLE_PBP_PLAYS, season=2025, limit=5))
+    assert "NFL Underdog Performance Leaders: Most Wins as Underdog" in board
+    assert "Top 5" in board
+    assert "Dog Games" in board
+    assert "SU Wins" in board
+    assert "TB" in board
+
+    # 3. Regression test for err_20261108_201030:
+    # "which team won the most games as an underdog this season?"
+    engine = cli.StatEngine()
+    err_q = "which team won the most games as an underdog this season?"
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(err_q, engine=engine, slm_model="off")
+    assert parsed["intent"] == "sportsbook_report"
+    assert parsed["subquery"] == "underdogs"
+    assert parsed["limit"] == 5
+
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS))
+    assert "NFL Underdog Performance Leaders" in out
+    assert "Top 5" in out
+    assert "SU Wins" in out
+    assert "#1" in out
+    # Must NOT return full game betting board with Matchup and Total (O/U)
+    assert "Total (O/U)" not in out
+
+
+
 
 
 

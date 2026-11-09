@@ -332,6 +332,167 @@ def render_power_ratings_view(plays: List[Dict[str, Any]], season: int) -> str:
     return f"\n{tbl}"
 
 
+def compute_underdog_leaders(
+    plays: List[Dict[str, Any]],
+    season: int,
+    team_filter: Optional[str] = None,
+    limit: Optional[int] = 5,
+) -> List[Dict[str, Any]]:
+    """
+    Compute straight-up (SU) and against-the-spread (ATS) performance for NFL teams playing as underdogs.
+    Sorted primarily by straight-up upset wins (most wins as an underdog), then win percentage, then ATS covers.
+    """
+    from . import resolve_team_abbr, extract_games_summary
+
+    ratings = compute_team_power_ratings(plays, season)
+    games = extract_games_summary(plays, season)
+
+    dog_stats: Dict[str, Dict[str, Any]] = {}
+    target_team = resolve_team_abbr(team_filter).upper() if team_filter and resolve_team_abbr(team_filter) else (team_filter.upper() if team_filter else None)
+
+    for g in games:
+        h = g["home_team"]
+        a = g["away_team"]
+        wk = g["week"]
+        hs = g.get("home_score")
+        as_ = g.get("away_score")
+
+        hc = handicap_matchup(h, a, power_ratings=ratings, week=wk, home_score=hs, away_score=as_)
+        spread = hc["spread"]
+
+        if spread < 0:
+            # Home favored -> Away is underdog
+            dog, fav = a, h
+            dog_score, fav_score = as_, hs
+            dog_spread = abs(spread)
+        elif spread > 0:
+            # Away favored -> Home is underdog
+            dog, fav = h, a
+            dog_score, fav_score = hs, as_
+            dog_spread = abs(spread)
+        else:
+            continue
+
+        if dog not in dog_stats:
+            dog_stats[dog] = {
+                "team": dog,
+                "games": 0,
+                "su_wins": 0,
+                "su_losses": 0,
+                "su_ties": 0,
+                "ats_wins": 0,
+                "ats_losses": 0,
+                "ats_pushes": 0,
+                "spreads": [],
+            }
+
+        st = dog_stats[dog]
+        if dog_score is not None and fav_score is not None:
+            st["games"] += 1
+            st["spreads"].append(dog_spread)
+            if dog_score > fav_score:
+                st["su_wins"] += 1
+            elif dog_score < fav_score:
+                st["su_losses"] += 1
+            else:
+                st["su_ties"] += 1
+
+            if (dog_score + dog_spread) > fav_score:
+                st["ats_wins"] += 1
+            elif (dog_score + dog_spread) < fav_score:
+                st["ats_losses"] += 1
+            else:
+                st["ats_pushes"] += 1
+
+    results: List[Dict[str, Any]] = []
+    for team, st in dog_stats.items():
+        if target_team and team != target_team:
+            continue
+        gm = st["games"]
+        if gm == 0:
+            continue
+        su_w = st["su_wins"]
+        su_l = st["su_losses"]
+        su_t = st["su_ties"]
+        su_rec = f"{su_w}-{su_l}" if su_t == 0 else f"{su_w}-{su_l}-{su_t}"
+        su_pct = round((su_w / gm) * 100.0, 1)
+
+        ats_w = st["ats_wins"]
+        ats_l = st["ats_losses"]
+        ats_p = st["ats_pushes"]
+        ats_rec = f"{ats_w}-{ats_l}" if ats_p == 0 else f"{ats_w}-{ats_l}-{ats_p}"
+        ats_decided = ats_w + ats_l
+        cover_pct = round((ats_w / ats_decided) * 100.0, 1) if ats_decided > 0 else 0.0
+
+        avg_spd = round(sum(st["spreads"]) / len(st["spreads"]), 1) if st["spreads"] else 0.0
+
+        results.append({
+            "team": team,
+            "games_as_dog": gm,
+            "su_wins": su_w,
+            "su_losses": su_l,
+            "su_ties": su_t,
+            "su_record": su_rec,
+            "su_win_pct": su_pct,
+            "ats_wins": ats_w,
+            "ats_losses": ats_l,
+            "ats_pushes": ats_p,
+            "ats_record": ats_rec,
+            "cover_pct": cover_pct,
+            "avg_spread": avg_spd,
+        })
+
+    results.sort(key=lambda x: (x["su_wins"], x["su_win_pct"], x["cover_pct"], x["games_as_dog"]), reverse=True)
+    return results[:limit] if (limit and limit > 0) else results
+
+
+def render_underdog_leaderboard_view(
+    plays: List[Dict[str, Any]],
+    season: int,
+    team_filter: Optional[str] = None,
+    limit: Optional[int] = 5,
+) -> str:
+    """Render a colorized ASCII table of NFL teams with the most wins as an underdog."""
+    from . import C, AsciiArtRenderer
+
+    leaders = compute_underdog_leaders(plays, season, team_filter=team_filter, limit=limit)
+    if not leaders:
+        return f"\n{C.YELLOW}⚠ No underdog games recorded for season {season}.{C.RESET}"
+
+    sub_parts = [str(season)]
+    if team_filter:
+        sub_parts.append(f"Team: {team_filter.upper()}")
+    if limit and not team_filter:
+        sub_parts.append(f"Top {limit}")
+    title_str = f"🎲 NFL Underdog Performance Leaders: Most Wins as Underdog ({' • '.join(sub_parts)})"
+
+    headers = ["Rank", "Team", "Dog Games", "SU Wins", "SU Record", "Win %", "ATS Record", "Cover %", "Avg Spread"]
+    rows = []
+    for idx, r in enumerate(leaders, 1):
+        su_win_color = C.GREEN if r["su_wins"] > 0 else C.RESET
+        rows.append([
+            f"#{idx}",
+            f"{C.BOLD}{r['team']}{C.RESET}",
+            str(r["games_as_dog"]),
+            f"{su_win_color}{C.BOLD}{r['su_wins']}{C.RESET}",
+            r["su_record"],
+            f"{r['su_win_pct']:.1f}%",
+            r["ats_record"],
+            f"{r['cover_pct']:.1f}%",
+            f"+{r['avg_spread']:.1f}",
+        ])
+
+    tbl = AsciiArtRenderer.render_table(
+        title_str,
+        headers,
+        rows,
+        alignments=["right", "center", "center", "center", "center", "right", "center", "right", "right"],
+    )
+    footer = f"\n  {C.DIM}Straight-Up (SU) wins indicate outright underdog victories (upsets). Lines derived from Net EPA & power ratings.{C.RESET}"
+    return f"\n{tbl}{footer}"
+
+
+
 def render_game_handicap_dossier_view(
     home_team: str,
     away_team: str,
@@ -406,10 +567,11 @@ def interactive_sportsbook_browser(
         print(f"    [1] {C.BOLD}Browse Weekly Betting Board{C.RESET} (Spreads, Moneylines, Totals & ATS Results)")
         print(f"    [2] {C.BOLD}NFL 32-Team Power Ratings{C.RESET} (Handicapper Power Standings)")
         print(f"    [3] {C.BOLD}Single Matchup Deep Dive{C.RESET} (Odds, Win Probability & Key Numbers)")
+        print(f"    [4] {C.BOLD}Underdog Performance Leaders{C.RESET} (Most Outright Wins & Covers as Underdog)")
         print(f"    [q] {C.DIM}Return to main menu{C.RESET}")
 
         try:
-            choice = prompt_input("  Choose mode [1-3, q] (default: 1): ").strip().lower() or "1"
+            choice = prompt_input("  Choose mode [1-4, q] (default: 1): ").strip().lower() or "1"
         except (EOFError, KeyboardInterrupt):
             break
 
@@ -440,3 +602,5 @@ def interactive_sportsbook_browser(
             if g_sel.isdigit() and 1 <= int(g_sel) <= len(all_games):
                 chosen = all_games[int(g_sel) - 1]
                 print(render_game_handicap_dossier_view(chosen["home_team"], chosen["away_team"], plays, active_season, week=chosen["week"]))
+        elif choice == "4":
+            print(render_underdog_leaderboard_view(plays, active_season, limit=10))
