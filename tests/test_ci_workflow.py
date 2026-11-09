@@ -28,7 +28,8 @@ def test_workflow_is_read_only(workflow):
 
 def test_workflow_runs_pytest_on_supported_pythons(workflow):
     job = workflow["jobs"]["test"]
-    assert {"3.9", "3.13"} <= set(job["strategy"]["matrix"]["python-version"])
+    assert {"3.10", "3.13"} <= set(job["strategy"]["matrix"]["python-version"])
+    assert "3.9" not in job["strategy"]["matrix"]["python-version"]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert "python -m pytest -q" in commands
 
