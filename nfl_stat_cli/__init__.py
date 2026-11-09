@@ -169,6 +169,35 @@ def strip_ansi(text: str) -> str:
     return _CTRL_RE.sub("", _ANSI_RE.sub("", str(text)))
 
 
+MAX_EXPLICIT_SEASONS = 5
+
+
+def parse_seasons_arg(text: str) -> List[int]:
+    """Parse '2025', '2024,2025' or '2023-2025' into a sorted list of seasons (argparse type for --seasons)."""
+    seasons: Set[int] = set()
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d{4})(?:\s*-\s*(\d{4}))?", part)
+        if not m:
+            raise argparse.ArgumentTypeError(f"invalid season list '{text}' (use e.g. 2025, 2024,2025 or 2023-2025)")
+        lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+        if hi < lo or lo < 1999 or hi > CURRENT_SEASON + 1 or hi - lo >= MAX_EXPLICIT_SEASONS:
+            raise argparse.ArgumentTypeError(f"season range '{part}' must be within 1999-{CURRENT_SEASON + 1} and at most {MAX_EXPLICIT_SEASONS} seasons")
+        seasons.update(range(lo, hi + 1))
+    if not seasons or len(seasons) > MAX_EXPLICIT_SEASONS:
+        raise argparse.ArgumentTypeError(f"give between 1 and {MAX_EXPLICIT_SEASONS} seasons")
+    return sorted(seasons)
+
+
+def seasons_to_load(primary_season: int, explicit: Optional[List[int]] = None) -> List[int]:
+    """Seasons to load: exactly the explicit list when given, otherwise the season plus the prior one (Stat Page lookback)."""
+    if explicit:
+        return sorted({int(s) for s in explicit})
+    return sorted({primary_season - 1, primary_season})
+
+
 def prompt_input(prompt_text: str) -> str:
     """
     Read a line of user input with readline multi-line wrap support.
@@ -9677,6 +9706,7 @@ def interactive_tui(
     default_conf: Optional[str] = None,
     default_team: Optional[str] = None,
     default_camera: str = "behind-offense",
+    load_seasons: Optional[List[int]] = None,
 ) -> None:
     """
     Natural-Language-first interactive interface with /command support and
@@ -9684,15 +9714,15 @@ def interactive_tui(
     """
     is_interactive = hasattr(sys.stdout, "isatty") and sys.stdout.isatty() and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
     active_season = default_season
-    seasons_to_load = sorted({active_season - 1, active_season})
-    show_startup_loading(is_interactive=is_interactive, seasons=seasons_to_load)
+    startup_seasons = seasons_to_load(active_season, load_seasons)
+    show_startup_loading(is_interactive=is_interactive, seasons=startup_seasons)
     print(AsciiArtRenderer.banner())
     if initial_plays is not None:
         plays = initial_plays
     else:
-        seasons_label = ", ".join(map(str, seasons_to_load))
+        seasons_label = ", ".join(map(str, startup_seasons))
         with ConsoleSpinner(f"Loading years [{seasons_label}] & downcasting floats...", enabled=is_interactive) as sp:
-            plays = bridge.load_pbp(seasons_to_load, spinner=sp)
+            plays = bridge.load_pbp(startup_seasons, spinner=sp)
     detected_slm = NaturalLanguageStatAssistant.detect_ollama_model(slm_model)
     slm_status = f"Ollama SLM ({detected_slm})" if detected_slm else "Built-in Deterministic AST Parser (Offline)"
     if not is_interactive:
@@ -10139,6 +10169,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--engine", choices=["auto", "python", "r", "offline"], default=argparse.SUPPRESS, help="Data backend preference")
     common.add_argument("--season", type=int, default=argparse.SUPPRESS, help=f"Season year to analyze (default: current NFL season, {CURRENT_SEASON})")
+    common.add_argument(
+        "--seasons", type=parse_seasons_arg, default=argparse.SUPPRESS,
+        help="Seasons to load, e.g. 2025 or 2024,2025 or 2023-2025 (default: --season and the season before it). "
+             "Loading only the season you need uses less memory.",
+    )
     common.add_argument("--conf", type=str.upper, choices=["AFC", "NFC"], default=argparse.SUPPRESS, help="Filter by conference (AFC or NFC)")
     common.add_argument("--team", default=argparse.SUPPRESS, help="Filter by team abbreviation (e.g. KC, BUF, DET)")
     common.add_argument(
@@ -10165,6 +10200,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.set_defaults(
         engine="auto",
         season=CURRENT_SEASON,
+        seasons=None,
         conf=None,
         team=None,
         view="auto",
@@ -10273,6 +10309,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 default_conf=args.conf,
                 default_team=args.team,
                 default_camera=resolved_camera,
+                load_seasons=args.seasons,
             )
             return 0
 
@@ -10309,14 +10346,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(handle_nl_query_result(parsed, engine, []))
                 return 0
             target_season = int(parsed.get("season") or args.season)
-            all_plays = bridge.load_pbp(sorted({target_season - 1, target_season}))
+            all_plays = bridge.load_pbp(seasons_to_load(target_season, args.seasons))
             print(AsciiArtRenderer.banner())
             print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
             print(handle_nl_query_result(parsed, engine, all_plays, view_override=args.view, camera_override=args.camera))
             return 0
 
         # Load the requested season plus the prior season (Stat Page lookback); no cross-season fallback
-        all_plays = bridge.load_pbp(sorted({args.season - 1, args.season}))
+        all_plays = bridge.load_pbp(seasons_to_load(args.season, args.seasons))
 
         print(AsciiArtRenderer.banner())
         print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
