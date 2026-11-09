@@ -31,7 +31,8 @@ class ContractRecord:
     notes: str = ""
 
 
-# Publicly compiled NFL contracts (OverTheCap & Spotrac verified filings):
+# Embedded contract rows. No upstream source, retrieval date or as-of date is recorded for them, so they are
+# catalogued below as one unverified snapshot (see CONTRACT_SEASONS) rather than as "current" data.
 NFL_CONTRACTS: List[ContractRecord] = [
     # ------------------ QUARTERBACKS ------------------
     ContractRecord("Patrick Mahomes", "KC", "QB", "player", 450.0, 45.0, 141.5, 10, 2020, 2032, 37.0, "10-yr extension, rolling guarantees & roster bonus restructuring"),
@@ -144,10 +145,48 @@ NFL_CONTRACTS: List[ContractRecord] = [
 ]
 
 
-def find_contract_by_name(query_name: str) -> Optional[ContractRecord]:
-    """Find a contract record by full or partial player/coach name, supporting initial abbreviations."""
+# Season catalog. The rows above carry no date; the newest signing year among them is 2024, so the snapshot is
+# catalogued under that season and flagged "unverified". Any season not listed here is NOT cataloged and must
+# never be answered from this table. Change CONTRACT_SNAPSHOT_SEASON here if the rows are ever re-dated.
+CONTRACT_SNAPSHOT_SEASON = 2024
+CONTRACT_SEASONS: Dict[int, Dict[str, Any]] = {
+    CONTRACT_SNAPSHOT_SEASON: {
+        "status": "unverified",
+        "source": "none recorded for the embedded rows",
+        "records": NFL_CONTRACTS,
+    },
+}
+
+
+def contract_season_cataloged(season: Optional[int]) -> bool:
+    """True when contract rows exist for ``season``; None means "the latest cataloged season"."""
+    return True if season is None else int(season) in CONTRACT_SEASONS
+
+
+def contracts_cataloged_for(seasons: Any) -> bool:
+    """True only when every (known) season in ``seasons`` is cataloged; an unknown season (0/None) is not."""
+    seen = {int(s or 0) for s in seasons}
+    return bool(seen) and all(s in CONTRACT_SEASONS for s in seen)
+
+
+def contract_catalog_note(season: Optional[int] = None) -> str:
+    """One-line statement of what the contract data can and cannot say for ``season``."""
+    cataloged = sorted(CONTRACT_SEASONS)
+    if season is None or int(season) in CONTRACT_SEASONS:
+        use = max(cataloged) if season is None else int(season)
+        return (f"Contract data is an unverified static snapshot for season {use}; "
+                f"no source or as-of date is recorded.")
+    return (f"Contract data is not cataloged for season {int(season)} "
+            f"(cataloged: {', '.join(str(c) for c in cataloged)}, unverified); nothing is shown for it.")
+
+
+def find_contract_by_name(query_name: str, season: Optional[int] = None) -> Optional[ContractRecord]:
+    """
+    Find a contract record by full or partial player/coach name, supporting initial abbreviations.
+    With ``season`` given, a season that is not cataloged finds nothing instead of reusing the snapshot.
+    """
     q = query_name.strip().lower()
-    if not q:
+    if not q or not contract_season_cataloged(season):
         return None
 
     # 1. Exact match (prefer player if both exist)
@@ -358,6 +397,8 @@ def render_player_contract_view(
     """Render a detailed contract dossier card for a specific player or coach."""
     from . import C
 
+    if season and not contract_season_cataloged(season):
+        return f"\n{C.YELLOW}⚠ {contract_catalog_note(season)}{C.RESET}"
     c = find_contract_by_name(name)
     if not c:
         return f"\n{C.YELLOW}⚠ No contract record found for '{name}'. Try searching by last name (e.g. Mahomes, Jefferson, Reid).{C.RESET}"
@@ -376,11 +417,12 @@ def render_player_contract_view(
         "",
         f"  {C.CYAN}⏳ DURATION & FREE AGENCY HORIZON:{C.RESET}",
         f"     • Contract Length:          {c.years} Years (Signed: {c.signed_year})",
-        f"     • Contract Expiration / FA: {C.BOLD}{c.free_agent_year}{C.RESET} ({max(0, c.free_agent_year - 2026)} season(s) remaining)",
+        f"     • Contract Expiration / FA: {C.BOLD}{c.free_agent_year}{C.RESET} ({max(0, c.free_agent_year - CONTRACT_SNAPSHOT_SEASON)} season(s) after the {CONTRACT_SNAPSHOT_SEASON} snapshot)",
     ]
 
     if c.notes:
         lines.append(f"     • Structure Notes:          {C.DIM}{c.notes}{C.RESET}")
+    lines.append(f"     • Data status:              {C.DIM}{contract_catalog_note(season)}{C.RESET}")
 
     if plays and season:
         eff = calculate_contract_performance_efficiency(c, plays, season)
