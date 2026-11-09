@@ -9602,8 +9602,18 @@ ERROR_IPC_DISABLE_ENV = "NFL_STAT_DISABLE_ERROR_IPC"  # set to 1 to turn local /
 GIT_UPDATE_ENV = "NFL_STAT_ALLOW_GIT_UPDATE"
 IPC_WAIT_TIMEOUT_SECONDS = 600.0
 _IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
+_IPC_REPORT_FILE_RE = re.compile(r"^err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.json$", re.ASCII)
 IPC_MAX_FILE_BYTES = 65536
 IPC_MAX_RESPONSE_CHARS = 8000
+ERROR_RETENTION_DAYS_ENV = "PFSLM_ERROR_RETENTION_DAYS"  # preferred; falls back to NFL_STAT_ name
+ERROR_RETENTION_DAYS_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_DAYS"
+ERROR_RETENTION_MAX_ENV = "PFSLM_ERROR_RETENTION_MAX"
+ERROR_RETENTION_MAX_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_MAX"
+ERROR_RETENTION_DEFAULT_DAYS = 30
+ERROR_RETENTION_DEFAULT_MAX = 500
+ERROR_RETENTION_MIN_INTERVAL_SECONDS = 86400  # cheap check: at most once per day unless forced
+ERROR_RETENTION_STAMP_NAME = ".retention_cleanup_stamp"
+ERROR_RETENTION_SUBDIRS = ("resolved", "history")  # never touch pending/
 
 
 def _truthy_env(name: str) -> bool:
@@ -9656,6 +9666,207 @@ def get_ipc_dir() -> Path:
             except OSError:
                 pass
     return ipc_path
+
+
+def _env_int_with_fallback(
+    preferred: str,
+    legacy: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 10_000_000,
+) -> int:
+    """Read an int env var; preferred name wins over legacy. Invalid / out-of-range values fall back to default."""
+    for name in (preferred, legacy):
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw, 10)
+        except ValueError:
+            return default
+        if value < minimum or value > maximum:
+            return default
+        return value
+    return default
+
+
+def error_retention_days() -> int:
+    """Days to keep resolved/history error reports. Default 30. PFSLM_* wins over NFL_STAT_*."""
+    return _env_int_with_fallback(
+        ERROR_RETENTION_DAYS_ENV,
+        ERROR_RETENTION_DAYS_ENV_LEGACY,
+        ERROR_RETENTION_DEFAULT_DAYS,
+        minimum=1,
+        maximum=3650,
+    )
+
+
+def error_retention_max() -> int:
+    """Max resolved+history report files to keep. Default 500. PFSLM_* wins over NFL_STAT_*."""
+    return _env_int_with_fallback(
+        ERROR_RETENTION_MAX_ENV,
+        ERROR_RETENTION_MAX_ENV_LEGACY,
+        ERROR_RETENTION_DEFAULT_MAX,
+        minimum=1,
+        maximum=1_000_000,
+    )
+
+
+def _is_error_report_filename(name: str) -> bool:
+    return bool(isinstance(name, str) and _IPC_REPORT_FILE_RE.fullmatch(name))
+
+
+def _log_retention_issue(message: str) -> None:
+    try:
+        sys.stderr.write(f"nfl-stat-cli: error-report retention: {message}\n")
+    except Exception:
+        pass
+
+
+def _iter_retention_candidates(ipc_dir: Path) -> List[Tuple[Path, float]]:
+    """
+    List (path, mtime) for regular report files under resolved/ and history/.
+    Skips pending/, symlinks, non-matching names, and directories that are themselves symlinks.
+    """
+    out: List[Tuple[Path, float]] = []
+    for sub in ERROR_RETENTION_SUBDIRS:
+        d = ipc_dir / sub
+        try:
+            st_dir = os.lstat(d)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st_dir.st_mode) or not stat.S_ISDIR(st_dir.st_mode):
+            continue
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            if not _is_error_report_filename(name):
+                continue
+            p = d / name
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                continue
+            out.append((p, float(st.st_mtime)))
+    return out
+
+
+def _safe_unlink_report(path: Path) -> bool:
+    """Unlink a regular report file without following symlinks. Returns True if removed."""
+    try:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            return False
+        if not _is_error_report_filename(path.name):
+            return False
+        if path.parent.name not in ERROR_RETENTION_SUBDIRS:
+            return False
+        os.unlink(path)
+        return True
+    except OSError as exc:
+        _log_retention_issue(f"could not remove {path.name}: {exc}")
+        return False
+
+
+def _retention_stamp_path(ipc_dir: Path) -> Path:
+    return ipc_dir / ERROR_RETENTION_STAMP_NAME
+
+
+def _retention_cheap_check_ok(ipc_dir: Path, *, force: bool = False, now: Optional[float] = None) -> bool:
+    """Return True when cleanup should run. Stamp file throttles to about once per day."""
+    if force:
+        return True
+    stamp = _retention_stamp_path(ipc_dir)
+    try:
+        st = os.lstat(stamp)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            return True
+        age = (time.time() if now is None else now) - float(st.st_mtime)
+        return age >= float(ERROR_RETENTION_MIN_INTERVAL_SECONDS)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return True
+
+
+def _touch_retention_stamp(ipc_dir: Path) -> None:
+    stamp = _retention_stamp_path(ipc_dir)
+    try:
+        stamp.write_text(str(int(time.time())), encoding="utf-8")
+        if os.name != "nt":
+            try:
+                os.chmod(stamp, 0o600)
+            except OSError:
+                pass
+    except OSError as exc:
+        _log_retention_issue(f"could not write stamp: {exc}")
+
+
+def cleanup_error_reports(
+    ipc_dir: Optional[Path] = None,
+    *,
+    force: bool = False,
+    now: Optional[float] = None,
+    retention_days: Optional[int] = None,
+    retention_max: Optional[int] = None,
+) -> Dict[str, int]:
+    """
+    Prune old resolved/ and history/ error reports. Never touches pending/.
+
+    Deletes matching ``err_YYYYMMDD_HHMMSS_xxxxxxxx.json`` files older than the retention
+    window (default 30 days; ``PFSLM_ERROR_RETENTION_DAYS`` / ``NFL_STAT_ERROR_RETENTION_DAYS``),
+    then enforces a total cap (default 500; ``PFSLM_ERROR_RETENTION_MAX`` /
+    ``NFL_STAT_ERROR_RETENTION_MAX``) by removing oldest first. A stamp file limits work to
+    about once per day unless ``force=True``. Errors are swallowed and logged; this never
+    raises into the CLI.
+    """
+    result = {"skipped": 0, "deleted_age": 0, "deleted_cap": 0, "kept": 0, "examined": 0}
+    try:
+        root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir()
+        if not _retention_cheap_check_ok(root, force=force, now=now):
+            result["skipped"] = 1
+            return result
+        days = int(retention_days) if retention_days is not None else error_retention_days()
+        cap = int(retention_max) if retention_max is not None else error_retention_max()
+        if days < 1:
+            days = ERROR_RETENTION_DEFAULT_DAYS
+        if cap < 1:
+            cap = ERROR_RETENTION_DEFAULT_MAX
+        cutoff = (time.time() if now is None else float(now)) - (days * 86400.0)
+        candidates = _iter_retention_candidates(root)
+        result["examined"] = len(candidates)
+        remaining: List[Tuple[Path, float]] = []
+        for path, mtime in candidates:
+            if mtime < cutoff:
+                if _safe_unlink_report(path):
+                    result["deleted_age"] += 1
+                else:
+                    remaining.append((path, mtime))
+            else:
+                remaining.append((path, mtime))
+        if len(remaining) > cap:
+            remaining.sort(key=lambda item: item[1])  # oldest first
+            overflow = remaining[: len(remaining) - cap]
+            survivors = remaining[len(remaining) - cap :]
+            for path, _mtime in overflow:
+                if _safe_unlink_report(path):
+                    result["deleted_cap"] += 1
+                else:
+                    survivors.append((path, _mtime))
+            remaining = survivors
+        result["kept"] = len(remaining)
+        _touch_retention_stamp(root)
+    except Exception as exc:
+        _log_retention_issue(f"cleanup aborted: {exc}")
+    return result
 
 
 def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -9716,6 +9927,7 @@ def create_error_report(
     }
     _atomic_write_json(ipc_dir / "pending" / f"{report_id}.json", report_data)
     _atomic_write_json(ipc_dir / "pending" / "latest.json", report_data)
+    cleanup_error_reports(ipc_dir)  # cheap, at-most-daily prune of resolved/history only
     return report_data
 
 
@@ -9753,6 +9965,7 @@ def write_resolution(
                 pending_latest.unlink(missing_ok=True)
         except Exception:
             pass
+    cleanup_error_reports(ipc_dir)  # prune resolved/history after a resolution lands
     return res_data
 
 
@@ -9865,7 +10078,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/export-stats{C.RESET} [file.json]       Export custom stats catalog to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
-    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save the last query + answer as a local error report (nothing is sent anywhere)
+    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save the last query + answer as a local error report (nothing is sent; old resolved/history pruned after 30d / ~500)
     {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs NFL_STAT_ALLOW_GIT_UPDATE=1)
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
@@ -9999,6 +10212,14 @@ def interactive_tui(
     seasons_to_load = sorted({active_season - 1, active_season})
     show_startup_loading(is_interactive=is_interactive, seasons=seasons_to_load)
     print(AsciiArtRenderer.banner())
+    if error_ipc_enabled():
+        try:
+            override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
+            existing = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
+            if existing.is_dir():
+                cleanup_error_reports(existing)  # once-daily prune; never raises
+        except Exception:
+            pass
     if initial_plays is not None:
         plays = initial_plays
     else:

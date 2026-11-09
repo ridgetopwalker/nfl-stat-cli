@@ -11,6 +11,7 @@ description: Watch for /error reports filed from nfl-stat-cli (local, or a WSL c
   and nothing leaves the machine.
 - The report is a JSON file in the **report folder**: `$NFL_STAT_IPC_DIR`, or by default `~/.nfl_stat_cli/error_ipc`
   (subfolders `pending/`, `resolved/`, `history/`). It is outside the repo and private to the user (mode 0700).
+  Resolved and history reports older than 30 days (or beyond ~500 total) are pruned automatically; pending reports are kept.
 - Id format: `err_YYYYMMDD_HHMMSS_xxxxxxxx` (8 hex chars). The older `.error_ipc` repo folder and ids without the hex
   suffix are no longer used; the scripts here ignore and reject them.
 - Fields: `id`, `query`, `user_explanation`, `parsed` (the parse, including `status`/`reason` when the answer was a
@@ -23,6 +24,10 @@ description: Watch for /error reports filed from nfl-stat-cli (local, or a WSL c
 - `NFL_STAT_REPO` - checkout whose `nfl_stat_cli` writes the resolution (default: the checkout containing this skill).
 - For a WSL copy of nfl-stat: `NFL_STAT_WSL_IPC_DIR` (report folder inside WSL), `NFL_STAT_WSL_REPO` (absolute checkout path inside WSL; `~` is not expanded),
   `NFL_STAT_WSL_PYTHON` (default `python3`). Reach WSL only through `wsl.exe`.
+- Retention (resolved/ and history/ only; pending/ is never deleted):
+  - `PFSLM_ERROR_RETENTION_DAYS` (preferred) or `NFL_STAT_ERROR_RETENTION_DAYS` — keep reports this many days (default `30`; invalid values fall back to 30). PFSLM wins if both are set.
+  - `PFSLM_ERROR_RETENTION_MAX` or `NFL_STAT_ERROR_RETENTION_MAX` — max files across resolved+history (default `500`; oldest deleted first).
+  - Cleanup runs on report write and at interactive startup (at most once per day via a stamp file). Only `err_YYYYMMDD_HHMMSS_xxxxxxxx.json` files are removed; `latest.json` and other names are left alone.
 
 ## Workflow
 1. Start (or restart) the watcher as a **background task**: `python3 .agents/skills/nfl-stat-error-triage/watch_errors.py`
