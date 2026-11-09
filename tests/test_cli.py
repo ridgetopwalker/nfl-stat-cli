@@ -2015,6 +2015,80 @@ def test_player_team_associations_all_players_regression(engine):
     assert sf_teams == ["SF"], f"Stray 1-play noise should be filtered out, got {sf_teams}"
 
 
+def test_generic_team_disambiguation(monkeypatch, engine):
+    """
+    Test generic team disambiguation for cities with multiple teams (New York, Los Angeles).
+    """
+    # 1. Multiple matching teams for 'New York' (NYG and NYJ)
+    ny_matches = cli.resolve_team_matches("New York")
+    assert "NYG" in ny_matches and "NYJ" in ny_matches
+    assert len(ny_matches) == 2
+
+    # 2. Multiple matching teams for 'Los Angeles' (LA and LAC)
+    la_matches = cli.resolve_team_matches("Los Angeles")
+    assert "LA" in la_matches and "LAC" in la_matches
+    assert len(la_matches) == 2
+
+    # 3. Exact single team match (Chiefs -> KC, Giants -> NYG, Jets -> NYJ)
+    assert cli.resolve_team_matches("Chiefs") == ["KC"]
+    assert cli.resolve_team_matches("Giants") == ["NYG"]
+    assert cli.resolve_team_matches("Jets") == ["NYJ"]
+
+    # 4. Interactive selection prompts user: simulate choosing option 2 (NYJ)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "prompt_input", lambda prompt: "2")
+    selected = cli.resolve_team_interactive("New York", interactive=True)
+    assert selected == "NYJ"
+
+    # Simulate choosing option 1 (NYG)
+    monkeypatch.setattr(cli, "prompt_input", lambda prompt: "1")
+    selected_1 = cli.resolve_team_interactive("New York", interactive=True)
+    assert selected_1 == "NYG"
+
+    # Non-interactive defaults to first match without prompting
+    non_int = cli.resolve_team_interactive("New York", interactive=False)
+    assert non_int in ("NYG", "NYJ")
+
+
+def test_generic_player_disambiguation(monkeypatch, engine):
+    """
+    Test generic player candidate discovery and interactive disambiguation when surname matches multiple players.
+    """
+    multi_player_plays = [
+        {"season": 2026, "posteam": "SF", "defteam": "NYJ", "rusher_player_name": "C.McCaffrey", "desc": "C.McCaffrey 4 yd run"},
+        {"season": 2026, "posteam": "SF", "defteam": "ARI", "receiver_player_name": "C.McCaffrey", "desc": "C.McCaffrey 13 yd catch"},
+        {"season": 2026, "posteam": "WAS", "defteam": "SF", "receiver_player_name": "L.McCaffrey", "desc": "5-J.Daniels pass to 11-L.McCaffrey"},
+        {"season": 2026, "posteam": "LA", "defteam": "WAS", "desc": "42-E.Evans punts. 11-L.McCaffrey to WAS 24 for 9 yards"},
+    ]
+
+    # 1. find_matching_player_candidates discovers both McCaffreys
+    cands = cli.find_matching_player_candidates(multi_player_plays, "McCaffrey", season=2026)
+    assert len(cands) == 2
+    names = [c["name"] for c in cands]
+    assert "Christian McCaffrey" in names
+    assert any("L.McCaffrey" in n or "Luke" in n for n in names)
+
+    # 2. When query is already specific (e.g. 'Christian McCaffrey'), no candidates returned
+    assert cli.find_matching_player_candidates(multi_player_plays, "Christian McCaffrey", season=2026) == []
+
+    # 3. When single candidate exists in dataset (e.g. 'Mahomes')
+    single_cands = cli.find_matching_player_candidates(cli.SAMPLE_PBP_PLAYS, "Mahomes", season=2025)
+    assert len(single_cands) == 1
+    assert "Mahomes" in single_cands[0]["name"]
+
+    # 4. Interactive disambiguation in render_player_drilldown_view
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    # Simulate user picking candidate 1 (Christian McCaffrey)
+    monkeypatch.setattr(cli, "prompt_input", lambda prompt: "1")
+    out = cli.strip_ansi(cli.render_player_drilldown_view(engine, multi_player_plays, season=2026, player_name="McCaffrey", interactive=True))
+    assert "PLAYER DRILL-DOWN" in out
+    assert "SF" in out
+
+    # Non-interactive defaults cleanly to top candidate
+    out_non_int = cli.strip_ansi(cli.render_player_drilldown_view(engine, multi_player_plays, season=2026, player_name="McCaffrey", interactive=False))
+    assert "PLAYER DRILL-DOWN" in out_non_int
+
+
 
 
 
