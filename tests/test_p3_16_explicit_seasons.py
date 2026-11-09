@@ -23,6 +23,23 @@ def test_parse_seasons_arg_rejects(text):
         cli.parse_seasons_arg(text)
 
 
+def test_parse_seasons_arg_upper_bound_follows_current_season():
+    y = cli.CURRENT_SEASON
+    assert cli.parse_seasons_arg(str(y + 1)) == [y + 1]
+    assert cli.parse_seasons_arg(f"{y - 1}-{y}") == [y - 1, y]
+    with pytest.raises(argparse.ArgumentTypeError, match="must be within"):
+        cli.parse_seasons_arg(str(y + 2))
+    with pytest.raises(argparse.ArgumentTypeError, match="must be within"):
+        cli.parse_seasons_arg("1998")
+    with pytest.raises(argparse.ArgumentTypeError, match="upward"):
+        cli.parse_seasons_arg(f"{y}-{y - 1}")
+
+
+def test_parse_seasons_arg_rejects_non_ascii_digits():
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.parse_seasons_arg("\u0662\u0660\u0662\u0665")
+
+
 def test_seasons_to_load_defaults_to_lookback_and_honours_explicit():
     assert cli.seasons_to_load(2025) == [2024, 2025]
     assert cli.seasons_to_load(2025, None) == [2024, 2025]
@@ -59,6 +76,23 @@ def test_ask_with_seasons_loads_only_those(loads):
     assert loads == [[2025]]
 
 
+def test_season_outside_explicit_seasons_warns_on_stderr(loads, capsys):
+    cli.main(["stat", "epa_per_play", "--season", "2025", "--seasons", "2023", "--engine", "offline", "--no-color"])
+    err = capsys.readouterr().err
+    assert "season 2025 is not in --seasons (2023)" in err
+    assert loads == [[2023]]
+
+
+def test_no_warning_when_season_is_included(loads, capsys):
+    cli.main(["stat", "epa_per_play", "--season", "2025", "--seasons", "2024,2025", "--engine", "offline", "--no-color"])
+    assert "not in --seasons" not in capsys.readouterr().err
+
+
+def test_ask_warns_when_the_parsed_season_is_not_loaded(loads, capsys):
+    cli.main(["ask", "epa per play 2024", "--season", "2025", "--seasons", "2025", "--engine", "offline", "--no-color", "--slm-model", "off"])
+    assert "season 2024 is not in --seasons (2025)" in capsys.readouterr().err
+
+
 def test_ask_default_follows_the_parsed_season(loads):
     cli.main(["ask", "epa per play 2024", "--season", "2025", "--engine", "offline", "--no-color", "--slm-model", "off"])
     assert loads == [[2023, 2024]]
@@ -82,14 +116,16 @@ def test_tui_loads_the_requested_seasons(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "prompt_input", lambda prompt: "/quit")
     eng = cli.StatEngine(storage_dir=tmp_path)
     for kwargs, expected in (({}, [2023, 2024]), ({"load_seasons": [2024]}, [2024])):
+        before = len(seen)
         try:
             cli.interactive_tui(eng, Bridge(cache_dir=tmp_path / "c", engine="offline"), slm_model="off", default_season=2024, **kwargs)
         except SystemExit:
             pass
-        assert seen[-1] == expected
+        assert len(seen) == before + 1 and seen[-1] == expected
 
 
-def test_help_mentions_seasons_option(capsys):
+def test_help_mentions_seasons_option_and_lookback_tradeoff(capsys):
     with pytest.raises(SystemExit):
         cli.main(["stat", "--help"])
-    assert "--seasons" in capsys.readouterr().out
+    out = " ".join(capsys.readouterr().out.split())
+    assert "--seasons" in out and "prior-season data" in out

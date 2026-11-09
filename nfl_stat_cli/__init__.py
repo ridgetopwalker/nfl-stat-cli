@@ -179,12 +179,14 @@ def parse_seasons_arg(text: str) -> List[int]:
         part = part.strip()
         if not part:
             continue
-        m = re.fullmatch(r"(\d{4})(?:\s*-\s*(\d{4}))?", part)
+        m = re.fullmatch(r"(\d{4})(?:\s*-\s*(\d{4}))?", part, re.ASCII)
         if not m:
             raise argparse.ArgumentTypeError(f"invalid season list '{text}' (use e.g. 2025, 2024,2025 or 2023-2025)")
         lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
-        if hi < lo or lo < 1999 or hi > CURRENT_SEASON + 1 or hi - lo >= MAX_EXPLICIT_SEASONS:
-            raise argparse.ArgumentTypeError(f"season range '{part}' must be within 1999-{CURRENT_SEASON + 1} and at most {MAX_EXPLICIT_SEASONS} seasons")
+        if lo < 1999 or hi > CURRENT_SEASON + 1:
+            raise argparse.ArgumentTypeError(f"season '{part}' must be within 1999-{CURRENT_SEASON + 1}")
+        if hi < lo or hi - lo >= MAX_EXPLICIT_SEASONS:
+            raise argparse.ArgumentTypeError(f"season range '{part}' must run upward and cover at most {MAX_EXPLICIT_SEASONS} seasons")
         seasons.update(range(lo, hi + 1))
     if not seasons or len(seasons) > MAX_EXPLICIT_SEASONS:
         raise argparse.ArgumentTypeError(f"give between 1 and {MAX_EXPLICIT_SEASONS} seasons")
@@ -196,6 +198,15 @@ def seasons_to_load(primary_season: int, explicit: Optional[List[int]] = None) -
     if explicit:
         return sorted({int(s) for s in explicit})
     return sorted({primary_season - 1, primary_season})
+
+
+def warn_if_season_not_loaded(season: int, explicit: Optional[List[int]]) -> None:
+    """Tell the user (stderr) when --seasons leaves out the season being analysed, instead of silently showing nothing."""
+    if explicit and int(season) not in explicit:
+        print(
+            f"[!] Warning: season {season} is not in --seasons ({', '.join(map(str, explicit))}), so no {season} data will be loaded.",
+            file=sys.stderr,
+        )
 
 
 def prompt_input(prompt_text: str) -> str:
@@ -10172,7 +10183,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--seasons", type=parse_seasons_arg, default=argparse.SUPPRESS,
         help="Seasons to load, e.g. 2025 or 2024,2025 or 2023-2025 (default: --season and the season before it). "
-             "Loading only the season you need uses less memory.",
+             "Loading only the season you need uses less memory, but the Stat Page lookback and 'last year' questions then have no prior-season data.",
     )
     common.add_argument("--conf", type=str.upper, choices=["AFC", "NFC"], default=argparse.SUPPRESS, help="Filter by conference (AFC or NFC)")
     common.add_argument("--team", default=argparse.SUPPRESS, help="Filter by team abbreviation (e.g. KC, BUF, DET)")
@@ -10346,6 +10357,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(handle_nl_query_result(parsed, engine, []))
                 return 0
             target_season = int(parsed.get("season") or args.season)
+            warn_if_season_not_loaded(target_season, args.seasons)
             all_plays = bridge.load_pbp(seasons_to_load(target_season, args.seasons))
             print(AsciiArtRenderer.banner())
             print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
@@ -10353,6 +10365,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         # Load the requested season plus the prior season (Stat Page lookback); no cross-season fallback
+        warn_if_season_not_loaded(args.season, args.seasons)
         all_plays = bridge.load_pbp(seasons_to_load(args.season, args.seasons))
 
         print(AsciiArtRenderer.banner())
