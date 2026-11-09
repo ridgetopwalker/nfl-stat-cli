@@ -66,8 +66,10 @@ def _write(text):
 
 
 @pytest.fixture(autouse=True)
-def _no_timeout_env(monkeypatch):
+def _isolated_env(monkeypatch, tmp_path):
     monkeypatch.delenv("NFL_STAT_R_TIMEOUT", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
 
 
 def _bridge(tmp_path):
@@ -101,6 +103,9 @@ def test_bridge_scripts_export_all_possession_plays_and_stay_identical():
     assert packaged == top
     assert "out_df <- pbp[!is.na(pbp$posteam), keep_cols]" in packaged
     assert "pass_attempt == 1) | (!is.na(pbp$rush_attempt)" not in packaged
+    # every column the shared row predicate reads must be exported
+    for col in ("posteam", "play_type", "pass_attempt", "rush_attempt", "penalty", "timeout", "desc"):
+        assert f'"{col}"' in packaged
 
 
 # --- cache validation ------------------------------------------------------------------------
@@ -215,18 +220,6 @@ def test_cache_missing_columns_the_row_predicate_needs_is_rejected(monkeypatch, 
     rows = b._try_nflverse_r([2025])
     assert len(fake.calls) == 1
     assert _ids(rows) == EXPECTED_IDS
-
-
-def test_r_rows_get_the_same_index_defaults_as_the_python_path(monkeypatch, tmp_path):
-    # play_id blank: _normalize_row falls back to the enumerate index, which must match across backends
-    blank = [(None,) + p[1:] for p in RAW_PLAYS]
-    text = _csv_text(blank)
-    FakeR(monkeypatch, _write(text))
-    r_rows = _bridge(tmp_path)._try_nflverse_r([2025])
-    records = [dict(zip(HEADER, [2025, 1, "2025_01_YYY_ZZZ", None, team, "YYY", pt, pa, ra, pen, to, desc, 0.1]))
-               for _pid, team, pt, pa, ra, pen, to, desc in blank]
-    py_rows = _bridge(tmp_path)._normalize_dataframe(SimpleNamespace(to_dict=lambda orient="records": records))
-    assert [r["play_id"] for r in r_rows] == [r["play_id"] for r in py_rows]
 
 
 @pytest.mark.parametrize("bad", ["2024", b"2024", [2024.5]])

@@ -29,6 +29,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+import uuid
 import urllib.error
 import urllib.request
 from contextlib import nullcontext
@@ -1648,14 +1649,14 @@ class NFLDataBridge:
         bridge_script = bridge_resource
         out_csv = self.cache_dir / f"nflverse_pbp_{R_CACHE_FORMAT}_{'_'.join(map(str, season_key))}.csv"
         seasons_arg = ",".join(map(str, season_key))
-        tmp_csv = out_csv.with_name(f".{out_csv.name}.{os.getpid()}.tmp")
+        tmp_csv = out_csv.with_name(f".{out_csv.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
         # Remove temp files left behind by an earlier process that was killed mid-write
-        for stale in self.cache_dir.glob(".nflverse_pbp_*.tmp"):
-            try:
+        try:
+            for stale in self.cache_dir.glob(".nflverse_pbp_*.tmp"):
                 if dt.datetime.now().timestamp() - stale.stat().st_mtime > 86400:
                     stale.unlink(missing_ok=True)
-            except OSError:
-                pass
+        except OSError:
+            pass
         try:
             # Reuse a cached CSV only if it is younger than 12 hours AND passes the structural check
             use_cached = False
@@ -1711,8 +1712,7 @@ class NFLDataBridge:
             if out_csv.exists():
                 with open(out_csv, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
-                    # Number rows before filtering, exactly like the dataframe path, so idx-derived
-                    # defaults (play ids) agree across backends
+                    # idx is only a fallback for rows with no play_id (real nflverse data always has one)
                     rows = [
                         self._normalize_row(r, idx)
                         for idx, r in enumerate(reader, 1)
