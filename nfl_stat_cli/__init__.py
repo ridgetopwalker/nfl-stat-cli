@@ -7706,6 +7706,105 @@ def render_stats_catalog(engine: StatEngine) -> str:
     return "\n".join(lines)
 
 
+# ==============================================================================
+# IPC Error Reporting & Self-Healing Agent Signaling
+# ==============================================================================
+
+def get_ipc_dir() -> Path:
+    """Returns the .error_ipc directory path, creating pending/resolved/history subfolders."""
+    try:
+        pkg_root = Path(__file__).resolve().parent.parent
+        if (pkg_root / ".git").exists() or (pkg_root / "pyproject.toml").exists():
+            ipc_path = pkg_root / ".error_ipc"
+        else:
+            ipc_path = Path.cwd() / ".error_ipc"
+    except Exception:
+        ipc_path = Path.cwd() / ".error_ipc"
+    ipc_path.mkdir(parents=True, exist_ok=True)
+    (ipc_path / "pending").mkdir(parents=True, exist_ok=True)
+    (ipc_path / "resolved").mkdir(parents=True, exist_ok=True)
+    (ipc_path / "history").mkdir(parents=True, exist_ok=True)
+    return ipc_path
+
+
+def create_error_report(
+    query_raw: str,
+    parsed_nl: Dict[str, Any],
+    user_explanation: str = "",
+    season: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Serializes an error report for a natural-language query and writes it to .error_ipc/pending/."""
+    ipc_dir = get_ipc_dir()
+    now_dt = dt.datetime.now()
+    report_id = f"err_{now_dt.strftime('%Y%m%d_%H%M%S')}"
+    report_data = {
+        "id": report_id,
+        "timestamp": now_dt.isoformat(),
+        "query": query_raw,
+        "user_explanation": user_explanation or "Interpretation mismatch or unexpected query result.",
+        "parsed": parsed_nl,
+        "season": season or CURRENT_SEASON,
+        "version": __version__,
+        "status": "pending",
+    }
+    with open(ipc_dir / "pending" / f"{report_id}.json", "w", encoding="utf-8") as f:
+        json.dump(report_data, f, indent=2)
+    with open(ipc_dir / "pending" / "latest.json", "w", encoding="utf-8") as f:
+        json.dump(report_data, f, indent=2)
+    return report_data
+
+
+def write_resolution(
+    report_id: str,
+    summary: str,
+    commit: str = "",
+    status: str = "resolved",
+) -> Dict[str, Any]:
+    """Writes a resolution signal file indicating an error report has been addressed."""
+    ipc_dir = get_ipc_dir()
+    res_data = {
+        "id": report_id,
+        "status": status,
+        "commit": commit,
+        "summary": summary,
+        "timestamp": dt.datetime.now().isoformat(),
+    }
+    with open(ipc_dir / "resolved" / f"{report_id}.json", "w", encoding="utf-8") as f:
+        json.dump(res_data, f, indent=2)
+    with open(ipc_dir / "resolved" / "latest.json", "w", encoding="utf-8") as f:
+        json.dump(res_data, f, indent=2)
+    pending_file = ipc_dir / "pending" / f"{report_id}.json"
+    if pending_file.exists():
+        history_file = ipc_dir / "history" / f"{report_id}.json"
+        try:
+            shutil.move(str(pending_file), str(history_file))
+        except Exception:
+            pass
+    return res_data
+
+
+def wait_for_resolution(
+    report_id: str,
+    poll_interval: float = 1.0,
+) -> Optional[Dict[str, Any]]:
+    """Polls .error_ipc/resolved/ until the resolution payload appears or the user interrupts."""
+    ipc_dir = get_ipc_dir()
+    target_res = ipc_dir / "resolved" / f"{report_id}.json"
+    latest_res = ipc_dir / "resolved" / "latest.json"
+
+    while True:
+        for p in (target_res, latest_res):
+            if p.exists():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if data.get("id") == report_id and data.get("status") == "resolved":
+                        return data
+                except Exception:
+                    pass
+        time.sleep(poll_interval)
+
+
 def render_slash_help() -> str:
     return f"""
 {C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
@@ -7737,6 +7836,8 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/export{C.RESET} [file.json]             Export custom stats to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
+    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Report parsing or interpretation error to Antigravity AI agent
+    {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place with latest patches from Antigravity
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
@@ -7888,6 +7989,7 @@ def interactive_tui(
         print(f"  {C.DIM}Ask any NFL stat or play question in plain English, or type {C.RESET}{C.BOLD}{C.GOLD}/help{C.RESET}{C.DIM} for commands ({C.RESET}{C.BOLD}/quit{C.RESET}{C.DIM} or {C.RESET}{C.BOLD}close{C.RESET}{C.DIM} to exit).{C.RESET}")
 
     last_parsed_nl: Optional[Dict[str, Any]] = None
+    last_query_raw: Optional[str] = None
 
     while True:
         try:
@@ -8023,6 +8125,7 @@ def interactive_tui(
                         if not any(k in nl_play_q.lower() for k in ("behind", "offense", "defense", "sideline")):
                             parsed["camera"] = default_camera
                         last_parsed_nl = parsed
+                        last_query_raw = nl_play_q
                         print(handle_nl_query_result(parsed, engine, plays))
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
@@ -8082,6 +8185,90 @@ def interactive_tui(
                         print(json.dumps(last_parsed_nl, indent=2))
                     else:
                         print(f"  {C.DIM}No natural-language query has been run in this session yet.{C.RESET}")
+                elif cmd_token in ("/error", "/bug", "/report"):
+                    if not last_parsed_nl or not last_query_raw:
+                        print(f"  {C.YELLOW}⚠ No natural-language query has been run in this session yet.{C.RESET}")
+                        print(f"  {C.DIM}Run a query first (e.g. 'which coach has called the most timeouts in the 4th qrt'), then type `/error`.{C.RESET}")
+                        continue
+
+                    user_notes = " ".join(cmd_args).strip()
+                    if not user_notes:
+                        print(f"\n{C.BOLD}{C.RED}=== 🚨 NATURAL LANGUAGE QUERY ERROR REPORT ==={C.RESET}")
+                        print(f"  {C.BOLD}Failed Query:{C.RESET} \"{last_query_raw}\"")
+                        print(f"  {C.BOLD}Current Interpretation:{C.RESET} `{last_parsed_nl.get('stat_name')}` (group: `{last_parsed_nl.get('group_by')}`, filter: `{last_parsed_nl.get('filter_expr') or 'none'}`)")
+                        try:
+                            user_notes = prompt_input(f"\n  {C.BOLD}{C.GOLD}What was incorrect or what did you expect?{C.RESET} ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            print(f"\n  {C.DIM}Error report cancelled.{C.RESET}")
+                            continue
+
+                    rep = create_error_report(
+                        query_raw=last_query_raw,
+                        parsed_nl=last_parsed_nl,
+                        user_explanation=user_notes,
+                        season=active_season,
+                    )
+                    rep_id = rep["id"]
+                    print(f"\n  {C.GREEN}✔ Error report `{rep_id}` created & sent to Antigravity IPC!{C.RESET}")
+                    print(f"  {C.DIM}Saved to: {get_ipc_dir() / 'pending' / 'latest.json'}{C.RESET}")
+                    print(f"  {C.CYAN}💡 Antigravity agent will inspect the AST parser, patch the code, run tests, and push the commit.{C.RESET}")
+
+                    try:
+                        wait_choice = prompt_input(f"\n  {C.BOLD}Wait for Antigravity AI fix and auto-reload now? [Y/n]: {C.RESET}").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        wait_choice = "n"
+
+                    if wait_choice in ("", "y", "yes"):
+                        print(f"\n  {C.GOLD}⏳ Waiting for Antigravity signal... (Press Ctrl+C to stop waiting and return to prompt){C.RESET}")
+                        try:
+                            res = wait_for_resolution(rep_id)
+                        except KeyboardInterrupt:
+                            print(f"\n  {C.YELLOW}Stopped waiting. Report `{rep_id}` remains pending.{C.RESET}")
+                            print(f"  {C.DIM}Once the fix is committed, type `/reload` to apply the update.{C.RESET}")
+                            continue
+
+                        if res:
+                            print(f"\n  {C.GREEN}{C.BOLD}🎉 Issue has been solved by Antigravity!{C.RESET}")
+                            if res.get("commit"):
+                                print(f"  {C.BOLD}Commit:{C.RESET} {res.get('commit')}")
+                            if res.get("summary"):
+                                print(f"  {C.BOLD}Fix Details:{C.RESET} {res.get('summary')}")
+                            print(f"  {C.CYAN}🔄 Reloading programming and re-evaluating query...{C.RESET}\n")
+                            try:
+                                import importlib
+                                import nfl_stat_cli as _cur_mod
+                                importlib.reload(_cur_mod)
+                                engine = _cur_mod.StatEngine()
+                                re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
+                                    last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
+                                )
+                                last_parsed_nl = re_parsed
+                                print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays))
+                            except Exception as re_err:
+                                print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
+                    else:
+                        print(f"  {C.DIM}Report saved. Type `/reload` or `/update` once the fix is deployed to update your programming.{C.RESET}")
+                elif cmd_token in ("/reload", "/update", "/refresh"):
+                    print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place...{C.RESET}")
+                    try:
+                        import importlib
+                        import nfl_stat_cli as _cur_mod
+                        importlib.reload(_cur_mod)
+                        engine = _cur_mod.StatEngine()
+                        ipc_dir = get_ipc_dir()
+                        latest_res_p = ipc_dir / "resolved" / "latest.json"
+                        res_info = ""
+                        if latest_res_p.exists():
+                            try:
+                                with open(latest_res_p, "r", encoding="utf-8") as f:
+                                    r_data = json.load(f)
+                                if r_data.get("summary"):
+                                    res_info = f" (Latest resolution: {r_data.get('summary')})"
+                            except Exception:
+                                pass
+                        print(f"  {C.GREEN}✔ Programming successfully reloaded!{res_info}{C.RESET}")
+                    except Exception as r_err:
+                        print(f"  {C.RED}✖ Reload failed: {r_err}{C.RESET}")
                 elif cmd_token in ("/query", "/filter"):
                     print(f"\n{C.BOLD}{C.CYAN}=== 🔎 AD-HOC SEASON FILTER & GROUP QUERY ==={C.RESET}")
                     stat_q = prompt_input("  Metric to evaluate (e.g. yards_per_play, epa_per_play, screen_yards_after_catch, passer_rating): ").strip() or "yards_per_play"
@@ -8128,6 +8315,7 @@ def interactive_tui(
             if parsed.get("intent") == "specific_play" and not any(k in low_in for k in ("behind", "offense", "defense", "sideline")):
                 parsed["camera"] = default_camera
             last_parsed_nl = parsed
+            last_query_raw = raw_in
             print(handle_nl_query_result(parsed, engine, plays))
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
