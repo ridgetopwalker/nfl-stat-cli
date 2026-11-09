@@ -9595,6 +9595,7 @@ GIT_UPDATE_ENV = "NFL_STAT_ALLOW_GIT_UPDATE"
 IPC_WAIT_TIMEOUT_SECONDS = 600.0
 _IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
 IPC_MAX_FILE_BYTES = 65536
+IPC_MAX_RESPONSE_CHARS = 8000
 
 
 def _truthy_env(name: str) -> bool:
@@ -9659,8 +9660,13 @@ def create_error_report(
     parsed_nl: Dict[str, Any],
     user_explanation: str = "",
     season: Optional[int] = None,
+    response_text: str = "",
 ) -> Dict[str, Any]:
-    """Serializes an error report for a natural-language query and writes it to the IPC pending dir."""
+    """
+    Serializes an error report for a natural-language query and writes it to the IPC pending dir.
+    ``response_text`` is what the CLI showed the user (ANSI stripped, capped), so a wrong answer or a
+    can't-answer reason can be reviewed without re-running the query.
+    """
     ipc_dir = get_ipc_dir()
     now_dt = dt.datetime.now()
     report_id = f"err_{now_dt.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
@@ -9669,7 +9675,8 @@ def create_error_report(
         "timestamp": now_dt.isoformat(),
         "query": query_raw,
         "user_explanation": user_explanation or "Interpretation mismatch or unexpected query result.",
-        "parsed": parsed_nl,
+        "parsed": json.loads(json.dumps(parsed_nl, default=str)),  # tolerate non-JSON values in a parse
+        "response": strip_ansi(str(response_text or ""))[:IPC_MAX_RESPONSE_CHARS],
         "season": season or CURRENT_SEASON,
         "version": __version__,
         "status": "pending",
@@ -9979,6 +9986,7 @@ def interactive_tui(
 
     last_parsed_nl: Optional[Dict[str, Any]] = None
     last_query_raw: Optional[str] = None
+    last_response_text: str = ""
 
     setup_readline_completer(engine)
 
@@ -10138,7 +10146,8 @@ def interactive_tui(
                             parsed["camera"] = default_camera
                         last_parsed_nl = parsed
                         last_query_raw = nl_play_q
-                        print(handle_nl_query_result(parsed, engine, plays, interactive=is_interactive))
+                        last_response_text = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
+                        print(last_response_text)
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
                 elif cmd_token in ("/games", "/game", "/matchup", "/matchups", "/boxscore", "/pbp"):
@@ -10266,7 +10275,10 @@ def interactive_tui(
                     if not user_notes:
                         print(f"\n{C.BOLD}{C.RED}=== 🚨 NATURAL LANGUAGE QUERY ERROR REPORT ==={C.RESET}")
                         print(f"  {C.BOLD}Failed Query:{C.RESET} \"{last_query_raw}\"")
-                        print(f"  {C.BOLD}Current Interpretation:{C.RESET} `{last_parsed_nl.get('stat_name')}` (group: `{last_parsed_nl.get('group_by')}`, filter: `{last_parsed_nl.get('filter_expr') or 'none'}`)")
+                        if last_parsed_nl.get("status") == "unanswered" or last_parsed_nl.get("intent") == "ambiguous":
+                            print(f"  {C.BOLD}I said I can't answer:{C.RESET} {_one_line_text(last_parsed_nl.get('reason') or 'no reason given', 300)}")
+                        else:
+                            print(f"  {C.BOLD}Current Interpretation:{C.RESET} intent `{last_parsed_nl.get('intent')}`, stat `{last_parsed_nl.get('stat_name')}` (group: `{last_parsed_nl.get('group_by')}`, filter: `{last_parsed_nl.get('filter_expr') or 'none'}`)")
                         try:
                             user_notes = prompt_input(f"\n  {C.BOLD}{C.GOLD}What was incorrect or what did you expect?{C.RESET} ").strip()
                         except (EOFError, KeyboardInterrupt):
@@ -10278,6 +10290,7 @@ def interactive_tui(
                         parsed_nl=last_parsed_nl,
                         user_explanation=user_notes,
                         season=active_season,
+                        response_text=last_response_text,
                     )
                     rep_id = rep["id"]
                     print(f"\n  {C.GREEN}✔ Error report `{rep_id}` saved to the local error IPC folder.{C.RESET}")
@@ -10319,7 +10332,8 @@ def interactive_tui(
                                         last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
                                     )
                                     last_parsed_nl = re_parsed
-                                    print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive))
+                                    last_response_text = _cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive)
+                                    print(last_response_text)
                                 except Exception as re_err:
                                     print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
                             else:
@@ -10428,6 +10442,7 @@ def interactive_tui(
             last_query_raw = raw_in
             res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
             LAST_RAW_OUTPUT = strip_ansi(res_str)
+            last_response_text = res_str
             print(res_str)
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
