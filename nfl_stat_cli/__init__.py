@@ -3094,16 +3094,24 @@ class StatEngine:
             res = [p for p in res if team.upper() in (str(p.get("posteam", "")).upper(), str(p.get("defteam", "")).upper())]
         target_player = player or qb
         if target_player:
-            p_low = target_player.lower()
+            p_parts = str(target_player).strip().split()
+            candidates = {str(target_player).lower()}
+            if len(p_parts) >= 2:
+                candidates.add(f"{p_parts[0][0].lower()}.{p_parts[-1].lower()}")
+                candidates.add(f"{p_parts[0][0].lower()} {p_parts[-1].lower()}")
+                candidates.add(p_parts[-1].lower())
             res = [
                 p for p in res
-                if p_low in str(p.get("player_name", "")).lower()
-                or p_low in str(p.get("qb_name", "")).lower()
-                or p_low in str(p.get("receiver_player_name", "")).lower()
-                or p_low in str(p.get("rusher_player_name", "")).lower()
-                or p_low in str(p.get("kicker_player_name", "")).lower()
-                or p_low in str(p.get("punter_player_name", "")).lower()
-                or p_low in str(p.get("desc", "")).lower()
+                if any(
+                    c in str(p.get("player_name", "")).lower()
+                    or c in str(p.get("qb_name", "")).lower()
+                    or c in str(p.get("receiver_player_name", "")).lower()
+                    or c in str(p.get("rusher_player_name", "")).lower()
+                    or c in str(p.get("kicker_player_name", "")).lower()
+                    or c in str(p.get("punter_player_name", "")).lower()
+                    or c in str(p.get("desc", "")).lower()
+                    for c in candidates
+                )
             ]
         if concept:
             c_low = concept.lower()
@@ -4156,6 +4164,11 @@ class NaturalLanguageStatAssistant:
 
     KNOWN_PLAYERS: Tuple[str, ...] = (
         # Quarterbacks
+        "bo nix", "patrick mahomes", "lamar jackson", "josh allen", "cj stroud", "c.j. stroud",
+        "caleb williams", "jayden daniels", "drake maye", "justin fields", "jared goff",
+        "brock purdy", "joe burrow", "jalen hurts", "justin herbert", "jordan love",
+        "dak prescott", "matthew stafford", "tua tagovailoa", "aaron rodgers", "kirk cousins",
+        "kyler murray", "trevor lawrence", "baker mayfield", "sam darnold",
         "mahomes", "allen", "jackson", "stroud", "watson", "fields", "goff", "purdy", "burrow",
         "hurts", "herbert", "love", "prescott", "stafford", "tagovailoa", "daniels", "williams",
         "maye", "nix", "rodgers", "cousins", "murray", "lawrence", "levis", "young", "minshew",
@@ -4549,8 +4562,9 @@ class NaturalLanguageStatAssistant:
                         break
 
         player_filter: Optional[str] = None
+        ql_no_apostrophe = re.sub(r"['’]s\b", "", ql)
         for p_key in cls.KNOWN_PLAYERS:
-            if re.search(rf"\b{re.escape(p_key)}\b", ql):
+            if re.search(rf"\b{re.escape(p_key)}\b", ql_no_apostrophe):
                 player_filter = p_key
                 break
 
@@ -4662,16 +4676,24 @@ class NaturalLanguageStatAssistant:
             }
 
         # Check if user is asking for Dataset Info / Game Information
-        is_dataset_query = any(phrase in ql for phrase in (
-            "last game", "latest game", "most recent game", "what is the last game",
-            "what was the last game", "what games do you have", "what data do you have",
-            "games you have data from", "games you have data for", "games do you have data",
-            "what data is loaded", "available games", "games loaded", "which games do you have",
-            "games in the dataset", "show all games", "list all games", "what games are in",
-        )) or (
-            ("game" in ql or "games" in ql) and any(w in ql for w in ("data from", "data for", "you have", "loaded", "available", "last", "latest"))
-        ) or (
-            re.search(r"\b(?:what|which|list|show)\s+(?:are\s+the\s+)?games\b", ql) is not None
+        has_play_or_stat_subject = any(w in ql for w in (
+            "play", "plays", "touchdown", "td", "interception", "pass", "rush", "run",
+            "throw", "stat", "stats", "yard", "yards", "epa", "top", "rank", "leader",
+            "best", "worst", "longest", "efficiency"
+        ))
+        is_dataset_query = not has_play_or_stat_subject and (
+            any(phrase in ql for phrase in (
+                "what is the last game", "what was the last game", "what games do you have", "what data do you have",
+                "games you have data from", "games you have data for", "games do you have data",
+                "what data is loaded", "available games", "games loaded", "which games do you have",
+                "games in the dataset", "show all games", "list all games", "what games are in",
+            )) or (
+                ("game" in ql or "games" in ql) and any(w in ql for w in ("data from", "data for", "you have", "loaded", "available"))
+            ) or (
+                re.search(r"\b(?:what|which|list|show)\s+(?:are\s+the\s+)?games\b", ql) is not None
+            ) or (
+                ql.strip() in ("last game", "latest game", "most recent game", "last game played", "latest game played")
+            )
         )
 
         if is_dataset_query:
@@ -4833,23 +4855,37 @@ class NaturalLanguageStatAssistant:
             "who had the most", "who has the most", "who led", "who leads", "most", "highest", "leader", "leaders",
             "produces the most", "produces", "produced",
         ))
+
+        top_m = re.search(r"\btop\s+(\d+)\b", ql)
+        limit_val: Optional[int] = int(top_m.group(1)) if top_m else None
+        is_latest_game = any(phrase in ql for phrase in (
+            "latest game", "last game", "most recent game", "in his latest game",
+            "in their latest game", "in the latest game", "in the last game"
+        ))
+        is_individual_plays_rank = bool(re.search(r"\b(?:top\s+\d+|longest|best|individual|specific)\s+plays?\b", ql)) or (
+            bool(re.search(r"\bplays?\b", ql)) and limit_val is not None and not any(w in ql for w in ("per play", "yards per play", "ypp", "explosive play rate"))
+        )
+
         is_specific_play_request = (
-            any(p in ql for p in (
+            is_individual_plays_rank
+            or any(p in ql for p in (
                 "specific play", "single play", "show play", "show a play", "show the play",
                 "diagram", "on the field", "ascii field", "behind the offense", "behind offense",
                 "behind the defense", "behind defense", "longest play", "best play", "top play",
                 "touchdown play", "interception play", "sack play",
             ))
-            or (bool(re.search(r"\bplay\b", ql_without_stat_phrases)) and not is_aggregate_request and (
-                any(w in ql for w in ("show", "diagram", "longest", "best", "most efficient", "touchdown", "interception", "sack"))
+            or (bool(re.search(r"\bplays?\b", ql_without_stat_phrases)) and not is_aggregate_request and (
+                any(w in ql for w in ("show", "diagram", "longest", "best", "top", "most efficient", "touchdown", "interception", "sack", "yards gained", "in terms of"))
                 or player_filter is not None
             ))
         )
 
-        if is_specific_play_request and not ("average" in ql or "across the year" in ql or is_aggregate_request):
+        if is_specific_play_request and not (not is_individual_plays_rank and ("average" in ql or "across the year" in ql or is_aggregate_request)):
             concept_filter = "screen" if "screen" in ql else ("play_action_deep" if ("deep" in ql or "play action" in ql) else None)
             extra_filter = "touchdown == 1" if "touchdown" in ql else ("interception == 1" if "interception" in ql else ("sack == 1" if "sack" in ql else ""))
-            sort_by = "epa" if ("epa" in ql or "efficient" in ql) else ("wpa" if "wpa" in ql else ("yac" if "yac" in ql else "yards_gained"))
+            sort_by = "yards_gained" if any(w in ql for w in ("yard", "yards", "yards gained", "yd", "yds")) else (
+                "epa" if ("epa" in ql or "efficient" in ql) else ("wpa" if "wpa" in ql else ("yac" if "yac" in ql else "yards_gained"))
+            )
             return {
                 "intent": "specific_play",
                 "query": query,
@@ -4867,8 +4903,10 @@ class NaturalLanguageStatAssistant:
                 "filter_expr": extra_filter,
                 "sort_by": sort_by,
                 "camera": camera,
+                "limit": limit_val or 1,
+                "latest_game": is_latest_game,
                 "show_field": True,
-                "explanation": f"Selected specific matching play for {season} (sorted by {sort_by}, camera={camera}).",
+                "explanation": f"Top {limit_val or 1} matching plays for {player_filter or 'season'} (sorted by {sort_by}{', latest game' if is_latest_game else ''}).",
             }
 
         # Match stat using canonical STAT_SYNONYM_MAP first
@@ -5194,6 +5232,8 @@ def render_general_stat_view(
             board[0]["best_play"],
             title=f"SAMPLE PLAY FOR {board[0]['entity']} ({sdef.title})",
             camera=camera,
+            limit=parsed.get("limit"),
+            game_id=parsed.get("game_id"),
         ))
     return "\n".join(out)
 
@@ -5213,6 +5253,7 @@ def render_specific_play_view(
     play_id: Optional[int] = None,
     game_id: Optional[str] = None,
     camera: str = "behind-offense",
+    limit: Optional[int] = None,
 ) -> str:
     target_player = player or qb
     matched = engine.query_plays(
@@ -5231,7 +5272,43 @@ def render_specific_play_view(
     )
     if not matched:
         return f"\n{C.RED}No matching play found for the given criteria.{C.RESET}"
-    chosen = matched[0]
+
+    out: List[str] = []
+    display_plays = matched[:limit] if (limit and limit > 1) else [matched[0]]
+    if limit and limit > 1 and len(matched) > 1:
+        headers = ["Rank", "Play ID", "Qtr", "Down & Dist", "Yards", "EPA", "Concept", "Description"]
+        rows = []
+        for idx, p in enumerate(display_plays, 1):
+            down_val = p.get("down")
+            down_str = f"{down_val}&{p.get('ydstogo', '')}" if down_val else "-"
+            concept_str = str(p.get("play_concept") or p.get("play_type") or "scrimmage")
+            desc_raw = str(p.get("desc", ""))
+            desc_short = desc_raw[:55] + "..." if len(desc_raw) > 55 else desc_raw
+            rows.append([
+                f"#{idx}",
+                f"{p.get('play_id', '')}",
+                f"Q{p.get('qtr', '')}",
+                down_str,
+                f"{C.BOLD}{C.GREEN}{float(p.get('yards_gained', 0.0)):.1f} yds{C.RESET}",
+                f"{float(p.get('epa', 0.0)):+.2f}",
+                concept_str,
+                desc_short,
+            ])
+        top_title = f"Top {len(display_plays)} Plays"
+        if target_player:
+            top_title += f" for {target_player}"
+        if game_id:
+            top_title += f" ({game_id})"
+        top_title += f" • Sorted by {sort_by}"
+        out.append(AsciiArtRenderer.render_table(
+            top_title,
+            headers,
+            rows,
+            alignments=["right", "center", "center", "center", "right", "right", "left", "left"],
+        ))
+        out.append("")
+
+    chosen = display_plays[0]
     p_name = (
         chosen.get("player_name")
         or chosen.get("receiver_player_name")
@@ -5239,10 +5316,12 @@ def render_specific_play_view(
         or chosen.get("kicker_player_name")
         or chosen.get("punter_player_name")
         or chosen.get("qb_name")
+        or target_player
         or "Play"
     )
-    title = f"SPECIFIC PLAY DIAGRAM — {p_name} ({chosen.get('posteam', '')} vs {chosen.get('defteam', '')})"
-    return AsciiArtRenderer.render_field_and_play(chosen, title=title, camera=camera)
+    title = f"SPECIFIC PLAY DIAGRAM — {p_name} ({chosen.get('posteam', '')} vs {chosen.get('defteam', '')} • {float(chosen.get('yards_gained', 0.0)):.1f} yds)"
+    out.append(AsciiArtRenderer.render_field_and_play(chosen, title=title, camera=camera))
+    return "\n".join(out)
 
 
 def render_qb_meaningful_wins_view(
@@ -5694,6 +5773,47 @@ def handle_nl_query_result(
         if q_filtered:
             s_plays = q_filtered
 
+    if parsed.get("latest_game") and s_plays:
+        target_p = player or parsed.get("qb")
+        game_filtered = None
+        if target_p:
+            p_parts = str(target_p).strip().split()
+            candidates = {str(target_p).lower()}
+            if len(p_parts) >= 2:
+                candidates.add(f"{p_parts[0][0].lower()}.{p_parts[-1].lower()}")
+                candidates.add(p_parts[-1].lower())
+            matching_player_plays = [
+                p for p in s_plays
+                if any(
+                    c in str(p.get("player_name", "")).lower()
+                    or c in str(p.get("qb_name", "")).lower()
+                    or c in str(p.get("receiver_player_name", "")).lower()
+                    or c in str(p.get("rusher_player_name", "")).lower()
+                    or c in str(p.get("desc", "")).lower()
+                    for c in candidates
+                )
+            ]
+            if matching_player_plays:
+                best_play = max(matching_player_plays, key=lambda x: (_safe_int(x.get("week"), 0), str(x.get("game_id", ""))))
+                latest_gid = best_play.get("game_id")
+                if latest_gid:
+                    game_filtered = [p for p in s_plays if str(p.get("game_id")) == str(latest_gid)]
+        elif team:
+            t_clean = resolve_team_abbr(team) or team
+            team_plays = [p for p in s_plays if str(p.get("posteam", "")).upper() == t_clean.upper() or str(p.get("defteam", "")).upper() == t_clean.upper()]
+            if team_plays:
+                best_play = max(team_plays, key=lambda x: (_safe_int(x.get("week"), 0), str(x.get("game_id", ""))))
+                latest_gid = best_play.get("game_id")
+                if latest_gid:
+                    game_filtered = [p for p in s_plays if str(p.get("game_id")) == str(latest_gid)]
+        if not game_filtered:
+            best_play = max(s_plays, key=lambda x: (_safe_int(x.get("week"), 0), str(x.get("game_id", ""))))
+            latest_gid = best_play.get("game_id")
+            if latest_gid:
+                game_filtered = [p for p in s_plays if str(p.get("game_id")) == str(latest_gid)]
+        if game_filtered:
+            s_plays = game_filtered
+
     if intent in ("stat_page", "page"):
         return header + "\n" + render_stat_page(engine, all_plays)
 
@@ -5744,6 +5864,8 @@ def handle_nl_query_result(
             filter_expr=parsed.get("filter_expr", ""),
             sort_by=parsed.get("sort_by", "yards_gained"),
             camera=camera,
+            limit=parsed.get("limit"),
+            game_id=parsed.get("game_id"),
         )
 
     if player:

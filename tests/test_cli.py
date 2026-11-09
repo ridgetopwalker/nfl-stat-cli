@@ -1212,3 +1212,18 @@ def test_ipc_error_reporting_and_resolution():
     assert "/reload" in help_text
 
 
+def test_player_top_plays_latest_game_nl_query():
+    engine = cli.StatEngine()
+    q = "what is bo nix's top 5 plays in terms of yards gained in his latest game?"
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(q, engine, slm_model="off")
+
+    assert parsed["intent"] == "specific_play"
+    assert parsed["player"] == "bo nix"
+    assert parsed["limit"] == 5
+    assert parsed["sort_by"] == "yards_gained"
+    assert parsed["latest_game"] is True
+    assert parsed["show_field"] is True
+    assert "Top 5 matching plays for bo nix" in parsed["explanation"]
+
+
+
