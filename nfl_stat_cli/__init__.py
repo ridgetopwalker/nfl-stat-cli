@@ -3501,7 +3501,8 @@ class StatEngine:
             "contract_value_m": tot_val,
         }
         if not contracts_cataloged_for(p.get("season") for p in plays):
-            # contracts are cataloged for some seasons only: with no play from one, report 0, not another year's row
+            # contracts are cataloged for some seasons only: with no play from one, report 0, not another year's row.
+            # (A multi-season set keeps the snapshot figure; the query handler always filters to one season.)
             for key in sorted(_CONTRACT_STAT_NAMES):
                 base[key] = 0.0
         return base
@@ -6904,7 +6905,7 @@ def handle_nl_query_result(
         except (KeyError, ValueError) as err:
             return header + f"\n  {C.RED}✖ {err}{C.RESET}"
 
-    if intent == "coaching_staff" and not coaching_season_cataloged(season):
+    if intent == "coaching_staff" and season and not coaching_season_cataloged(season):
         return header + "\n" + render_coaching_staff_view(team or "", season=season)
 
     if intent == "coaching_staff":

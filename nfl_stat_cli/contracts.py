@@ -161,7 +161,7 @@ CONTRACT_SEASONS: Dict[int, Dict[str, Any]] = {
 def as_season(value: Any) -> int:
     """A season as an int; anything missing, NaN or non-numeric is 0 (= unknown, never cataloged)."""
     try:
-        return int(value or 0)
+        return int(float(value)) if value else 0
     except (TypeError, ValueError, OverflowError):
         return 0
 

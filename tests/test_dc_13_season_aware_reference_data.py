@@ -183,10 +183,14 @@ def test_a_malformed_season_is_unknown_not_an_error(bad):
     assert ct.contracts_cataloged_for([bad]) is False
 
 
-def test_team_view_distinguishes_a_missing_team_from_a_missing_season(monkeypatch):
-    eng = cli.StatEngine()
+def test_team_view_distinguishes_a_missing_team_from_a_missing_season(monkeypatch, tmp_path):
+    eng = cli.StatEngine(storage_dir=tmp_path)
     monkeypatch.delitem(cli.NFL_COACHING_STAFFS, "BAL")
     for season, expected in ((SNAP_COACH, "not cataloged for this team"), (SNAP_COACH + 1, "not cataloged for season")):
         plays = [_row(posteam="BAL", defteam="KC", season=season, game_id=f"{season}_01_BAL_KC")]
         out = cli.strip_ansi(cli.render_team_drilldown_view(eng, plays, season, "BAL"))
         assert expected in out, out
+
+
+def test_a_float_style_season_string_is_still_a_season():
+    assert ct.as_season("2024.0") == 2024 and ct.as_season(2024.0) == 2024
