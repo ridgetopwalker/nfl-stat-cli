@@ -1471,7 +1471,7 @@ R_CACHE_FORMAT = "v2"
 R_TIMEOUT_DEFAULT_SECONDS = 300
 R_TIMEOUT_ENV = "NFL_STAT_R_TIMEOUT"
 # Columns that every valid bridge CSV must carry
-_R_CSV_REQUIRED_COLUMNS = ("season", "posteam")
+_R_CSV_REQUIRED_COLUMNS = ("season", "posteam", "play_type", "pass_attempt", "rush_attempt")
 
 
 def _pbp_row_is_playable(r: Dict[str, Any]) -> bool:
@@ -1505,7 +1505,14 @@ def _r_timeout_seconds() -> int:
 
 def _normalize_seasons(seasons: Any) -> Tuple[int, ...]:
     """Sorted, de-duplicated tuple of int seasons, so [2025, 2024] and (2024, 2025) share one cache entry."""
-    return tuple(sorted({int(s) for s in seasons}))
+    if isinstance(seasons, (str, bytes)):
+        raise TypeError("seasons must be an iterable of ints, not a string")
+    out = set()
+    for s in seasons:
+        if isinstance(s, float) and not s.is_integer():
+            raise ValueError(f"season {s!r} is not an integer year")
+        out.add(int(s))
+    return tuple(sorted(out))
 
 
 def _validate_r_csv(path: Path, seasons: Tuple[int, ...]) -> Optional[str]:
@@ -1528,7 +1535,7 @@ def _validate_r_csv(path: Path, seasons: Tuple[int, ...]) -> Optional[str]:
                 try:
                     if int(float(row[season_idx])) not in wanted:
                         return f"row {n_rows + 2} has a season outside the requested set"
-                except ValueError:
+                except (ValueError, OverflowError):
                     return f"row {n_rows + 2} has a non-numeric season"
                 n_rows += 1
             if n_rows == 0:
@@ -1642,6 +1649,13 @@ class NFLDataBridge:
         out_csv = self.cache_dir / f"nflverse_pbp_{R_CACHE_FORMAT}_{'_'.join(map(str, season_key))}.csv"
         seasons_arg = ",".join(map(str, season_key))
         tmp_csv = out_csv.with_name(f".{out_csv.name}.{os.getpid()}.tmp")
+        # Remove temp files left behind by an earlier process that was killed mid-write
+        for stale in self.cache_dir.glob(".nflverse_pbp_*.tmp"):
+            try:
+                if dt.datetime.now().timestamp() - stale.stat().st_mtime > 86400:
+                    stale.unlink(missing_ok=True)
+            except OSError:
+                pass
         try:
             # Reuse a cached CSV only if it is younger than 12 hours AND passes the structural check
             use_cached = False
@@ -1652,7 +1666,7 @@ class NFLDataBridge:
                     if reason is None:
                         use_cached = True
                     else:
-                        out_csv.unlink()  # corrupt or truncated: drop it and refetch
+                        out_csv.unlink(missing_ok=True)  # corrupt or truncated: drop it and refetch
             if not use_cached:
                 timeout_s = _r_timeout_seconds()
                 try:
@@ -1697,9 +1711,12 @@ class NFLDataBridge:
             if out_csv.exists():
                 with open(out_csv, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
+                    # Number rows before filtering, exactly like the dataframe path, so idx-derived
+                    # defaults (play ids) agree across backends
                     rows = [
                         self._normalize_row(r, idx)
-                        for idx, r in enumerate((r for r in reader if _pbp_row_is_playable(r)), 1)
+                        for idx, r in enumerate(reader, 1)
+                        if _pbp_row_is_playable(r)
                     ]
                     if rows:
                         return rows

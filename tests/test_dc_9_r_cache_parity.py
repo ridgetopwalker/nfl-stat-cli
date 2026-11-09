@@ -4,6 +4,7 @@ All tests are hermetic: Rscript and subprocess are faked, caches live in tmp_pat
 """
 import csv
 import io
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,8 +96,8 @@ def test_r_backend_keeps_exactly_the_rows_the_python_backend_keeps(monkeypatch, 
 
 def test_bridge_scripts_export_all_possession_plays_and_stay_identical():
     root = Path(__file__).resolve().parent.parent
-    packaged = (root / "nfl_stat_cli" / "nflverse_bridge.R").read_text()
-    top = (root / "nflverse_bridge.R").read_text()
+    packaged = (root / "nfl_stat_cli" / "nflverse_bridge.R").read_text(encoding="utf-8")
+    top = (root / "nflverse_bridge.R").read_text(encoding="utf-8")
     assert packaged == top
     assert "out_df <- pbp[!is.na(pbp$posteam), keep_cols]" in packaged
     assert "pass_attempt == 1) | (!is.na(pbp$rush_attempt)" not in packaged
@@ -132,7 +133,7 @@ def test_valid_fresh_cache_is_reused_without_running_r(monkeypatch, tmp_path):
     assert _ids(rows) == EXPECTED_IDS
 
 
-def test_cache_with_wrong_header_or_seasons_is_rejected(monkeypatch, tmp_path):
+def test_cache_with_out_of_range_seasons_is_rejected(monkeypatch, tmp_path):
     b = _bridge(tmp_path)
     fake = FakeR(monkeypatch, _write(_csv_text()))
     b._try_nflverse_r([2025])
@@ -200,3 +201,53 @@ def test_default_timeout_is_raised_and_env_overrides_it(monkeypatch, tmp_path):
 def test_invalid_timeout_env_falls_back_to_default(monkeypatch, bad):
     monkeypatch.setenv("NFL_STAT_R_TIMEOUT", bad)
     assert cli._r_timeout_seconds() == 300
+
+
+def test_cache_missing_columns_the_row_predicate_needs_is_rejected(monkeypatch, tmp_path):
+    b = _bridge(tmp_path)
+    fake = FakeR(monkeypatch, _write(_csv_text()))
+    b._try_nflverse_r([2025])
+    cache_file = next((tmp_path / "cache").glob("nflverse_pbp_*.csv"))
+    # keep season/posteam but drop the attempt/play_type columns: would silently change the row set
+    cache_file.write_text("season,posteam,desc\n" + "2025,ZZZ,penalty on the play and some padding text here\n" * 12, encoding="utf-8")
+    assert cache_file.stat().st_size > 256
+    fake.calls.clear()
+    rows = b._try_nflverse_r([2025])
+    assert len(fake.calls) == 1
+    assert _ids(rows) == EXPECTED_IDS
+
+
+def test_r_rows_get_the_same_index_defaults_as_the_python_path(monkeypatch, tmp_path):
+    # play_id blank: _normalize_row falls back to the enumerate index, which must match across backends
+    blank = [(None,) + p[1:] for p in RAW_PLAYS]
+    text = _csv_text(blank)
+    FakeR(monkeypatch, _write(text))
+    r_rows = _bridge(tmp_path)._try_nflverse_r([2025])
+    records = [dict(zip(HEADER, [2025, 1, "2025_01_YYY_ZZZ", None, team, "YYY", pt, pa, ra, pen, to, desc, 0.1]))
+               for _pid, team, pt, pa, ra, pen, to, desc in blank]
+    py_rows = _bridge(tmp_path)._normalize_dataframe(SimpleNamespace(to_dict=lambda orient="records": records))
+    assert [r["play_id"] for r in r_rows] == [r["play_id"] for r in py_rows]
+
+
+@pytest.mark.parametrize("bad", ["2024", b"2024", [2024.5]])
+def test_normalize_seasons_rejects_strings_and_fractional_years(bad):
+    with pytest.raises((TypeError, ValueError)):
+        cli._normalize_seasons(bad)
+
+
+def test_bad_seasons_argument_is_reported_not_raised(monkeypatch, tmp_path):
+    FakeR(monkeypatch, _write(_csv_text()))
+    b = _bridge(tmp_path)
+    assert b._try_nflverse_r("2024") is None
+    assert "invalid seasons" in (b.last_error or "")
+
+
+def test_stale_temp_files_from_killed_runs_are_swept(monkeypatch, tmp_path):
+    FakeR(monkeypatch, _write(_csv_text()))
+    b = _bridge(tmp_path)
+    stale = tmp_path / "cache" / ".nflverse_pbp_v2_2020.csv.1.tmp"
+    stale.write_text("x", encoding="utf-8")
+    old = stale.stat().st_mtime - 3 * 86400
+    os.utime(stale, (old, old))
+    b._try_nflverse_r([2025])
+    assert not stale.exists()
