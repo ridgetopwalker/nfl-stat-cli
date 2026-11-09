@@ -2,8 +2,11 @@
 # Without these nfl-stat falls back to the small built-in SAMPLE dataset.
 # Lower bounds match the `live` extra in pyproject.toml; upper bounds stop a new major
 # release from silently changing behaviour -- raise them deliberately after testing.
-# nflreadpy (the maintained nflverse loader) requires Python 3.10+.
+# nflreadpy (the maintained nflverse loader) requires Python 3.10+, hence the environment marker:
+# on Python 3.9 the other packages still install and the installer then requires
+# --with-legacy-nfl-data-py (or --sample-only) instead of failing the whole requirements file.
+# nflreadpy is 0.x, so its upper bound is one minor release: review it whenever a new 0.x ships.
 pandas>=2.0.0,<4
 polars>=0.20.0,<3
 pyarrow>=14.0.0,<28
-nflreadpy>=0.1.0,<0.2
+nflreadpy>=0.1.0,<0.2; python_version >= "3.10"

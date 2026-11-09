@@ -31,7 +31,11 @@ $LogFile = Join-Path $env:TEMP "nfl_stat_cli_install.log"
 "" | Set-Content -Path $LogFile -Encoding UTF8 -ErrorAction SilentlyContinue
 
 # Python installer fallback (used only when winget is unavailable). The SHA-256 below was
-# computed from the python.org download of this exact file; update both values together.
+# computed on 2026-11-09 from the HTTPS download of this exact file from python.org (python.org
+# no longer lists checksums for Windows installers). When bumping the version, recompute it and
+# cross-check against the .sigstore / .asc files next to the installer on python.org; the
+# Authenticode signature (Python Software Foundation) is also required at install time.
+# This is the amd64 installer only; ARM64 Windows is told to install Python manually.
 $PythonInstallerVersion = "3.13.17"
 $PythonInstallerSha256 = "5da012101ba2e17113a9a1cd901e9ce1441086f2b7ecb5de06ec94163899a190"
 $script:InstallWarnings = New-Object System.Collections.Generic.List[string]
@@ -43,6 +47,7 @@ function Add-InstallWarning([string]$Message) {
 function Stop-Install([string]$Message, [int]$Code = 1) {
     Write-Host ""
     Write-Host "ERROR: $Message" -ForegroundColor Red
+    Write-InstallWarnings
     if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 0)) {
         Write-Host "Last lines of the install log ($LogFile):" -ForegroundColor Yellow
         Get-Content -Path $LogFile -Tail 25 | ForEach-Object { Write-Host $_ }
@@ -58,7 +63,7 @@ function Write-InstallWarnings {
     }
 }
 
-$LiveHint = "Live NFL data packages (pandas, pyarrow, polars, nflreadpy) could not be installed. nflreadpy needs Python 3.10+. Re-run with -SkipLivePackages to accept the built-in sample dataset on purpose."
+$LiveHint = "No live NFL data loader is available. nflreadpy (requirements-live.txt) needs Python 3.10+; on Python 3.9 re-run with -WithLegacyNflDataPy. To accept the built-in SAMPLE dataset on purpose, re-run with -SkipLivePackages."
 
 function Find-RealPython {
     $MachinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -144,11 +149,15 @@ if (-not $PythonExe) {
     }
     $PythonExe = Find-RealPython
     if (-not $PythonExe) {
+        if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+            Stop-Install "Python 3.9+ is not installed and the bundled fallback installer is x64-only. Install Python for ARM64 from https://www.python.org/downloads/ (or with winget) and re-run."
+        }
         $installerName = "python-$PythonInstallerVersion-amd64.exe"
         if (-not $VerboseMode) { Update-CompactUI 15 "Downloading $installerName from python.org..." }
         $installerUrl = "https://www.python.org/ftp/python/$PythonInstallerVersion/$installerName"
         $installerPath = Join-Path $env:TEMP $installerName
         try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
         } catch {
             Stop-Install "Could not download $installerName from python.org: $($_.Exception.Message). Install Python 3.9+ manually from https://www.python.org/downloads/ and re-run."
@@ -157,6 +166,11 @@ if (-not $PythonExe) {
         if ($actualHash -ne $PythonInstallerSha256) {
             Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
             Stop-Install "SHA-256 mismatch for the downloaded $installerName (expected $PythonInstallerSha256, got $actualHash). The installer was deleted and NOT run."
+        }
+        $signature = Get-AuthenticodeSignature -FilePath $installerPath
+        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
+            Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+            Stop-Install "The downloaded $installerName is not validly signed by the Python Software Foundation (status: $($signature.Status)). The installer was deleted and NOT run."
         }
         Start-Process -FilePath $installerPath -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_test=0" -Wait
         Remove-Item $installerPath -Force -ErrorAction SilentlyContinue

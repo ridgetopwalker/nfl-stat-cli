@@ -102,6 +102,7 @@ warn() {
 
 die() {
     printf "\n${BOLD}ERROR:${RESET} %s\n" "$1" >&2
+    print_warnings >&2
     if [ -n "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
         printf "Last lines of the install log (%s):\n" "$LOG_FILE" >&2
         tail -n 25 "$LOG_FILE" >&2
@@ -141,7 +142,7 @@ check_python_version() {
 }
 
 install_live_requirements_hint() {
-    echo "Live NFL data packages (pandas, pyarrow, polars, nflreadpy) could not be installed. nflreadpy needs Python 3.10+. Re-run with --sample-only to accept the built-in sample dataset on purpose."
+    echo "No live NFL data loader is available. nflreadpy (pandas, pyarrow, polars, nflreadpy in requirements-live.txt) needs Python 3.10+; on Python 3.9 re-run with --with-legacy-nfl-data-py. To accept the built-in SAMPLE dataset on purpose, re-run with --sample-only."
 }
 
 verify_live_data() {
@@ -227,7 +228,7 @@ if [ "$VERBOSE" -eq 1 ]; then
             exit 1
         fi
     fi
-    PYTHON_BIN="$(command -v python3)"
+    PYTHON_BIN="$(command -v python3)" || die "python3 is still not on PATH after the install step."
     check_python_version "$PYTHON_BIN"
     echo "[1/5] Using Python: $PYTHON_BIN ($($PYTHON_BIN --version))"
 
