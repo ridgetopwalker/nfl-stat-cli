@@ -807,7 +807,7 @@ NFL_COACHING_STAFFS: Dict[str, Dict[str, Any]] = {
 def get_team_coaching_staff(team_abbr: str, season: Optional[int] = None) -> Dict[str, Any]:
     """Retrieve full coaching staff dictionary (HC, OC, DC, position coaches) for a given team."""
     resolved = resolve_team_abbr(team_abbr) or team_abbr.upper()
-    return NFL_COACHING_STAFFS.get(resolved, NFL_COACHING_STAFFS.get("KC", {}))
+    return NFL_COACHING_STAFFS.get(resolved, {})
 
 
 def get_team_head_coach(team_abbr: str, season: Optional[int] = None) -> str:
@@ -4771,6 +4771,57 @@ class AsciiArtRenderer:
 # Hybrid Local Small Language Model (SLM) + Deterministic NL-to-Stat Engine
 # ---------------------------------------------------------------------------
 
+# Questions we can detect as asking for data this engine does not have; these must produce an explicit
+# "can't answer" instead of being mapped onto a loosely related stat.
+UNSUPPORTED_STAT_TERMS: Tuple[Tuple[str, str], ...] = (
+    (r"\byards\s+after\s+contact\b", "yards after contact"),
+    (r"\b(?:targets?|target\s+share)\b", "targets"),
+    (r"\breceptions\b", "receptions"),
+    (r"\breceiving\s+(?:yards?|yds?|touchdowns?|tds?)\b", "receiving yards/touchdowns"),
+    (r"\btackles\b", "tackles"),
+    (r"\bcomebacks\b", "comebacks"),
+    (r"\bstandings\b", "standings"),
+)
+SPORTSBOOK_OR_COACH_RE = re.compile(
+    r"\b(?:spread|odds|moneyline|bets?|betting|favou?rites?|underdogs?|handicap|coach|coaches|hc|oc|dc)\b"
+)
+
+
+def _one_line_text(text: Any, limit: int = 400) -> str:
+    """Printable single-line text (no ANSI/control characters) for echoing user-derived strings."""
+    return "".join(ch if ch.isprintable() else " " for ch in strip_ansi(str(text)))[:limit]
+
+
+def build_unanswered_query(
+    query: str,
+    reason: str,
+    season: int,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Structured 'can't answer' parse result (rendered by the `ambiguous` intent)."""
+    res: Dict[str, Any] = {
+        "intent": "ambiguous",
+        "status": "unanswered",
+        "reason": reason,
+        "query": query,
+        "stat_name": None,
+        "group_by": None,
+        "season": season,
+        "week": None,
+        "qtr": None,
+        "division": None,
+        "conf": None,
+        "team": None,
+        "player": None,
+        "position": None,
+        "filter_expr": "",
+        "show_field": False,
+        "explanation": f"Can't answer: {reason}",
+    }
+    res.update(extra)
+    return res
+
+
 class NaturalLanguageStatAssistant:
     """
     Translates natural-language user questions or custom-stat requests into structured
@@ -5269,6 +5320,15 @@ class NaturalLanguageStatAssistant:
                     "penalty", "penalties", "flags", "timeout", "timeouts", "favor", "benefited", "benefitted", "drawn", "called", "used",
                 } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
                 cand_words = set(cand_low.split())
+                _cw = cand.split()
+                if (
+                    len(_cw) == 2 and _cw[0][:1].isupper() and _cw[0].lower() not in ignore_words and _cw[1].lower() in ignore_words
+                    and not resolve_team_abbr(_cw[0]) and not resolve_team_matches(_cw[0])
+                ):
+                    # "show Zorblax touchdown play": keep the unknown name so it cannot be silently dropped
+                    cand = _cw[0]
+                    cand_low = cand.lower()
+                    cand_words = {cand_low}
                 if not cand_words.intersection(ignore_words) and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
 
@@ -5291,6 +5351,19 @@ class NaturalLanguageStatAssistant:
             )
         )
 
+        # Comparing two players is not supported; do not let the coach table or a stat default answer it.
+        _compare_m = re.search(r"\b(?:compare|comparison|versus|vs\.?)\b", ql)
+        if _compare_m and not SPORTSBOOK_OR_COACH_RE.search(ql):
+            _named = [k for k in cls.KNOWN_PLAYERS if re.search(rf"\b{re.escape(k)}\b", ql_no_apostrophe)]
+            if len(_named) >= 2:
+                return build_unanswered_query(
+                    query, "side-by-side player comparisons are not supported yet; ask about one player or stat at a time.", season, week=week,
+                )
+
+        # A bare surname only counts as a coach when the question is about coaching and the name is
+        # not also a known player (e.g. "Allen" the QB vs the NO head coach, "Jefferson" the WR).
+        _has_coach_word = bool(re.search(r"\b(?:coach|coaches|coaching|hc|oc|dc|coordinator|staff)\b", ql))
+        _player_surnames = {k.lower() for k in cls.KNOWN_PLAYERS}
         c_found_team: Optional[str] = team_filter
         c_found_role: Optional[str] = None
         if not c_found_team:
@@ -5302,15 +5375,21 @@ class NaturalLanguageStatAssistant:
                     c_found_team = c_info[0]
                     c_found_role = c_info[2]
                     break
-            if not c_found_team:
+            if not c_found_team and _has_coach_word:
                 for word in words:
+                    if word in _player_surnames:
+                        if find_coach_team(word):
+                            return build_unanswered_query(
+                                query, f"'{word.title()}' is both a player and a coach name; use the full name or name the team.", season,
+                            )
+                        continue
                     c_info = find_coach_team(word)
                     if c_info:
                         c_found_team = c_info[0]
                         c_found_role = c_info[2]
                         break
 
-        if not c_found_team and player_filter:
+        if not c_found_team and player_filter and _has_coach_word and player_filter.lower() not in _player_surnames:
             c_info = find_coach_team(player_filter)
             if c_info:
                 c_found_team = c_info[0]
@@ -5330,7 +5409,9 @@ class NaturalLanguageStatAssistant:
             elif "ol coach" in ql or "offensive line coach" in ql:
                 role_req = "ol"
 
-            target_team = c_found_team or "KC"
+            if not c_found_team:
+                return build_unanswered_query(query, "no team was given for the coaching question; name a team (e.g. 'head coach of the Chiefs').", season)
+            target_team = c_found_team
             role_label = role_req.upper() if role_req else "coaching staff"
             return {
                 "intent": "coaching_staff",
@@ -5883,6 +5964,15 @@ class NaturalLanguageStatAssistant:
                 "explanation": f"Top {limit_val or 1} matching plays for {player_filter or 'season'} (sorted by {sort_by}{', latest game' if is_latest_game else ''}).",
             }
 
+        # Stats the engine does not compute must not be answered with a loosely related stat
+        # (e.g. "yards after contact" or "receiving yards" must not fall into the generic "yards" rule).
+        for _u_pat, _u_label in UNSUPPORTED_STAT_TERMS:
+            if re.search(_u_pat, ql):
+                return build_unanswered_query(
+                    query, f"`{_u_label}` is not a stat this engine tracks. Type /stats to see supported stats.", season,
+                    week=week, qtr=qtr, division=division, conf=conf, team=team_filter, player=player_filter, position=position,
+                )
+
         # Match stat using canonical STAT_SYNONYM_MAP first
         matched_stat: Optional[str] = None
         matched_group: Optional[str] = None
@@ -5969,6 +6059,8 @@ class NaturalLanguageStatAssistant:
                     "position": position,
                     "filter_expr": " and ".join(filter_parts),
                     "show_field": False,
+                    "status": "unanswered",
+                    "reason": "the question did not match any supported stat, play, or action.",
                     "explanation": f"Could not determine a specific stat or play from query: '{query}'.",
                 }
 
@@ -6729,6 +6821,14 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
+def _render_unanswered(parsed: Dict[str, Any], reason: str, engine: StatEngine) -> str:
+    """Render the explicit can't-answer response for a parsed query that cannot be completed safely."""
+    p = dict(parsed)
+    p["intent"] = "ambiguous"
+    p["reason"] = reason
+    return handle_nl_query_result(p, engine, [])
+
+
 def handle_nl_query_result(
     parsed: Dict[str, Any],
     engine: StatEngine,
@@ -6741,8 +6841,9 @@ def handle_nl_query_result(
     if intent == "ambiguous":
         stat_list = ", ".join(list(engine.stats.keys())[:8]) + "..."
         return (
-            f"\n{C.BOLD}{C.RED}\u2716 Unsupported or ambiguous query:{C.RESET} \"{parsed.get('query', '')}\"\n"
-            f"  {C.YELLOW}\U0001f4a1 Could not match your question to a recognized stat, play diagram, or custom stat action.{C.RESET}\n"
+            f"\n{C.BOLD}{C.RED}\u2716 Unsupported or ambiguous query:{C.RESET} \"{strip_ansi(parsed.get('query', ''))}\"\n"
+            f"  {C.BOLD}I can't answer that:{C.RESET} {_one_line_text(parsed.get('reason') or 'the question did not match any supported stat, play, or action.', 400)}\n"
+            + ("" if parsed.get("reason") else f"  {C.YELLOW}\U0001f4a1 Could not match your question to a recognized stat, play diagram, or custom stat action.{C.RESET}\n") +
             f"  \u2022 {C.BOLD}To evaluate a stat:{C.RESET} try 'epa per play', 'passer rating', 'yards after catch', or 'qb impact score'.\n"
             f"  \u2022 {C.BOLD}To diagram a play:{C.RESET} try 'show Mahomes touchdown play' or 'diagram Goff screen play'.\n"
             f"  \u2022 {C.BOLD}Available stats:{C.RESET} {stat_list} (type {C.CYAN}/stats{C.RESET} for full catalog, or {C.CYAN}/help{C.RESET} for guidance)."
@@ -6854,15 +6955,30 @@ def handle_nl_query_result(
             return header + f"\n  {C.RED}✖ {err}{C.RESET}"
 
     if intent == "coaching_staff":
-        resolved_t = resolve_team_abbr(team) or team or "KC"
+        resolved_t = resolve_team_abbr(team) or team
+        if not resolved_t:
+            return _render_unanswered(parsed, "no team was given for the coaching question.", engine)
         return header + "\n" + render_coaching_staff_view(resolved_t, role_filter=parsed.get("role"))
 
     if intent == "team_drilldown":
-        resolved_t = team or "KC"
+        resolved_t = team
+        if not resolved_t:
+            return _render_unanswered(parsed, "no team was given for the team question.", engine)
+        if not interactive:
+            _tm = resolve_team_matches(resolved_t)
+            if len(_tm) > 1:
+                return _render_unanswered(parsed, f"'{resolved_t}' matches several teams ({', '.join(_tm)}); use the team abbreviation.", engine)
         return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t, interactive=interactive)
 
     if intent == "player_drilldown":
-        target_player = player or "Mahomes"
+        target_player = player
+        if not target_player:
+            return _render_unanswered(parsed, "no player was given for the player question.", engine)
+        if not interactive:
+            _cands = find_matching_player_candidates(s_plays, target_player, season=season)
+            if len(_cands) > 1:
+                _opts = "; ".join(f"{c['name']} ({c['team']})" if c.get("team") else str(c["name"]) for c in _cands[:6])
+                return _render_unanswered(parsed, f"'{target_player}' matches several players ({_opts}); use the full name.", engine)
         return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=interactive)
 
     if intent == "fantasy_report":
@@ -6896,8 +7012,10 @@ def handle_nl_query_result(
             lim = parsed.get("limit", 5)
             return header + "\n" + render_underdog_leaderboard_view(s_plays, season=season, team_filter=team or parsed.get("team"), limit=lim)
         if subq == "matchup":
-            home_t = parsed.get("home_team") or team or "KC"
-            away_t = parsed.get("away_team") or "BUF"
+            home_t = parsed.get("home_team") or team
+            away_t = parsed.get("away_team")
+            if not home_t or not away_t:
+                return _render_unanswered(parsed, "a matchup needs two teams (e.g. 'spread for chiefs vs bills').", engine)
             w_val = parsed.get("week")
             return header + "\n" + render_game_handicap_dossier_view(home_t, away_t, s_plays, season=season, week=w_val)
         w_filter = parsed.get("week")
@@ -6909,7 +7027,9 @@ def handle_nl_query_result(
         if subq == "player" and target_p:
             return header + "\n" + render_player_contract_view(target_p, plays=s_plays, season=season)
         if subq == "team":
-            target_t = resolve_team_abbr(team) or team or "KC"
+            target_t = resolve_team_abbr(team) or team
+            if not target_t:
+                return _render_unanswered(parsed, "no team was given for the payroll question.", engine)
             return header + "\n" + render_team_payroll_view(target_t)
         if subq == "coaches":
             return header + "\n" + render_contracts_leaderboard_view(contract_type="coach", limit=parsed.get("limit", 15))
@@ -6998,9 +7118,9 @@ def handle_nl_query_result(
     if intent == "qb_wins_report":
         return header + "\n" + render_qb_meaningful_wins_view(engine, s_plays, season, conf, view_mode=view_override, camera=camera, team=team)
 
-    stat_name = parsed.get("stat_name") or "yards_per_play"
-    if stat_name not in engine.stats:
-        stat_name = "yards_per_play"
+    stat_name = parsed.get("stat_name")
+    if not stat_name or stat_name not in engine.stats:
+        return _render_unanswered(parsed, f"`{stat_name or 'that stat'}` is not a registered stat. Type /stats to see supported stats.", engine)
     return header + "\n" + render_general_stat_view(
         engine,
         s_plays,
