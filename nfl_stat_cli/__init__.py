@@ -1369,6 +1369,44 @@ SAMPLE_PBP_PLAYS: List[Dict[str, Any]] = [
 # Dual Data Loader: sportsdataverse-py (Python) & nflverse/nflreadr (R)
 # ---------------------------------------------------------------------------
 
+def _infer_play_concept(
+    r: Dict[str, Any], raw_play_type: str, pass_attempt: int, rush_attempt: int,
+    is_screen: int, play_action: int, air_yards: float, air_known: bool,
+) -> Tuple[str, str]:
+    """
+    Play concept and where it came from: "explicit" (a play_concept/play_type column), "inferred"
+    (a heuristic over explicit attributes) or "unknown" (generic label, nothing to go on).
+    Explicit attributes always win: a pass with play_action=0 is never a play-action concept, an
+    unknown air_yards is never read as 0, and a run is only inside/outside when the run gap or
+    location says so.
+    """
+    explicit = _safe_str(r.get("play_concept"), "")
+    if explicit:
+        return explicit, "explicit"
+    if is_screen:
+        return "screen", "inferred"
+    pt = raw_play_type.lower()
+    if pt and pt not in ("pass", "run"):
+        return pt, "explicit"  # punt, kickoff, field_goal, no_play, qb_kneel, ...
+    if pt == "pass" or (not pt and pass_attempt):
+        if play_action:
+            return ("play_action_deep" if air_known and air_yards >= 18 else "play_action"), "inferred"
+        if not air_known:
+            return "pass", "unknown"
+        if air_yards >= 18:
+            return "pass_deep", "inferred"
+        return ("pass_intermediate" if air_yards >= 10 else "pass_short"), "inferred"
+    if pt == "run" or (not pt and rush_attempt):
+        gap = _safe_str(r.get("run_gap"), "").lower()
+        loc = _safe_str(r.get("run_location"), "").lower()
+        if gap == "end":
+            return "rush_outside", "inferred"
+        if gap == "guard" or loc == "middle":
+            return "rush_inside", "inferred"
+        return "rush", "unknown"
+    return "unknown", "unknown"
+
+
 def _infer_play_direction(row: Dict[str, Any], desc: str) -> str:
     raw = str(row.get("play_direction") or row.get("pass_location") or row.get("run_location") or "").lower()
     if raw in ("left", "middle", "right"):
@@ -1629,6 +1667,7 @@ class NFLDataBridge:
         conf = _safe_str(r.get("conf"), "") or ("AFC" if posteam in AFC_TEAMS else ("NFC" if posteam in NFC_TEAMS else "NFL"))
         division = _safe_str(r.get("division"), "") or TEAM_DIVISIONS.get(posteam, f"{conf} Division")
         air_yards = _safe_float(r.get("air_yards"), 0.0)
+        air_known = not _is_missing(r.get("air_yards"))
         desc = _safe_str(r.get("desc"), "")
         pass_attempt = _safe_int(r.get("pass_attempt"), 0)
         rush_attempt = _safe_int(r.get("rush_attempt"), 0)
@@ -1638,7 +1677,7 @@ class NFLDataBridge:
 
         raw_screen = _safe_opt_flag(r.get("is_screen"))
         is_screen = raw_screen if raw_screen is not None else (
-            1 if ("screen" in desc.lower() or (pass_attempt == 1 and sack == 0 and air_yards <= 0.0 and complete_pass == 1)) else 0
+            1 if ("screen" in desc.lower() or (pass_attempt == 1 and sack == 0 and air_known and air_yards <= 0.0 and complete_pass == 1)) else 0
         )
 
         play_type = _safe_str(r.get("play_type"), "") or ("pass" if pass_attempt else "run")
@@ -1646,14 +1685,9 @@ class NFLDataBridge:
         play_action = raw_pa if raw_pa is not None else (
             1 if ("play-action" in desc.lower() or "play action" in desc.lower()) else 0
         )
-        play_concept = _safe_str(r.get("play_concept"), "") or (
-            "screen" if is_screen else (
-                "play_action_deep" if (play_action or air_yards >= 18) and play_type == "pass" else (
-                    "pass_intermediate" if air_yards >= 10 and play_type == "pass" else (
-                        "pass_short" if play_type == "pass" else "rush_outside"
-                    )
-                )
-            )
+        play_concept, play_concept_source = _infer_play_concept(
+            r, _safe_str(r.get("play_type"), ""), pass_attempt, rush_attempt,
+            is_screen, play_action, air_yards, air_known,
         )
         direction = _infer_play_direction(r, desc)
         yards_gained = _safe_float(r.get("yards_gained"), 0.0)
@@ -1865,6 +1899,7 @@ class NFLDataBridge:
             "defteam_timeouts_remaining": defteam_timeouts_rem,
             "play_type": play_type,
             "play_concept": play_concept,
+            "play_concept_source": play_concept_source,
             "play_direction": direction,
             "is_screen": is_screen,
             "play_action": play_action,
