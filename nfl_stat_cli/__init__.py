@@ -15,6 +15,7 @@ import datetime as dt
 import difflib
 import functools
 import glob
+import hashlib
 import json
 import math
 import operator
@@ -9931,12 +9932,102 @@ def _json_safe(value: Any) -> Any:
         return {"unserializable_parse": repr(value)[:2000]}
 
 
+IPC_MAX_REPRO_ROWS = 50
+
+
+def _read_git_sha(start: Optional[Path] = None) -> Optional[str]:
+    """Commit SHA of the checkout this package runs from, read from .git files (no git subprocess); None if not a checkout."""
+    root = (start or Path(__file__).resolve().parent.parent)
+    try:
+        git_dir = root / ".git"
+        if git_dir.is_file():  # worktree / submodule pointer file
+            ref = git_dir.read_text(encoding="utf-8").strip()
+            if ref.startswith("gitdir:"):
+                git_dir = (root / ref.split(":", 1)[1].strip()).resolve()
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", head):
+            return head
+        if head.startswith("ref:"):
+            ref_name = head.split(":", 1)[1].strip()
+            ref_file = git_dir / ref_name
+            if ref_file.is_file():
+                sha = ref_file.read_text(encoding="utf-8").strip()
+                return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+            common = git_dir / "commondir"
+            if common.is_file():
+                cdir = (git_dir / common.read_text(encoding="utf-8").strip()).resolve()
+                ref_file = cdir / ref_name
+                if ref_file.is_file():
+                    sha = ref_file.read_text(encoding="utf-8").strip()
+                    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+                git_dir = cdir
+            packed = git_dir / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line.endswith(" " + ref_name) and re.match(r"[0-9a-f]{40} ", line):
+                        return line.split(" ", 1)[0]
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _is_sample_source(source: Optional[str]) -> bool:
+    low = str(source or "").lower()
+    return "sample" in low or "offline" in low
+
+
+def data_snapshot_id(plays: List[Dict[str, Any]], season: Optional[int] = None) -> str:
+    """Stable fingerprint of the loaded play set (ids only, no stat values) so a report can be replayed on the same data."""
+    rows = [p for p in plays if season is None or _safe_int(p.get("season"), -1) == int(season)]
+    h = hashlib.sha256()
+    for key in sorted((str(p.get("game_id", "")), str(p.get("play_id", ""))) for p in rows):
+        h.update("|".join(key).encode("utf-8", "replace") + b"\n")
+    return f"{len(rows)}-{h.hexdigest()[:16]}"
+
+
+def build_repro_context(
+    bridge: Optional[Any],
+    plays: List[Dict[str, Any]],
+    season: int,
+    parsed: Optional[Dict[str, Any]] = None,
+    slm_requested: Optional[str] = None,
+    result_table: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Facts needed to replay an answer: code version, data source and snapshot, parser model, and the table the
+    answer showed (``result_table`` = {"title", "headers", "rows"} captured for that query; None if it rendered none).
+    """
+    source = getattr(bridge, "last_source_used", None) if bridge is not None else None
+    table = result_table or {}
+    rows = list(table.get("rows") or [])
+    return {
+        "git_sha": _read_git_sha(),
+        "version": __version__,
+        "python": platform.python_version(),
+        "platform": platform.system(),
+        "data_source": source,
+        "is_sample": _is_sample_source(source),
+        "season": season,
+        "seasons_loaded": sorted({_safe_int(p.get("season"), 0) for p in plays if p.get("season") is not None}),
+        "plays_loaded": len(plays),
+        "snapshot_id": data_snapshot_id(plays, season),
+        "slm_model": (parsed or {}).get("slm_model_used") or None,
+        "slm_requested": slm_requested or None,
+        "parser": "slm" if (parsed or {}).get("slm_model_used") else "rule",
+        "result_title": _json_safe(table.get("title")) if table else None,
+        "result_headers": _json_safe(table.get("headers")) if table else None,
+        "result_row_count": len(rows),
+        "result_rows": _json_safe(rows[:IPC_MAX_REPRO_ROWS]),
+    }
+
+
 def create_error_report(
     query_raw: str,
     parsed_nl: Dict[str, Any],
     user_explanation: str = "",
     season: Optional[int] = None,
     response_text: str = "",
+    repro: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Serializes an error report for a natural-language query and writes it to the IPC pending dir.
@@ -9955,6 +10046,7 @@ def create_error_report(
         "response": strip_ansi(str(response_text or ""))[:IPC_MAX_RESPONSE_CHARS],
         "season": season or CURRENT_SEASON,
         "version": __version__,
+        "repro": _json_safe(repro) if repro else {"git_sha": _read_git_sha(), "version": __version__},
         "status": "pending",
     }
     _atomic_write_json(ipc_dir / "pending" / f"{report_id}.json", report_data)
@@ -10286,6 +10378,7 @@ def interactive_tui(
     last_parsed_nl: Optional[Dict[str, Any]] = None
     last_query_raw: Optional[str] = None
     last_response_text: str = ""
+    last_result_table: Optional[Dict[str, Any]] = None  # table rendered by the last query, if any
 
     setup_readline_completer(engine)
 
@@ -10446,7 +10539,10 @@ def interactive_tui(
                         last_parsed_nl = parsed
                         last_query_raw = nl_play_q
                         last_response_text = ""
+                        last_result_table = None
+                        _table_before = LAST_RENDERED_TABLE
                         last_response_text = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
+                        last_result_table = LAST_RENDERED_TABLE if LAST_RENDERED_TABLE is not _table_before else None
                         print(last_response_text)
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
@@ -10592,6 +10688,7 @@ def interactive_tui(
                             user_explanation=user_notes,
                             season=active_season,
                             response_text=last_response_text,
+                            repro=build_repro_context(bridge, plays, active_season, last_parsed_nl, slm_requested=slm_model, result_table=last_result_table),
                         )
                     except OSError as save_err:
                         print(f"  {C.RED}✖ Could not save the error report: {sanitize_ipc_text(save_err, 200)}{C.RESET}")
@@ -10746,9 +10843,12 @@ def interactive_tui(
             last_parsed_nl = parsed
             last_query_raw = raw_in
             last_response_text = ""
+            last_result_table = None
+            _table_before = LAST_RENDERED_TABLE
             res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
             LAST_RAW_OUTPUT = strip_ansi(res_str)
             last_response_text = res_str
+            last_result_table = LAST_RENDERED_TABLE if LAST_RENDERED_TABLE is not _table_before else None
             print(res_str)
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
