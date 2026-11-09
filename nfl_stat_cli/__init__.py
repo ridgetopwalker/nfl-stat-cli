@@ -4988,7 +4988,7 @@ class NaturalLanguageStatAssistant:
             return None
         if parts.scheme.lower() not in ("http", "https") or not parts.hostname or parts.username or parts.password or not port_ok:
             return None
-        return f"{parts.scheme.lower()}://{parts.netloc}".rstrip("/")
+        return f"{parts.scheme.lower()}://{parts.netloc}{parts.path.rstrip('/')}"
 
     @classmethod
     def detect_ollama_model(cls, requested_model: Optional[str] = None) -> Optional[str]:
@@ -5025,7 +5025,19 @@ class NaturalLanguageStatAssistant:
         "stat_query", "specific_play", "qb_wins_report", "team_drilldown", "player_drilldown", "stat_page",
         "dataset_info", "fantasy_report", "sportsbook_report", "contract_report",
     )
-    _SLM_FILTER_RE = re.compile(r"[\w\s'\".=!<>()+\-*/%&|,]*")
+    _SLM_FILTER_RE = re.compile(r"[A-Za-z0-9_\s'\".=!<>()+\-*/%&|,]*")
+
+    @classmethod
+    def _slm_filter_ok(cls, flt: str) -> bool:
+        """Model-supplied filter text: short, ASCII, no dunders, and only comparisons/arithmetic (no calls or attributes).
+        It is still evaluated by the AST-allow-listed formula evaluator; this is defence in depth."""
+        if not flt or len(flt) > 200 or "__" in flt or not cls._SLM_FILTER_RE.fullmatch(flt):
+            return False
+        try:
+            tree = ast.parse(flt, mode="eval")
+        except (SyntaxError, ValueError, RecursionError):
+            return False
+        return not any(isinstance(n, (ast.Call, ast.Attribute, ast.Subscript, ast.Lambda, ast.comprehension)) for n in ast.walk(tree))
 
     @classmethod
     def _validate_slm_response(cls, parsed: Dict[str, Any], engine: Optional[StatEngine]) -> Optional[Dict[str, Any]]:
@@ -5089,7 +5101,7 @@ class NaturalLanguageStatAssistant:
             out["sort_by"] = sort_by.lower()
         flt = parsed.get("filter_expr")
         flt = flt.strip() if isinstance(flt, str) else ""
-        out["filter_expr"] = flt if flt and len(flt) <= 200 and "__" not in flt and cls._SLM_FILTER_RE.fullmatch(flt) else ""
+        out["filter_expr"] = flt if cls._slm_filter_ok(flt) else ""
         out["explanation"] = _text(parsed.get("explanation"), 300) or ""
         return out
 
@@ -6792,6 +6804,7 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
+# Every intent handle_nl_query_result can act on that writes or deletes (the rest only read and render).
 NL_MUTATION_INTENTS = {
     "delete_stat": "delete a custom stat",
     "create_stat": "create a custom stat",
@@ -6935,13 +6948,14 @@ def handle_nl_query_result(
 
     if intent == "delete_stat":
         stat_to_del = str(parsed.get("stat_name", ""))
+        shown_name = re.sub(r"[^\w.-]", "?", stat_to_del)[:64]
         if not interactive:
             return header + (
                 f"\n  {C.YELLOW}⚠ Deleting a stat from a typed sentence needs a yes/no confirmation, which is only available "
-                f"in the interactive prompt. Use `/delete {stat_to_del}` or the `delete-stat` command instead.{C.RESET}"
+                f"in the interactive prompt. Use `/delete {shown_name}` or the `delete-stat` command instead.{C.RESET}"
             )
         try:
-            answer = prompt_input(f"\n  {C.BOLD}{C.RED}? Permanently delete custom stat '{stat_to_del}'? [y/N]: {C.RESET}").strip().lower()
+            answer = prompt_input(f"\n  {C.BOLD}{C.RED}? Permanently delete custom stat '{shown_name}'? [y/N]: {C.RESET}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             answer = "n"
         if answer not in ("y", "yes"):
