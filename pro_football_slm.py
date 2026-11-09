@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Compatibility launcher for the nfl_stat_cli package."""
-import nfl_stat_cli as _package
+"""Compatibility launcher for the pro_football_slm package."""
+import pro_football_slm as _package
 
 # Preserve the former module's public and private attributes for legacy imports.
 globals().update({name: value for name, value in vars(_package).items()

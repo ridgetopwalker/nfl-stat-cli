@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# nfl-stat-cli : Run-Once Installer for Linux, WSL & macOS (*nix)
+# pro-football-slm : Run-Once Installer for Linux, WSL & macOS (*nix)
 # Usage:
 #   ./install.sh        Compact UI (ASCII Art + 1 Progress Bar Line + 1 Command Line)
 #   ./install.sh -v     Verbose mode (full command and pip output)
@@ -41,9 +41,9 @@ print_banner() {
 }
 
 create_local_launcher() {
-    cat > "$SCRIPT_DIR/nfl-stat" <<'EOF'
+    cat > "$SCRIPT_DIR/pro-football-slm" <<'EOF'
 #!/usr/bin/env bash
-# Launcher for nfl-stat-cli in the project directory or via PATH symlink
+# Launcher for pro-football-slm in the project directory or via PATH symlink
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
     DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
@@ -53,36 +53,36 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
 if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+    exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/pro_football_slm.py" "$@"
 else
-    exec python3 "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+    exec python3 "$SCRIPT_DIR/pro_football_slm.py" "$@"
 fi
 EOF
-    chmod +x "$SCRIPT_DIR/nfl-stat" "$SCRIPT_DIR/nfl_stat_cli.py"
+    chmod +x "$SCRIPT_DIR/pro-football-slm" "$SCRIPT_DIR/pro_football_slm.py"
 }
 
 prompt_add_to_path() {
     if [ ! -t 0 ]; then
         return 0
     fi
-    printf "${BOLD}${CYAN}?${RESET} Add ${BOLD}nfl-stat${RESET} to your PATH so you can run it from anywhere? [y/N]: "
+    printf "${BOLD}${CYAN}?${RESET} Add ${BOLD}pro-football-slm${RESET} to your PATH so you can run it from anywhere? [y/N]: "
     read -r ans || true
     case "$ans" in
         [yY]|[yY][eE][sS])
             mkdir -p "$HOME/.local/bin"
-            ln -sf "$SCRIPT_DIR/nfl-stat" "$HOME/.local/bin/nfl-stat"
+            ln -sf "$SCRIPT_DIR/pro-football-slm" "$HOME/.local/bin/pro-football-slm"
             for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
                 if [ -f "$rc_file" ] && ! grep -q '\.local/bin' "$rc_file" 2>/dev/null; then
                     printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc_file"
                 fi
             done
             if [ -w "/usr/local/bin" ]; then
-                ln -sf "$SCRIPT_DIR/nfl-stat" "/usr/local/bin/nfl-stat" 2>/dev/null || true
+                ln -sf "$SCRIPT_DIR/pro-football-slm" "/usr/local/bin/pro-football-slm" 2>/dev/null || true
             fi
-            printf "${GREEN}✔ Added 'nfl-stat' to PATH (~/.local/bin/nfl-stat)! You can now run 'nfl-stat' from anywhere (or './nfl-stat' here).${RESET}\n"
+            printf "${GREEN}✔ Added 'pro-football-slm' to PATH (~/.local/bin/pro-football-slm)! You can now run 'pro-football-slm' from anywhere (or './pro-football-slm' here).${RESET}\n"
             ;;
         *)
-            printf "${DIM}Skipped adding to global PATH. You can run './nfl-stat' in this folder anytime.${RESET}\n"
+            printf "${DIM}Skipped adding to global PATH. You can run './pro-football-slm' in this folder anytime.${RESET}\n"
             ;;
     esac
 }
@@ -157,7 +157,7 @@ if [ "$VERBOSE" -eq 1 ]; then
     "$PYTHON_BIN" -m pip install nfl_data_py || true
     "$PYTHON_BIN" -m pip install --only-binary=:all: nflreadpy >/dev/null 2>&1 || true
     "$PYTHON_BIN" -m pip install -e . --no-build-isolation || "$PYTHON_BIN" -m pip install -e .
-    echo "[3/5] Python packages & nfl-stat-cli installed."
+    echo "[3/5] Python packages & pro-football-slm installed."
 
     echo "[4/5] Checking optional R (nflreadr)..."
     if command -v Rscript >/dev/null 2>&1; then
@@ -165,15 +165,15 @@ if [ "$VERBOSE" -eq 1 ]; then
     fi
 
     create_local_launcher
-    echo "[5/5] Verifying nfl-stat-cli installation..."
-    "$SCRIPT_DIR/nfl-stat" list-stats
+    echo "[5/5] Verifying pro-football-slm installation..."
+    "$SCRIPT_DIR/pro-football-slm" list-stats
 
     echo ""
     echo "======================================================================"
     echo "  ✔ INSTALLATION COMPLETE!"
-    echo "  Run in this folder:  ./nfl-stat"
-    echo "  Diagram a play:      ./nfl-stat play --qb Mahomes --camera behind-offense"
-    echo "                       ./nfl-stat play --qb Goff --camera behind-defense"
+    echo "  Run in this folder:  ./pro-football-slm"
+    echo "  Diagram a play:      ./pro-football-slm play --qb Mahomes --camera behind-offense"
+    echo "                       ./pro-football-slm play --qb Goff --camera behind-defense"
     echo "======================================================================"
     prompt_add_to_path
     exit 0
@@ -185,7 +185,7 @@ fi
 # 2. Below that: ONE progress bar line (exact width of banner, capped to terminal width so it never wraps)
 # 3. Below that: ONE command line that overwrites itself in-place
 # ==============================================================================
-LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/nfl_stat_cli_install.XXXXXX.log" 2>/dev/null || echo "${TMPDIR:-/tmp}/nfl_stat_cli_install.$$.log")"
+LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/pro_football_slm_install.XXXXXX.log" 2>/dev/null || echo "${TMPDIR:-/tmp}/pro_football_slm_install.$$.log")"
 : > "$LOG_FILE"
 
 TERM_COLS="$(tput cols 2>/dev/null || echo 89)"
@@ -293,9 +293,9 @@ if command -v Rscript >/dev/null 2>&1; then
 fi
 
 create_local_launcher
-if run_step 98 100 "./nfl-stat --version" "$SCRIPT_DIR/nfl-stat" --version; then
+if run_step 98 100 "./pro-football-slm --version" "$SCRIPT_DIR/pro-football-slm" --version; then
     rm -f "$LOG_FILE"
-    update_ui 100 "Done! Run: ./nfl-stat  (or ./install.sh -v for verbose)"
+    update_ui 100 "Done! Run: ./pro-football-slm  (or ./install.sh -v for verbose)"
     printf "\n"
     prompt_add_to_path
 else

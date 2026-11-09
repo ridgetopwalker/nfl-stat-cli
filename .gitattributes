@@ -1,6 +1,6 @@
 * text=auto eol=lf
 *.sh text eol=lf
-nfl-stat text eol=lf
+pro-football-slm text eol=lf
 *.py text eol=lf
 *.R text eol=lf
 *.bat text eol=crlf

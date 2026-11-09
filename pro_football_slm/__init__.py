@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nfl-stat-cli: Cross-Platform (*nix & Windows) Colorized Terminal NFL Analytics,
+pro-football-slm: Cross-Platform (*nix & Windows) Colorized Terminal NFL Analytics,
 Multi-Angle Play Visualizer (Behind Offense, Behind Defense, Sideline), & General Composable Custom Stat Engine.
 Powered by sportsdataverse-py (Python), nflverse / nflreadr / nflfastR (R), and Local Small Language Model (SLM via Ollama) + Deterministic Engine.
 """
@@ -317,7 +317,7 @@ SLASH_COMMAND_OPTIONS: List[str] = [
 
 class CLICompleter:
     """
-    Case-insensitive tab autocompleter for nfl-stat-cli slash commands,
+    Case-insensitive tab autocompleter for pro-football-slm slash commands,
     stat metric IDs, NFL teams, player names, and filenames, following
     the standard command-line autocompletion behavior when matching files in a folder.
     """
@@ -1452,7 +1452,7 @@ def require_season_plays(plays: List[Dict[str, Any]], season: int) -> List[Dict[
     raise NoSeasonDataError(
         f"No play-by-play data loaded for the {season} season (available: {avail_str}). "
         f"Use --season YEAR (or `/season YEAR` in the interactive prompt), or install the live data "
-        f"packages (`pip install nfl-stat-cli[live]`) to fetch {season}."
+        f"packages (`pip install pro-football-slm[live]`) to fetch {season}."
     )
 
 
@@ -1476,7 +1476,7 @@ class NFLDataBridge:
     """
 
     def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto") -> None:
-        self.cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
+        self.cache_dir = cache_dir or (Path.home() / ".pro_football_slm" / "cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.engine = engine.lower()
         self.last_source_used = "built-in-nflverse-sample"
@@ -2913,7 +2913,7 @@ class StatEngine:
     """Manages custom stats, evaluates multi-scope composable formulas, and tracks the user's Stat Page."""
 
     def __init__(self, storage_dir: Optional[Path] = None) -> None:
-        self.storage_dir = storage_dir or (Path.home() / ".nfl_stat_cli")
+        self.storage_dir = storage_dir or (Path.home() / ".pro_football_slm")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
@@ -3173,7 +3173,7 @@ class StatEngine:
             if include_traditional or v.category == "custom"
         }
         payload = {
-            "package": "nfl-stat-cli",
+            "package": "pro-football-slm",
             "schema_version": "2.0",
             "exported_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "stat_count": len(exported),
@@ -4982,12 +4982,12 @@ class NaturalLanguageStatAssistant:
             return None
         if requested_model and requested_model.strip().lower() != "auto":
             return requested_model.strip()
-        env_model = os.environ.get("NFL_STAT_SLM_MODEL")
+        env_model = os.environ.get("PFSLM_SLM_MODEL")
         if env_model:
             if env_model.strip().lower() in ("none", "off", "disable", "disabled"):
                 return None
             return env_model.strip()
-        base_url = os.environ.get("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:11434")
+        base_url = os.environ.get("PFSLM_OLLAMA_URL", "http://127.0.0.1:11434")
         try:
             req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
             with urllib.request.urlopen(req, timeout=0.8) as resp:
@@ -5037,7 +5037,7 @@ class NaturalLanguageStatAssistant:
     @classmethod
     def query_local_slm(cls, query: str, engine: StatEngine, model_name: str) -> Optional[Dict[str, Any]]:
         """Call local Ollama SLM to parse natural language into structured JSON intent."""
-        base_url = os.environ.get("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:11434")
+        base_url = os.environ.get("PFSLM_OLLAMA_URL", "http://127.0.0.1:11434")
         available_stats = list(engine.stats.keys())
         system_prompt = (
             "You are the NFL-Stat-CLI Local Small Language Model parser. "
@@ -6414,7 +6414,7 @@ def render_custom_stat_example_walkthrough(
     team: Optional[str] = None,
 ) -> str:
     """
-    Interactive guide demonstrating how to design and build custom stats in nfl-stat-cli,
+    Interactive guide demonstrating how to design and build custom stats in pro-football-slm,
     using MLB-style QB Meaningful Wins (MW / ML) and QB Impact Score as the canonical example.
     """
     s_plays = plays_for_season(plays, season)
@@ -6437,7 +6437,7 @@ def render_custom_stat_example_walkthrough(
         f"   the defense carries a subpar performance, or tag them with a loss in a 42-38 shootout.",
         f"   {C.GREEN}Goal:{C.RESET} Build an MLB-pitcher style Decision System — Meaningful Wins (MW), Meaningful Losses (ML),",
         f"   and No-Decisions (ND) based on whether the QB met an objective performance threshold.",
-        f"\n{C.BOLD}{C.CYAN}2. The 3-Step Construction in nfl-stat-cli:{C.RESET}",
+        f"\n{C.BOLD}{C.CYAN}2. The 3-Step Construction in pro-football-slm:{C.RESET}",
         f"   {C.BOLD}Step A: Select Evaluation Scope{C.RESET}",
         f"     • Scope: `{C.YELLOW}game{C.RESET}` (evaluates each individual game rather than the full season aggregate)",
         f"     • Aggregation: `{C.YELLOW}sum{C.RESET}` (sums the 1s and 0s across all games in the season)",
@@ -6457,7 +6457,7 @@ def render_custom_stat_example_walkthrough(
         f"     2. {C.BOLD}Natural Language:{C.RESET} Type directly in plain English:",
         f"        {C.DIM}\"create stat called clutch_win with formula ifelse(epa_per_play > 0.15 and team_win == 1, 1, 0) by qb\"{C.RESET}",
         f"     3. {C.BOLD}CLI Command:{C.RESET}",
-        f"        {C.DIM}nfl-stat create-stat --name qb_meaningful_win --scope game --agg sum --formula \"ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)\" --title \"Meaningful Win\" --description \"...\" --explained \"...\"{C.RESET}",
+        f"        {C.DIM}pro-football-slm create-stat --name qb_meaningful_win --scope game --agg sum --formula \"ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)\" --title \"Meaningful Win\" --description \"...\" --explained \"...\"{C.RESET}",
         f"\n{C.BOLD}{C.GREEN}3. Live Example Demonstration ({display_season} Leaderboard):{C.RESET}\n",
         report_table,
     ]
@@ -9489,9 +9489,9 @@ def wait_for_resolution(
         time.sleep(poll_interval)
 
 
-def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
+def reload_pro_football_slm(pull_git: bool = False) -> Any:
     """
-    Cleanly reload nfl-stat-cli and all its submodules in-place.
+    Cleanly reload pro-football-slm and all its submodules in-place.
     Optionally pulls git updates first.
     Purges cached submodules from sys.modules to ensure fresh imports.
     """
@@ -9507,13 +9507,13 @@ def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
 
     # Purge cached submodules so fresh code is loaded from disk
     for m in list(sys.modules.keys()):
-        if m.startswith("nfl_stat_cli."):
+        if m.startswith("pro_football_slm."):
             try:
                 del sys.modules[m]
             except KeyError:
                 pass
 
-    import nfl_stat_cli as _cur_mod
+    import pro_football_slm as _cur_mod
     return importlib.reload(_cur_mod)
 
 
@@ -9556,7 +9556,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Report parsing or interpretation error to Antigravity AI agent
     {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place with latest patches from Antigravity
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
-    {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
+    {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit pro-football-slm
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
 
 
@@ -9714,9 +9714,9 @@ def interactive_tui(
         try:
             if _GLOBAL_COMPLETER:
                 _GLOBAL_COMPLETER.set_context(None)
-            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat > {C.RESET}").lstrip("\ufeff").strip()
+            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}pro-football-slm > {C.RESET}").lstrip("\ufeff").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nExiting nfl-stat-cli.")
+            print("\nExiting pro-football-slm.")
             break
 
         if not raw_in:
@@ -9724,7 +9724,7 @@ def interactive_tui(
 
         low_in = raw_in.lower()
         if low_in in ("q", "quit", "/quit", "/q", "close", "/close", "exit", "/exit"):
-            print("Exiting nfl-stat-cli.")
+            print("Exiting pro-football-slm.")
             break
 
         try:
@@ -10030,7 +10030,7 @@ def interactive_tui(
                                 print(f"  {C.BOLD}Fix Details:{C.RESET} {res.get('summary')}")
                             print(f"  {C.CYAN}🔄 Reloading programming and re-evaluating query...{C.RESET}\n")
                             try:
-                                _cur_mod = reload_nfl_stat_cli(pull_git=False)
+                                _cur_mod = reload_pro_football_slm(pull_git=False)
                                 engine = _cur_mod.StatEngine()
                                 re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
                                     last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
@@ -10042,9 +10042,9 @@ def interactive_tui(
                     else:
                         print(f"  {C.DIM}Report saved. Type `/reload` or `/update` once the fix is deployed to update your programming.{C.RESET}")
                 elif cmd_token in ("/reload", "/update", "/refresh"):
-                    print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place...{C.RESET}")
+                    print(f"  {C.CYAN}🔄 Reloading pro-football-slm modules and custom stats in-place...{C.RESET}")
                     try:
-                        _cur_mod = reload_nfl_stat_cli(pull_git=True)
+                        _cur_mod = reload_pro_football_slm(pull_git=True)
                         engine = _cur_mod.StatEngine()
                         ipc_dir = get_ipc_dir()
                         latest_res_p = ipc_dir / "resolved" / "latest.json"
@@ -10157,7 +10157,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     common.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help="Disable ANSI color codes")
 
     parser = argparse.ArgumentParser(
-        prog="nfl-stat-cli",
+        prog="pro-football-slm",
         parents=[common],
         description="Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, multi-angle play diagrammer, & composable custom stat CLI.",
     )

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-One-step uploader to create the private GitHub repository `ridgetopwalker/nfl-stat-cli`
+One-step uploader to create the private GitHub repository `ridgetopwalker/pro-football-slm`
 and push all repository files using either the `gh` CLI or a GitHub Personal Access Token (`GITHUB_TOKEN`).
 Works on both *nix (Linux/macOS) and Windows.
 """
@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 
 REPO_OWNER = "ridgetopwalker"
-REPO_NAME = "nfl-stat-cli"
+REPO_NAME = "pro-football-slm"
 REPO_DESC = "Cross-platform (*nix & Windows) colorized ASCII art NFL analytics & composable custom stat CLI powered by nflverse (R) and sportsdataverse-py (Python)."
 FILES = [
     "LICENSE",
@@ -23,7 +23,7 @@ FILES = [
     ".gitattributes",
     "README.md",
     "pyproject.toml",
-    "nfl_stat_cli.py",
+    "pro_football_slm.py",
     "nflverse_bridge.R",
     "custom_stats_export.json",
     "install.bat",
@@ -39,7 +39,7 @@ def push_via_gh_cli(repo_dir: Path) -> bool:
         if not (repo_dir / ".git").exists():
             subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=True)
         subprocess.run(["git", "add"] + FILES + ["upload_to_github.py"], cwd=repo_dir, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial commit: nfl-stat-cli (nflverse R + sportsdataverse-py)"], cwd=repo_dir, check=False)
+        subprocess.run(["git", "commit", "-m", "Initial commit: pro-football-slm (nflverse R + sportsdataverse-py)"], cwd=repo_dir, check=False)
         subprocess.run(
             [
                 "gh", "repo", "create", f"{REPO_OWNER}/{REPO_NAME}",
@@ -65,7 +65,7 @@ def push_via_github_api(repo_dir: Path, token: str) -> None:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "Content-Type": "application/json",
-        "User-Agent": "nfl-stat-cli-uploader",
+        "User-Agent": "pro-football-slm-uploader",
     }
     # 1. Create private repository
     create_payload = json.dumps({

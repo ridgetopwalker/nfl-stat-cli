@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Block until a new nfl-stat /error report appears (Windows or WSL), print it, then exit.
+"""Block until a new pro-football-slm /error report appears (Windows or WSL), print it, then exit.
 
 Run as a background task; the agent is notified when it exits.
 Usage: py -3 watch_errors.py [--interval 5]
@@ -11,8 +11,8 @@ import sys
 import time
 from pathlib import Path
 
-WIN_PENDING = Path(r"C:\Users\mccla\sources\nfl-stat-cli\.error_ipc\pending")
-WSL_PENDING = "/home/sean/nfl-stat-cli/.error_ipc/pending"
+WIN_PENDING = Path(r"C:\Users\mccla\sources\pro-football-slm\.error_ipc\pending")
+WSL_PENDING = "/home/sean/pro-football-slm/.error_ipc/pending"
 
 
 def win_reports():

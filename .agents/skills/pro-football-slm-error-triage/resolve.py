@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Signal that an nfl-stat error report is fixed, on the side (windows|wsl) that filed it.
+"""Signal that an pro-football-slm error report is fixed, on the side (windows|wsl) that filed it.
 
 Usage: py -3 resolve.py <windows|wsl> <report_id> <commit> "<summary>"
 Also pulls origin/master into the WSL checkout first when source is wsl.
@@ -7,14 +7,14 @@ Also pulls origin/master into the WSL checkout first when source is wsl.
 import subprocess
 import sys
 
-WIN_REPO = r"C:\Users\mccla\sources\nfl-stat-cli"
-WSL_REPO = "/home/sean/nfl-stat-cli"
+WIN_REPO = r"C:\Users\mccla\sources\pro-football-slm"
+WSL_REPO = "/home/sean/pro-football-slm"
 WSL_PY = f"{WSL_REPO}/.venv/bin/python"
 
 SNIPPET = """
 import sys
 sys.path.insert(0, {repo!r})
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 print(cli.write_resolution(report_id={rid!r}, summary={summary!r}, commit={commit!r}))
 """
 

@@ -1,23 +1,23 @@
 ---
-name: nfl-stat-error-triage
-description: Connect to the user's WSL instance of nfl-stat, watch for /error reports filed from either Windows or WSL, fix the natural-language parsing bug, push, and signal the waiting nfl-stat session. Use when the user mentions /error reports, "fix error", nfl-stat, or the WSL nfl-stat instance.
+name: pro-football-slm-error-triage
+description: Connect to the user's WSL instance of pro-football-slm, watch for /error reports filed from either Windows or WSL, fix the natural-language parsing bug, push, and signal the waiting pro-football-slm session. Use when the user mentions /error reports, "fix error", pro-football-slm, or the WSL pro-football-slm instance.
 ---
 
-# nfl-stat error triage
+# pro-football-slm error triage
 
 ## Environment (remember this)
-- Windows repo: `C:\Users\mccla\sources\nfl-stat-cli` (git remote `ridgetopwalker/nfl-stat-cli`, branches `master` and `main`).
-- The user usually runs nfl-stat in **WSL Ubuntu**: repo `/home/sean/nfl-stat-cli`, python `/home/sean/nfl-stat-cli/.venv/bin/python`, launched as `.venv/bin/python nfl_stat_cli.py`.
-- Reach WSL only via `wsl.exe` (e.g. `wsl bash -c "..."`, `wsl git -C /home/sean/nfl-stat-cli ...`). Pipes like `| grep` must be inside `bash -c`.
+- Windows repo: `C:\Users\mccla\sources\pro-football-slm` (git remote `ridgetopwalker/pro-football-slm`, branches `master` and `main`).
+- The user usually runs pro-football-slm in **WSL Ubuntu**: repo `/home/sean/pro-football-slm`, python `/home/sean/pro-football-slm/.venv/bin/python`, launched as `.venv/bin/python pro_football_slm.py`.
+- Reach WSL only via `wsl.exe` (e.g. `wsl bash -c "..."`, `wsl git -C /home/sean/pro-football-slm ...`). Pipes like `| grep` must be inside `bash -c`.
 - Each side has its own `.error_ipc/{pending,resolved,history}`. The report JSON holds `id`, `query`, `user_explanation`, `parsed` (the AST output). The WSL session lives in a separate process: it only sees resolutions written into **its own** `.error_ipc/resolved/`.
 
 ## Workflow
-1. Start (or restart) the watcher as a **background task**: `py -3 .agents/skills/nfl-stat-error-triage/watch_errors.py`. It exits when a pending report appears (Windows or WSL), printing `NEW_ERROR_REPORT source=<windows|wsl> id=<id>` plus the JSON. You are notified automatically when it exits.
+1. Start (or restart) the watcher as a **background task**: `py -3 .agents/skills/pro-football-slm-error-triage/watch_errors.py`. It exits when a pending report appears (Windows or WSL), printing `NEW_ERROR_REPORT source=<windows|wsl> id=<id>` plus the JSON. You are notified automatically when it exits.
 2. Reproduce: `NaturalLanguageStatAssistant.interpret_query(query, StatEngine(), slm_model="off")` then `handle_nl_query_result(parsed, engine, SAMPLE_PBP_PLAYS)`.
-3. Fix in `nfl_stat_cli/__init__.py`; add a regression test in `tests/test_cli.py`.
+3. Fix in `pro_football_slm/__init__.py`; add a regression test in `tests/test_cli.py`.
 4. Verify: 0 CRLF in modified files, `py -3 -m pytest` fully green.
-5. Rebuild `nfl-stat-cli.zip` (file list as in earlier turns), commit, `git push origin master` and `git push origin master:main`.
-6. Signal: `py -3 .agents/skills/nfl-stat-error-triage/resolve.py <source> <id> <commit> "<summary>"` (pulls master into WSL when source is wsl, then writes the resolution there). The waiting nfl-stat session hot-reloads and re-runs the query.
+5. Rebuild `pro-football-slm.zip` (file list as in earlier turns), commit, `git push origin master` and `git push origin master:main`.
+6. Signal: `py -3 .agents/skills/pro-football-slm-error-triage/resolve.py <source> <id> <commit> "<summary>"` (pulls master into WSL when source is wsl, then writes the resolution there). The waiting pro-football-slm session hot-reloads and re-runs the query.
 7. Restart the watcher (step 1) so the loop continues.
 
 ## Notes

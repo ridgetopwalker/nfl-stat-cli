@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    nfl-stat-cli Run-Once Installer for Windows.
+    pro-football-slm Run-Once Installer for Windows.
     Usage:
       .\install.ps1        Compact UI (ASCII Art + Full-Width Progress Bar + 1-Line Live Command)
       .\install.ps1 -v     Verbose mode (full command and pip output)
@@ -15,7 +15,7 @@ param(
 $ErrorActionPreference = "Continue"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $ProjectRoot
-$LogFile = Join-Path $env:TEMP "nfl_stat_cli_install.log"
+$LogFile = Join-Path $env:TEMP "pro_football_slm_install.log"
 "" | Set-Content -Path $LogFile -Encoding UTF8 -ErrorAction SilentlyContinue
 
 function Find-RealPython {
@@ -77,7 +77,7 @@ if ($VerboseMode) {
 } else {
     $PythonPreview = Find-RealPython
     if ($PythonPreview) {
-        & $PythonPreview -c "import nfl_stat_cli; print(nfl_stat_cli.AsciiArtRenderer.banner())" 2>$null
+        & $PythonPreview -c "import pro_football_slm; print(pro_football_slm.AsciiArtRenderer.banner())" 2>$null
     } else {
         Write-Host "+=======================================================================================+" -ForegroundColor Yellow
         Write-Host "|  NFL-STAT-CLI : nflverse (R) + sportsdataverse-py (Python) Custom Stat & Play Engine  |" -ForegroundColor Cyan
@@ -146,7 +146,7 @@ if ($LASTEXITCODE -ne 0) {
 if (-not $VerboseMode) { Update-CompactUI 40 "$PythonExe -m pip install --upgrade pip setuptools wheel" }
 & $PythonExe -m pip install --upgrade pip setuptools wheel --quiet >>$LogFile 2>&1
 
-# 3. Install required Python packages & nfl-stat-cli
+# 3. Install required Python packages & pro-football-slm
 if (-not $SkipLivePackages) {
     if ($VerboseMode) {
         Write-Host "[3/5] Installing NFL analytics Python packages (pandas, pyarrow, polars, nfl_data_py, nflreadpy)..." -ForegroundColor Cyan
@@ -164,7 +164,7 @@ if (-not $SkipLivePackages) {
 }
 
 if ($VerboseMode) {
-    Write-Host "      Installing nfl-stat-cli package..." -ForegroundColor Cyan
+    Write-Host "      Installing pro-football-slm package..." -ForegroundColor Cyan
     & $PythonExe -m pip install -e . --no-build-isolation
 } else {
     Update-CompactUI 90 "pip install -e . --no-build-isolation"
@@ -189,39 +189,39 @@ if ($WithSLM) {
     }
 }
 
-# 5. Ensure portable local folder launchers (nfl-stat.bat & nfl-stat-cli.bat) & verify
+# 5. Ensure portable local folder launchers (pro-football-slm.bat & pro-football-slm.bat) & verify
 $LauncherContent = @"
 @echo off
 if exist "%~dp0.venv\Scripts\python.exe" (
-    "%~dp0.venv\Scripts\python.exe" "%~dp0nfl_stat_cli.py" %*
+    "%~dp0.venv\Scripts\python.exe" "%~dp0pro_football_slm.py" %*
 ) else (
     where py >nul 2>nul
     if %ERRORLEVEL% EQU 0 (
-        py -3 "%~dp0nfl_stat_cli.py" %*
+        py -3 "%~dp0pro_football_slm.py" %*
     ) else (
-        python "%~dp0nfl_stat_cli.py" %*
+        python "%~dp0pro_football_slm.py" %*
     )
 )
 "@
-Set-Content -Path (Join-Path $ProjectRoot "nfl-stat.bat") -Value $LauncherContent -Encoding ASCII
-Set-Content -Path (Join-Path $ProjectRoot "nfl-stat-cli.bat") -Value $LauncherContent -Encoding ASCII
+Set-Content -Path (Join-Path $ProjectRoot "pro-football-slm.bat") -Value $LauncherContent -Encoding ASCII
+Set-Content -Path (Join-Path $ProjectRoot "pro-football-slm.bat") -Value $LauncherContent -Encoding ASCII
 
 if ($VerboseMode) {
-    Write-Host "[5/5] Verifying nfl-stat-cli installation..." -ForegroundColor Cyan
-    & (Join-Path $ProjectRoot "nfl-stat.bat") list-stats
+    Write-Host "[5/5] Verifying pro-football-slm installation..." -ForegroundColor Cyan
+    & (Join-Path $ProjectRoot "pro-football-slm.bat") list-stats
     $VerifyCode = $LASTEXITCODE
     if ($VerifyCode -eq 0) {
-        Write-Host "  [OK] INSTALLATION COMPLETE! Run: .\nfl-stat" -ForegroundColor Green
+        Write-Host "  [OK] INSTALLATION COMPLETE! Run: .\pro-football-slm" -ForegroundColor Green
     } else {
         Write-Host "  [!] Verification failed (see $LogFile)." -ForegroundColor Red
         exit $VerifyCode
     }
 } else {
-    Update-CompactUI 98 ".\nfl-stat.bat --version"
-    & (Join-Path $ProjectRoot "nfl-stat.bat") --version >>$LogFile 2>&1
+    Update-CompactUI 98 ".\pro-football-slm.bat --version"
+    & (Join-Path $ProjectRoot "pro-football-slm.bat") --version >>$LogFile 2>&1
     $VerifyCode = $LASTEXITCODE
     if ($VerifyCode -eq 0) {
-        Update-CompactUI 100 "Done! Run: .\nfl-stat  (or .\install.ps1 -v for verbose)"
+        Update-CompactUI 100 "Done! Run: .\pro-football-slm  (or .\install.ps1 -v for verbose)"
         Write-Host ""
     } else {
         Update-CompactUI 100 "ERROR: Verification failed (log: $LogFile)."
@@ -231,7 +231,7 @@ if ($VerboseMode) {
 }
 
 if ($VerifyCode -eq 0 -and [Environment]::UserInteractive) {
-    $ans = Read-Host "? Add 'nfl-stat' to your PATH so you can run it from anywhere? [y/N]"
+    $ans = Read-Host "? Add 'pro-football-slm' to your PATH so you can run it from anywhere? [y/N]"
     if ($ans -match "^[yY]") {
         $CurrentUserPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
         $PathParts = ($CurrentUserPath -split ";") | Where-Object { $_ -ne "" }
@@ -242,8 +242,8 @@ if ($VerifyCode -eq 0 -and [Environment]::UserInteractive) {
         if (($env:Path -split ";") -notcontains $ProjectRoot) {
             $env:Path = "$ProjectRoot;$env:Path"
         }
-        Write-Host "[OK] Added '$ProjectRoot' to your PATH! You can now run 'nfl-stat' from anywhere." -ForegroundColor Green
+        Write-Host "[OK] Added '$ProjectRoot' to your PATH! You can now run 'pro-football-slm' from anywhere." -ForegroundColor Green
     } else {
-        Write-Host "Skipped adding to global PATH. You can run '.\nfl-stat' in this folder anytime." -ForegroundColor DarkGray
+        Write-Host "Skipped adding to global PATH. You can run '.\pro-football-slm' in this folder anytime." -ForegroundColor DarkGray
     }
 }

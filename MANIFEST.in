@@ -2,10 +2,10 @@ include LICENSE
 include README.md
 include pyproject.toml
 include nflverse_bridge.R
-include nfl_stat_cli/*.R
+include pro_football_slm/*.R
 include custom_stats_export.json
 include install.sh
 include install.bat
 include install.ps1
 global-exclude *.py[cod] __pycache__ *.so *.dylib .DS_Store *.docx *.zip
-include nfl_stat_cli.py
+include pro_football_slm.py
