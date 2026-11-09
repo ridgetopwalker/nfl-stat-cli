@@ -1633,6 +1633,98 @@ def test_fantasy_points_this_week_error_regression():
     assert "L.Jackson" in out
 
 
+def test_fantasy_dst_team_defense_scoring_and_error_regression():
+    from nfl_stat_cli.fantasy import (
+        calculate_dst_points_allowed_score,
+        compute_team_dst_fantasy_leaders,
+        compute_team_dst_fantasy_profile,
+        render_fantasy_leaderboard_view,
+        render_team_dst_fantasy_profile_view,
+    )
+
+    # 1. Points Allowed scoring brackets
+    assert calculate_dst_points_allowed_score(0) == 10.0
+    assert calculate_dst_points_allowed_score(3) == 7.0
+    assert calculate_dst_points_allowed_score(10) == 4.0
+    assert calculate_dst_points_allowed_score(17) == 1.0
+    assert calculate_dst_points_allowed_score(24) == 0.0
+    assert calculate_dst_points_allowed_score(30) == -1.0
+    assert calculate_dst_points_allowed_score(42) == -4.0
+
+    # 2. Mock plays with sacks, takeaways, defensive TDs, and points allowed
+    mock_plays = [
+        {
+            "game_id": "2024_01_KC_BAL", "season": 2024, "week": 1,
+            "posteam": "KC", "defteam": "BAL", "home_score": 27, "away_score": 20,
+            "sack": 1, "interception": 0, "fumble_lost": 0, "safety": 0, "blocked_kick": 0, "touchdown": 0,
+            "pass_attempt": 1, "desc": "P.Mahomes sacked by BAL defense",
+        },
+        {
+            "game_id": "2024_01_KC_BAL", "season": 2024, "week": 1,
+            "posteam": "KC", "defteam": "BAL", "home_score": 27, "away_score": 20,
+            "sack": 0, "interception": 1, "fumble_lost": 0, "safety": 0, "blocked_kick": 0, "touchdown": 1,
+            "pass_attempt": 1, "desc": "P.Mahomes pass INTERCEPTED by BAL and returned for TOUCHDOWN",
+        },
+        {
+            "game_id": "2024_01_KC_BAL", "season": 2024, "week": 1,
+            "posteam": "BAL", "defteam": "KC", "home_score": 27, "away_score": 20,
+            "sack": 0, "interception": 0, "fumble_lost": 1, "safety": 0, "blocked_kick": 0, "touchdown": 0,
+            "rush_attempt": 1, "desc": "D.Henry fumble lost, recovered by KC",
+        },
+    ]
+
+    # In game 2024_01_KC_BAL: KC is away (20), BAL is home (27)
+    # BAL (home defense) allowed KC's 20 pts (bracket 14-20 = +1.0) -> 1 sack (+1) + 1 INT (+2) + 1 TD (+6) + 1 PA = 10.0 pts
+    # KC (away defense) allowed BAL's 27 pts (bracket 21-27 = 0.0) -> 1 FR (+2) + 0 PA = 2.0 pts
+    dst_leaders = compute_team_dst_fantasy_leaders(mock_plays, week=1)
+    assert len(dst_leaders) == 2
+    bal = next(r for r in dst_leaders if r["team"] == "BAL")
+    kc = next(r for r in dst_leaders if r["team"] == "KC")
+
+    assert bal["sacks"] == 1
+    assert bal["interceptions"] == 1
+    assert bal["defensive_tds"] == 1
+    assert bal["points_allowed"] == 20
+    assert bal["points_ppr"] == 10.00
+
+    assert kc["fumbles_recovered"] == 1
+    assert kc["takeaways"] == 1
+    assert kc["points_allowed"] == 27
+    assert kc["points_ppr"] == 2.00
+
+    # 3. Leaderboard rendering
+    board = cli.strip_ansi(render_fantasy_leaderboard_view(mock_plays, season=2024, position="DEF", week=1))
+    assert "Team D/ST Scoring" in board
+    assert "BAL Defense" in board
+    assert "KC Defense" in board
+    assert "10.00" in board
+
+    # 4. Profile rendering
+    prof = cli.strip_ansi(render_team_dst_fantasy_profile_view("BAL", mock_plays, season=2024))
+    assert "BAL Defense" in prof
+    assert "Wk 1" in prof
+    assert "10.00" in prof
+
+    # 5. Regression for filed WSL error err_20261108_194628:
+    # "which defense has produced the most fantasy points last week?"
+    engine = cli.StatEngine()
+    err_q = "which defense has produced the most fantasy points last week?"
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(err_q, engine=engine, slm_model="off")
+    assert parsed["intent"] == "fantasy_report"
+    assert parsed["subquery"] == "leaderboard"
+    assert parsed["position"] == "DEF"
+    assert parsed["latest_week"] is True
+
+    # Output on SAMPLE_PBP_PLAYS must return D/ST leaderboard with teams, NOT empty "(No matching records found)"
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS))
+    assert "Team D/ST Scoring" in out
+    assert "Defense" in out
+    assert "BAL Defense" in out
+    assert "DAL Defense" in out
+    assert "(No matching records found)" not in out
+
+
+
 
 
 

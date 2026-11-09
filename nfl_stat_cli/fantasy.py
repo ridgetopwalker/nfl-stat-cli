@@ -35,6 +35,43 @@ FANTASY_REC_HALF_PPR_PTS = 0.5
 # Turnovers: -2 pts per fumble lost
 FANTASY_FUMBLE_LOST_PTS = -2.0
 
+# Team Defense / Special Teams (D/ST) scoring constants:
+FANTASY_DST_SACK_PTS = 1.0
+FANTASY_DST_INT_PTS = 2.0
+FANTASY_DST_FUMBLE_REC_PTS = 2.0
+FANTASY_DST_SAFETY_PTS = 2.0
+FANTASY_DST_BLOCK_PTS = 2.0
+FANTASY_DST_TD_PTS = 6.0
+
+
+def calculate_dst_points_allowed_score(points_allowed: int) -> float:
+    """
+    Calculate standard NFL fantasy points awarded for Points Allowed (PA):
+    - 0 points: +10 pts (shutout)
+    - 1-6 points: +7 pts
+    - 7-13 points: +4 pts
+    - 14-20 points: +1 pt
+    - 21-27 points: 0 pts
+    - 28-34 points: -1 pt
+    - 35+ points: -4 pts
+    """
+    pa = int(points_allowed)
+    if pa <= 0:
+        return 10.0
+    elif 1 <= pa <= 6:
+        return 7.0
+    elif 7 <= pa <= 13:
+        return 4.0
+    elif 14 <= pa <= 20:
+        return 1.0
+    elif 21 <= pa <= 27:
+        return 0.0
+    elif 28 <= pa <= 34:
+        return -1.0
+    else:
+        return -4.0
+
+
 
 def calculate_player_fantasy_points(
     pass_yards: float = 0.0,
@@ -305,10 +342,386 @@ def compute_player_fantasy_profile(player_name: str, plays: List[Dict[str, Any]]
     }
 
 
+def compute_team_dst_fantasy_leaders(
+    plays: List[Dict[str, Any]],
+    week: Optional[int] = None,
+    team_filter: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Aggregate defensive and special teams events across play-by-play data to calculate
+    Team Defense / Special Teams (D/ST) fantasy scoring:
+      - Sacks: +1.0 pt
+      - Interceptions: +2.0 pts
+      - Fumbles recovered: +2.0 pts
+      - Safeties: +2.0 pts
+      - Blocked kicks (FG, punt, PAT): +2.0 pts
+      - Defensive / ST Touchdowns: +6.0 pts
+      - Points Allowed (PA) scoring brackets per game (10, 7, 4, 1, 0, -1, -4 pts)
+    """
+    from . import resolve_team_abbr
+
+    target_plays = plays
+    if week is not None:
+        target_plays = [p for p in target_plays if int(p.get("week", -999)) == int(week)]
+
+    target_team = resolve_team_abbr(team_filter).upper() if team_filter and resolve_team_abbr(team_filter) else (team_filter.upper() if team_filter else None)
+
+    # Group all target plays by game_id to calculate final scores and points allowed accurately
+    all_game_plays: Dict[str, List[Dict[str, Any]]] = {}
+    for p in target_plays:
+        gid = str(p.get("game_id") or "")
+        if gid:
+            all_game_plays.setdefault(gid, []).append(p)
+
+    # Group plays by defteam
+    team_plays: Dict[str, List[Dict[str, Any]]] = {}
+    team_games: Dict[str, Set[str]] = {}
+
+    for p in target_plays:
+        dt = str(p.get("defteam") or "").strip().upper()
+        if not dt or dt in ("UNKNOWN", "NONE", "UNK", "NA"):
+            continue
+        team_plays.setdefault(dt, []).append(p)
+        gid = str(p.get("game_id") or "")
+        if gid:
+            team_games.setdefault(dt, set()).add(gid)
+
+    # In case any game had a team playing where defteam wasn't on individual rows, also check game_id teams
+    for gid, gplays in all_game_plays.items():
+        parts = gid.split("_")
+        if len(parts) >= 4:
+            away_t = parts[2].upper()
+            home_t = parts[3].upper()
+            for t in (away_t, home_t):
+                if t:
+                    team_games.setdefault(t, set()).add(gid)
+                    if t not in team_plays:
+                        team_plays[t] = []
+
+    results: List[Dict[str, Any]] = []
+
+    for team, t_plays in team_plays.items():
+        if target_team and team != target_team:
+            continue
+
+        sacks = 0
+        ints = 0
+        fumbles_rec = 0
+        safeties = 0
+        blocked_kicks = 0
+        def_tds = 0
+
+        for p in t_plays:
+            desc = str(p.get("desc") or "").lower()
+            is_sack = int(p.get("sack", 0)) == 1 or ("sacked" in desc and "penalty" not in desc)
+            if is_sack:
+                sacks += 1
+
+            is_int = int(p.get("interception", 0)) == 1 or ("intercepted" in desc and "penalty" not in desc)
+            if is_int:
+                ints += 1
+
+            is_fr = int(p.get("fumble_lost", 0)) == 1 or ("fumble" in desc and "recovered" in desc and (team.lower() in desc or "defense" in desc))
+            if is_fr:
+                fumbles_rec += 1
+
+            is_safety = int(p.get("safety", 0)) == 1 or ("safety" in desc and "safety valve" not in desc)
+            if is_safety:
+                safeties += 1
+
+            is_block = int(p.get("blocked_kick", 0)) == 1 or int(p.get("punt_blocked", 0)) == 1 or (
+                "blocked" in desc and any(k in desc for k in ("punt", "field goal", "extra point", "fg", "pat", "kick"))
+            )
+            if is_block:
+                blocked_kicks += 1
+
+            is_td = int(p.get("touchdown", 0)) == 1 or "touchdown" in desc
+            if is_td:
+                is_pass_td = int(p.get("pass_touchdown", 0)) == 1 or "pass to" in desc
+                is_rush_td = int(p.get("rush_touchdown", 0)) == 1 or "run for" in desc or "rush for" in desc
+                if is_int or is_fr or is_block or (not is_pass_td and not is_rush_td and ("return" in desc or "recovery" in desc or "intercept" in desc)):
+                    def_tds += 1
+
+        # Calculate points allowed per game
+        total_pa = 0
+        total_pa_pts = 0.0
+        g_ids = team_games.get(team, set())
+        gp = max(1, len(g_ids))
+
+        for gid in sorted(g_ids):
+            gplays = all_game_plays.get(gid, [])
+            parts = gid.split("_")
+            away_t = parts[2].upper() if len(parts) >= 4 else ""
+            home_t = parts[3].upper() if len(parts) >= 4 else ""
+
+            home_sc = max([int(p.get("home_score", 0) or 0) for p in gplays], default=0)
+            away_sc = max([int(p.get("away_score", 0) or 0) for p in gplays], default=0)
+
+            if team == home_t:
+                pa = away_sc
+            elif team == away_t:
+                pa = home_sc
+            else:
+                opp_scores = [int(p.get("home_score", 0) or 0) if p.get("posteam") == home_t else int(p.get("away_score", 0) or 0) for p in gplays if p.get("posteam") and p.get("posteam") != team]
+                pa = max(opp_scores, default=0)
+
+            # In case game scores were 0-0 in mock data, derive from offensive TDs against defteam
+            if home_sc == 0 and away_sc == 0:
+                opp_tds = sum(1 for p in gplays if str(p.get("defteam", "")).upper() == team and int(p.get("touchdown", 0)) == 1 and (int(p.get("pass_touchdown", 0)) == 1 or int(p.get("rush_touchdown", 0)) == 1))
+                if opp_tds > 0:
+                    pa = max(pa, opp_tds * 7)
+
+            total_pa += pa
+            total_pa_pts += calculate_dst_points_allowed_score(pa)
+
+        tot_pts = (
+            (sacks * FANTASY_DST_SACK_PTS)
+            + (ints * FANTASY_DST_INT_PTS)
+            + (fumbles_rec * FANTASY_DST_FUMBLE_REC_PTS)
+            + (safeties * FANTASY_DST_SAFETY_PTS)
+            + (blocked_kicks * FANTASY_DST_BLOCK_PTS)
+            + (def_tds * FANTASY_DST_TD_PTS)
+            + total_pa_pts
+        )
+        tot_pts = round(tot_pts, 2)
+
+        results.append({
+            "player": f"{team} Defense",
+            "team": team,
+            "position": "DEF",
+            "games_played": gp,
+            "sacks": sacks,
+            "interceptions": ints,
+            "fumbles_recovered": fumbles_rec,
+            "takeaways": ints + fumbles_rec,
+            "safeties": safeties,
+            "blocked_kicks": blocked_kicks,
+            "defensive_tds": def_tds,
+            "points_allowed": total_pa,
+            "pa_per_game": round(total_pa / gp, 1),
+            "points_std": tot_pts,
+            "points_ppr": tot_pts,
+            "points_half_ppr": tot_pts,
+            "ppg_std": round(tot_pts / gp, 2),
+            "ppg_ppr": round(tot_pts / gp, 2),
+            "ppg_half_ppr": round(tot_pts / gp, 2),
+            # Offensive dummy stats for compatibility
+            "pass_yards": 0.0,
+            "pass_tds": 0,
+            "rush_yards": 0.0,
+            "rush_tds": 0,
+            "receptions": 0,
+            "rec_yards": 0.0,
+            "rec_tds": 0,
+            "fumbles_lost": 0,
+            "two_point_conversions": 0,
+        })
+
+    results.sort(key=lambda x: (x["points_ppr"], x["takeaways"], x["sacks"]), reverse=True)
+    return results[:limit] if (limit and limit > 0) else results
+
+
+def compute_team_dst_fantasy_profile(team_name: str, plays: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Compute game-by-game D/ST fantasy scoring log for an NFL team defense.
+    """
+    from . import resolve_team_abbr
+
+    t_abbr = resolve_team_abbr(team_name) or team_name.strip().upper()
+    all_game_plays: Dict[str, List[Dict[str, Any]]] = {}
+    for p in plays:
+        gid = str(p.get("game_id") or "")
+        if gid:
+            all_game_plays.setdefault(gid, []).append(p)
+
+    game_logs: List[Dict[str, Any]] = []
+    tot_sacks = 0
+    tot_ints = 0
+    tot_fr = 0
+    tot_safeties = 0
+    tot_blocks = 0
+    tot_tds = 0
+    tot_pa = 0
+    tot_fantasy_pts = 0.0
+
+    for gid, gplays in all_game_plays.items():
+        parts = gid.split("_")
+        away_t = parts[2].upper() if len(parts) >= 4 else ""
+        home_t = parts[3].upper() if len(parts) >= 4 else ""
+
+        # Check if target team played in this game
+        if t_abbr not in (away_t, home_t) and not any(str(p.get("defteam", "")).upper() == t_abbr for p in gplays):
+            continue
+
+        opponent = away_t if t_abbr == home_t else (home_t if t_abbr == away_t else "")
+        wk = int(gplays[0].get("week", 1))
+
+        t_def_plays = [p for p in gplays if str(p.get("defteam", "")).upper() == t_abbr]
+        sacks = 0
+        ints = 0
+        fr = 0
+        safeties = 0
+        blocks = 0
+        tds = 0
+
+        for p in t_def_plays:
+            desc = str(p.get("desc") or "").lower()
+            if int(p.get("sack", 0)) == 1 or ("sacked" in desc and "penalty" not in desc):
+                sacks += 1
+            if int(p.get("interception", 0)) == 1 or ("intercepted" in desc and "penalty" not in desc):
+                ints += 1
+            if int(p.get("fumble_lost", 0)) == 1 or ("fumble" in desc and "recovered" in desc and (t_abbr.lower() in desc or "defense" in desc)):
+                fr += 1
+            if int(p.get("safety", 0)) == 1 or ("safety" in desc and "safety valve" not in desc):
+                safeties += 1
+            if int(p.get("blocked_kick", 0)) == 1 or int(p.get("punt_blocked", 0)) == 1 or (
+                "blocked" in desc and any(k in desc for k in ("punt", "field goal", "extra point", "fg", "pat", "kick"))
+            ):
+                blocks += 1
+
+            is_td = int(p.get("touchdown", 0)) == 1 or "touchdown" in desc
+            if is_td:
+                is_pass_td = int(p.get("pass_touchdown", 0)) == 1 or "pass to" in desc
+                is_rush_td = int(p.get("rush_touchdown", 0)) == 1 or "run for" in desc or "rush for" in desc
+                if ints > 0 or fr > 0 or blocks > 0 or (not is_pass_td and not is_rush_td and ("return" in desc or "recovery" in desc or "intercept" in desc)):
+                    tds += 1
+
+        home_sc = max([int(p.get("home_score", 0) or 0) for p in gplays], default=0)
+        away_sc = max([int(p.get("away_score", 0) or 0) for p in gplays], default=0)
+
+        if t_abbr == home_t:
+            pa = away_sc
+        elif t_abbr == away_t:
+            pa = home_sc
+        else:
+            opp_scores = [int(p.get("home_score", 0) or 0) if p.get("posteam") == home_t else int(p.get("away_score", 0) or 0) for p in gplays if p.get("posteam") and p.get("posteam") != t_abbr]
+            pa = max(opp_scores, default=0)
+
+        if home_sc == 0 and away_sc == 0:
+            opp_tds = sum(1 for p in gplays if str(p.get("defteam", "")).upper() == t_abbr and int(p.get("touchdown", 0)) == 1 and (int(p.get("pass_touchdown", 0)) == 1 or int(p.get("rush_touchdown", 0)) == 1))
+            if opp_tds > 0:
+                pa = max(pa, opp_tds * 7)
+
+        pa_pts = calculate_dst_points_allowed_score(pa)
+        g_pts = round((sacks * FANTASY_DST_SACK_PTS) + (ints * FANTASY_DST_INT_PTS) + (fr * FANTASY_DST_FUMBLE_REC_PTS) + (safeties * FANTASY_DST_SAFETY_PTS) + (blocks * FANTASY_DST_BLOCK_PTS) + (tds * FANTASY_DST_TD_PTS) + pa_pts, 2)
+
+        tot_sacks += sacks
+        tot_ints += ints
+        tot_fr += fr
+        tot_safeties += safeties
+        tot_blocks += blocks
+        tot_tds += tds
+        tot_pa += pa
+        tot_fantasy_pts += g_pts
+
+        game_logs.append({
+            "game_id": gid,
+            "week": wk,
+            "opponent": opponent,
+            "sacks": sacks,
+            "interceptions": ints,
+            "fumbles_recovered": fr,
+            "takeaways": ints + fr,
+            "safeties": safeties,
+            "blocked_kicks": blocks,
+            "defensive_tds": tds,
+            "points_allowed": pa,
+            "pa_points": pa_pts,
+            "fantasy_points": g_pts,
+        })
+
+    game_logs.sort(key=lambda x: x["week"])
+    gp = max(1, len(game_logs))
+
+    return {
+        "team": t_abbr,
+        "player": f"{t_abbr} Defense",
+        "games_played": len(game_logs),
+        "sacks": tot_sacks,
+        "interceptions": tot_ints,
+        "fumbles_recovered": tot_fr,
+        "takeaways": tot_ints + tot_fr,
+        "safeties": tot_safeties,
+        "blocked_kicks": tot_blocks,
+        "defensive_tds": tot_tds,
+        "points_allowed": tot_pa,
+        "pa_per_game": round(tot_pa / gp, 1) if game_logs else 0.0,
+        "fantasy_points": round(tot_fantasy_pts, 2),
+        "ppg": round(tot_fantasy_pts / gp, 2) if game_logs else 0.0,
+        "game_logs": game_logs,
+    }
+
+
+def render_team_dst_fantasy_profile_view(
+    team_name: str,
+    plays: List[Dict[str, Any]],
+    season: int,
+) -> str:
+    """Render a comprehensive weekly D/ST fantasy profile and game log breakdown for a team defense."""
+    from . import C, AsciiArtRenderer
+
+    prof = compute_team_dst_fantasy_profile(team_name, plays)
+    if not prof or prof["games_played"] == 0:
+        return f"\n{C.YELLOW}⚠ No defensive game logs found for '{team_name}' in season {season}.{C.RESET}"
+
+    t_abbr = prof["team"]
+    title_str = f"🛡 Team Defense / Special Teams (D/ST): {t_abbr} Defense ({season})"
+
+    headers = ["Week", "Opp", "Sacks", "INT", "FR", "Safety", "Block", "Def TD", "PA", "PA Pts", "Fantasy Pts"]
+    rows = []
+    for g in prof["game_logs"]:
+        rows.append([
+            f"Wk {g['week']}",
+            f"vs {g['opponent']}" if g['opponent'] else "-",
+            str(g["sacks"]),
+            str(g["interceptions"]),
+            str(g["fumbles_recovered"]),
+            str(g["safeties"]),
+            str(g["blocked_kicks"]),
+            str(g["defensive_tds"]),
+            str(g["points_allowed"]),
+            f"{g['pa_points']:+.0f}",
+            f"{C.BOLD}{C.GOLD}{g['fantasy_points']:.2f}{C.RESET}",
+        ])
+
+    rows.append([
+        f"{C.BOLD}TOTAL{C.RESET}",
+        f"{prof['games_played']} Gms",
+        str(prof["sacks"]),
+        str(prof["interceptions"]),
+        str(prof["fumbles_recovered"]),
+        str(prof["safeties"]),
+        str(prof["blocked_kicks"]),
+        str(prof["defensive_tds"]),
+        str(prof["points_allowed"]),
+        "-",
+        f"{C.BOLD}{C.GREEN}{prof['fantasy_points']:.2f}{C.RESET}",
+    ])
+
+    tbl = AsciiArtRenderer.render_table(
+        title_str,
+        headers,
+        rows,
+        alignments=["center", "center", "center", "center", "center", "center", "center", "center", "right", "center", "right"],
+    )
+
+    summary_card = (
+        f"\n  {C.BOLD}Season Averages ({prof['games_played']} games):{C.RESET} "
+        f"Fantasy: {C.BOLD}{C.GOLD}{prof['ppg']:.1f} PPG{C.RESET}  │  "
+        f"PA/Game: {C.BOLD}{prof['pa_per_game']:.1f} pts{C.RESET}  │  "
+        f"Takeaways: {C.BOLD}{prof['takeaways']}{C.RESET}  │  "
+        f"Sacks: {C.BOLD}{prof['sacks']}{C.RESET}"
+    )
+    return f"\n{tbl}{summary_card}"
+
+
+
 def compute_all_fantasy_leaders(
     plays: List[Dict[str, Any]],
     scoring_format: str = "ppr",
     position_filter: Optional[str] = None,
+    team_filter: Optional[str] = None,
     week: Optional[int] = None,
     limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
@@ -316,7 +729,11 @@ def compute_all_fantasy_leaders(
     Extract all players who touched the ball (or threw/caught passes) in plays,
     evaluate their complete fantasy scoring profile in a single O(N) pass,
     and sort by fantasy points.
+    If position_filter is DEF / DST / D/ST, delegates directly to Team D/ST scoring engine.
     """
+    if position_filter and position_filter.strip().upper() in ("DEF", "DST", "D/ST"):
+        return compute_team_dst_fantasy_leaders(plays, week=week, team_filter=team_filter, limit=limit)
+
     target_plays = plays
     if week is not None:
         target_plays = [p for p in target_plays if int(p.get("week", -1)) == int(week)]
@@ -482,6 +899,11 @@ def compute_all_fantasy_leaders(
         pos = KNOWN_PLAYER_POSITIONS.get(name.lower(), player_pos.get(name, "WR"))
         r["position"] = pos
 
+        if team_filter:
+            tf = team_filter.strip().upper()
+            if r["team"].upper() != tf:
+                continue
+
         if position_filter:
             pf = position_filter.strip().upper()
             if pf == "FLEX":
@@ -501,26 +923,61 @@ def render_fantasy_leaderboard_view(
     season: int,
     scoring_format: str = "ppr",
     position: Optional[str] = None,
+    team: Optional[str] = None,
     week: Optional[int] = None,
     limit: int = 15,
 ) -> str:
-    """Render a colorized ASCII table of top fantasy scorers."""
+    """Render a colorized ASCII table of top fantasy scorers (or Team D/ST defenses)."""
     from . import C, AsciiArtRenderer
 
+    is_dst = bool(position and position.strip().upper() in ("DEF", "DST", "D/ST"))
     fmt = scoring_format.strip().lower()
     fmt_title = "PPR (1.0 Pt/Catch)" if fmt == "ppr" else ("Half-PPR (0.5 Pt/Catch)" if fmt in ("half", "half_ppr") else "Standard (0 PPR)")
     score_col = "points_ppr" if fmt == "ppr" else ("points_half_ppr" if fmt in ("half", "half_ppr") else "points_std")
     ppg_col = "ppg_ppr" if fmt == "ppr" else ("ppg_half_ppr" if fmt in ("half", "half_ppr") else "ppg_std")
 
-    leaders = compute_all_fantasy_leaders(plays, scoring_format=scoring_format, position_filter=position, week=week, limit=limit)
+    leaders = compute_all_fantasy_leaders(plays, scoring_format=scoring_format, position_filter=position, team_filter=team, week=week, limit=limit)
 
     sub_parts = [str(season)]
     if week:
         sub_parts.append(f"Week {week}")
     if position:
         sub_parts.append(f"Pos: {position.upper()}")
-    sub_parts.append(fmt_title)
+    if team:
+        sub_parts.append(f"Team: {team.upper()}")
+    if not is_dst:
+        sub_parts.append(fmt_title)
+    else:
+        sub_parts.append("Team D/ST Scoring")
+
     title_str = f"🏈 Fantasy Football Scoring Leaders ({' • '.join(sub_parts)})"
+
+    if is_dst:
+        headers = ["Rank", "Team D/ST", "Pos", "Fantasy Pts", "PPG", "Sacks", "Takeaways", "Safeties", "Def TD", "PA/G"]
+        rows = []
+        for idx, r in enumerate(leaders, 1):
+            takeaways_str = f"{r['takeaways']} ({r['interceptions']} INT, {r['fumbles_recovered']} FR)" if r['takeaways'] > 0 else "0"
+            rows.append([
+                f"#{idx}",
+                f"{C.BOLD}{r['player']}{C.RESET}",
+                f"{C.CYAN}DEF{C.RESET}",
+                f"{C.BOLD}{C.GOLD}{r[score_col]:.2f}{C.RESET}",
+                f"{r[ppg_col]:.1f}",
+                str(r["sacks"]),
+                takeaways_str,
+                str(r["safeties"]),
+                str(r["defensive_tds"]),
+                f"{r['pa_per_game']:.1f}",
+            ])
+
+        tbl = AsciiArtRenderer.render_table(
+            title_str,
+            headers,
+            rows,
+            alignments=["right", "left", "center", "right", "right", "center", "center", "center", "center", "right"],
+        )
+        footer = f"\n  {C.DIM}D/ST Rules: Sack: +1 │ INT: +2 │ Fumble Rec: +2 │ Safety: +2 │ Block: +2 │ Def/ST TD: +6 │ PA: 0=10, 1-6=7, 7-13=4, 14-20=1, 21-27=0, 28-34=-1, 35+=-4.{C.RESET}"
+        return f"\n{tbl}{footer}"
 
     headers = ["Rank", "Player", "Pos", "Team", f"Fantasy Pts ({fmt.upper()})", "PPG", "Pass Yds/TD", "Rush Yds/TD", "Rec/Yds/TD", "FUM"]
     rows = []
@@ -557,8 +1014,19 @@ def render_player_fantasy_profile_view(
     plays: List[Dict[str, Any]],
     season: int,
 ) -> str:
-    """Render a comprehensive weekly fantasy profile and game log breakdown for a player."""
-    from . import C, AsciiArtRenderer
+    """Render a comprehensive weekly fantasy profile and game log breakdown for a player or team defense."""
+    from . import C, AsciiArtRenderer, resolve_team_abbr
+
+    clean_p = player_name.strip()
+    is_dst_query = (
+        clean_p.lower().endswith("defense") or clean_p.lower().endswith("def")
+        or clean_p.lower().endswith("dst") or clean_p.lower().endswith("d/st")
+    )
+    team_candidate = re.sub(r"\s+(?:defense|def|dst|d/st)$", "", clean_p, flags=re.IGNORECASE).strip()
+    resolved_team = resolve_team_abbr(team_candidate) or resolve_team_abbr(clean_p)
+    if is_dst_query or resolved_team:
+        if resolved_team:
+            return render_team_dst_fantasy_profile_view(resolved_team, plays, season=season)
 
     prof = compute_player_fantasy_profile(player_name, plays)
     if not prof or prof["games_played"] == 0:
@@ -634,12 +1102,13 @@ def interactive_fantasy_browser(
         print(f"    [1] {C.BOLD}PPR Scoring Leaders{C.RESET} (1.0 Point per Reception)")
         print(f"    [2] {C.BOLD}Half-PPR Scoring Leaders{C.RESET} (0.5 Point per Reception)")
         print(f"    [3] {C.BOLD}Standard Scoring Leaders{C.RESET} (0.0 Point per Reception)")
-        print(f"    [4] {C.BOLD}Filter Leaders by Position{C.RESET} (QB, RB, WR, TE, FLEX)")
+        print(f"    [4] {C.BOLD}Filter Leaders by Position{C.RESET} (QB, RB, WR, TE, FLEX, DEF)")
         print(f"    [5] {C.BOLD}Player Weekly Fantasy Profile{C.RESET} (Search player game log)")
+        print(f"    [6] {C.BOLD}Team D/ST Scoring Leaders{C.RESET} (NFL team defenses)")
         print(f"    [q] {C.DIM}Return to main menu{C.RESET}")
 
         try:
-            choice = prompt_input("  Choose mode [1-5, q] (default: 1): ").strip().lower() or "1"
+            choice = prompt_input("  Choose mode [1-6, q] (default: 1): ").strip().lower() or "1"
         except (EOFError, KeyboardInterrupt):
             break
 
@@ -654,14 +1123,16 @@ def interactive_fantasy_browser(
             print(render_fantasy_leaderboard_view(plays, active_season, scoring_format="standard", limit=20))
         elif choice == "4":
             try:
-                pos = prompt_input("  Enter position [QB/RB/WR/TE/FLEX] (default: RB): ").strip().upper() or "RB"
+                pos = prompt_input("  Enter position [QB/RB/WR/TE/FLEX/DEF] (default: RB): ").strip().upper() or "RB"
                 fmt = prompt_input("  Scoring format [ppr/half/std] (default: ppr): ").strip().lower() or "ppr"
             except (EOFError, KeyboardInterrupt):
                 continue
             print(render_fantasy_leaderboard_view(plays, active_season, scoring_format=fmt, position=pos, limit=15))
         elif choice == "5":
             try:
-                p_in = prompt_input("  Enter player name (e.g. Mahomes, Henry, Jefferson, Stroud): ").strip() or "Mahomes"
+                p_in = prompt_input("  Enter player or defense name (e.g. Mahomes, Henry, KC, 49ers): ").strip() or "Mahomes"
             except (EOFError, KeyboardInterrupt):
                 continue
             print(render_player_fantasy_profile_view(p_in, plays, active_season))
+        elif choice == "6":
+            print(render_fantasy_leaderboard_view(plays, active_season, position="DEF", limit=20))
