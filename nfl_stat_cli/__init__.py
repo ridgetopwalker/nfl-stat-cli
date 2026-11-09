@@ -9676,20 +9676,24 @@ def _env_int_with_fallback(
     minimum: int = 1,
     maximum: int = 10_000_000,
 ) -> int:
-    """Read an int env var; preferred name wins over legacy. Invalid / out-of-range values fall back to default."""
+    """
+    Read an int env var; preferred name wins over legacy when it is a plain ASCII integer in range.
+    An invalid preferred value is skipped so a valid legacy value can still apply; if neither is
+    valid, ``default`` is returned.
+    """
     for name in (preferred, legacy):
         raw = os.environ.get(name)
         if raw is None:
             continue
         raw = raw.strip()
-        if not raw:
+        if not raw or not re.fullmatch(r"[0-9]+", raw, re.ASCII):
             continue
         try:
             value = int(raw, 10)
         except ValueError:
-            return default
+            continue
         if value < minimum or value > maximum:
-            return default
+            continue
         return value
     return default
 
@@ -9771,8 +9775,10 @@ def _safe_unlink_report(path: Path) -> bool:
             return False
         os.unlink(path)
         return True
+    except FileNotFoundError:
+        return True  # already gone (concurrent cleanup); treat as removed
     except OSError as exc:
-        _log_retention_issue(f"could not remove {path.name}: {exc}")
+        _log_retention_issue(f"could not remove {path.name}: {getattr(exc, 'strerror', None) or exc.__class__.__name__}")
         return False
 
 
@@ -9800,14 +9806,31 @@ def _retention_cheap_check_ok(ipc_dir: Path, *, force: bool = False, now: Option
 def _touch_retention_stamp(ipc_dir: Path) -> None:
     stamp = _retention_stamp_path(ipc_dir)
     try:
-        stamp.write_text(str(int(time.time())), encoding="utf-8")
+        # Never follow a symlinked stamp: replace it with a fresh regular file via O_NOFOLLOW when possible.
+        try:
+            st = os.lstat(stamp)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                try:
+                    os.unlink(stamp)
+                except FileNotFoundError:
+                    pass
+        except FileNotFoundError:
+            pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(stamp), flags, 0o600)
+        try:
+            os.write(fd, str(int(time.time())).encode("ascii"))
+        finally:
+            os.close(fd)
         if os.name != "nt":
             try:
                 os.chmod(stamp, 0o600)
             except OSError:
                 pass
     except OSError as exc:
-        _log_retention_issue(f"could not write stamp: {exc}")
+        _log_retention_issue(f"could not write stamp: {getattr(exc, 'strerror', None) or exc.__class__.__name__}")
 
 
 def cleanup_error_reports(
@@ -9831,6 +9854,15 @@ def cleanup_error_reports(
     result = {"skipped": 0, "deleted_age": 0, "deleted_cap": 0, "kept": 0, "examined": 0}
     try:
         root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir()
+        try:
+            root_st = os.lstat(root)
+            if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
+                _log_retention_issue("refusing to clean a non-directory or symlinked IPC root")
+                result["skipped"] = 1
+                return result
+        except FileNotFoundError:
+            result["skipped"] = 1
+            return result
         if not _retention_cheap_check_ok(root, force=force, now=now):
             result["skipped"] = 1
             return result
@@ -9954,6 +9986,15 @@ def write_resolution(
         history_file = ipc_dir / "history" / f"{report_id}.json"
         try:
             shutil.move(str(pending_file), str(history_file))
+            # rename keeps the old mtime; refresh so a long-pending report is not age-pruned immediately
+            try:
+                now_ts = time.time()
+                os.utime(history_file, (now_ts, now_ts), follow_symlinks=False)
+            except (OSError, TypeError, ValueError):
+                try:
+                    os.utime(history_file, (time.time(), time.time()))
+                except OSError:
+                    pass
         except Exception:
             pass
     pending_latest = ipc_dir / "pending" / "latest.json"
@@ -10216,7 +10257,8 @@ def interactive_tui(
         try:
             override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
             existing = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
-            if existing.is_dir():
+            st = os.lstat(existing)
+            if (not stat.S_ISLNK(st.st_mode)) and stat.S_ISDIR(st.st_mode):
                 cleanup_error_reports(existing)  # once-daily prune; never raises
         except Exception:
             pass

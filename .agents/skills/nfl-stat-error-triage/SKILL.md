@@ -27,7 +27,7 @@ description: Watch for /error reports filed from nfl-stat-cli (local, or a WSL c
 - Retention (resolved/ and history/ only; pending/ is never deleted):
   - `PFSLM_ERROR_RETENTION_DAYS` (preferred) or `NFL_STAT_ERROR_RETENTION_DAYS` — keep reports this many days (default `30`; invalid values fall back to 30). PFSLM wins if both are set.
   - `PFSLM_ERROR_RETENTION_MAX` or `NFL_STAT_ERROR_RETENTION_MAX` — max files across resolved+history (default `500`; oldest deleted first).
-  - Cleanup runs on report write and at interactive startup (at most once per day via a stamp file). Only `err_YYYYMMDD_HHMMSS_xxxxxxxx.json` files are removed; `latest.json` and other names are left alone.
+  - Cleanup runs on report write and at interactive startup (at most once per day via a stamp file, so the ~500 cap can briefly be exceeded until the next run). Only `err_YYYYMMDD_HHMMSS_xxxxxxxx.json` files are removed; `latest.json` and other names are left alone. Symlinked IPC roots/subdirs/stamps are refused or replaced, never followed.
 
 ## Workflow
 1. Start (or restart) the watcher as a **background task**: `python3 .agents/skills/nfl-stat-error-triage/watch_errors.py`

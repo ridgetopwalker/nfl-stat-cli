@@ -115,13 +115,20 @@ def test_env_var_precedence_pfslm_wins_and_invalid_falls_back(monkeypatch):
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "7")
     assert cli.error_retention_days() == 7  # PFSLM wins
 
+    # invalid preferred falls through to the still-valid legacy value
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "nope")
-    assert cli.error_retention_days() == 30
+    assert cli.error_retention_days() == 14
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "0")
-    assert cli.error_retention_days() == 30
+    assert cli.error_retention_days() == 14
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "-3")
-    assert cli.error_retention_days() == 30
+    assert cli.error_retention_days() == 14
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "99999")
+    assert cli.error_retention_days() == 14
+    monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "+5")  # sign not allowed
+    assert cli.error_retention_days() == 14
+
+    # both invalid -> default
+    monkeypatch.setenv("NFL_STAT_ERROR_RETENTION_DAYS", "nope")
     assert cli.error_retention_days() == 30
 
     monkeypatch.setenv("NFL_STAT_ERROR_RETENTION_MAX", "100")
@@ -129,6 +136,8 @@ def test_env_var_precedence_pfslm_wins_and_invalid_falls_back(monkeypatch):
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "50")
     assert cli.error_retention_max() == 50
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "abc")
+    assert cli.error_retention_max() == 100  # falls through to legacy
+    monkeypatch.setenv("NFL_STAT_ERROR_RETENTION_MAX", "xyz")
     assert cli.error_retention_max() == 500
 
 
@@ -231,3 +240,83 @@ def test_symlinked_retention_subdir_is_skipped(tmp_path):
 
     assert trapped.exists()  # via symlinked history/ — skipped
     assert result["deleted_age"] == 1  # only the resolved one
+
+
+def test_symlinked_stamp_is_replaced_not_followed(tmp_path):
+    ipc = _ipc(tmp_path)
+    now = time.time()
+    outside = tmp_path / "stamp_target"
+    outside.write_text("do-not-clobber", encoding="utf-8")
+    stamp = ipc / cli.ERROR_RETENTION_STAMP_NAME
+    os.symlink(outside, stamp)
+    _seed_report(ipc / "resolved", _report_name(seq=1), now - 100)
+
+    cli.cleanup_error_reports(ipc, force=True, now=now, retention_days=30, retention_max=500)
+
+    assert outside.read_text(encoding="utf-8") == "do-not-clobber"
+    st = os.lstat(stamp)
+    assert not stat.S_ISLNK(st.st_mode) and stat.S_ISREG(st.st_mode)
+
+
+def test_stale_stamp_allows_non_forced_cleanup(tmp_path):
+    ipc = _ipc(tmp_path)
+    now = time.time()
+    old = now - (60 * 86400)
+    target = _seed_report(ipc / "resolved", _report_name(seq=1), old)
+    stamp = ipc / cli.ERROR_RETENTION_STAMP_NAME
+    stamp.write_text("old", encoding="utf-8")
+    os.utime(stamp, (now - cli.ERROR_RETENTION_MIN_INTERVAL_SECONDS - 10,
+                     now - cli.ERROR_RETENTION_MIN_INTERVAL_SECONDS - 10))
+
+    result = cli.cleanup_error_reports(ipc, force=False, now=now, retention_days=30)
+    assert result["skipped"] == 0
+    assert result["deleted_age"] == 1
+    assert not target.exists()
+
+
+def test_write_resolution_refreshes_history_mtime_before_cleanup(tmp_path, monkeypatch):
+    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    ipc = cli.get_ipc_dir()
+    now = time.time()
+    rid = "err_20200101_120000_abcd1234"
+    cli.validate_report_id(rid)
+    pending = ipc / "pending" / f"{rid}.json"
+    pending.write_text('{"id": "%s", "status": "pending"}' % rid, encoding="utf-8")
+    os.utime(pending, (now - 90 * 86400, now - 90 * 86400))
+
+    cli.write_resolution(report_id=rid, summary="fixed", commit="abc1234")
+
+    history = ipc / "history" / f"{rid}.json"
+    assert history.exists()
+    # just-resolved history must survive a 30-day age prune in the same write_resolution call
+    assert history.stat().st_mtime >= now - 5
+    assert (ipc / "resolved" / f"{rid}.json").exists()
+    assert not pending.exists()
+
+
+def test_cleanup_uses_env_defaults_when_overrides_omitted(tmp_path, monkeypatch):
+    monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "10")
+    monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "2")
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_MAX", raising=False)
+    ipc = _ipc(tmp_path)
+    now = time.time()
+    old = now - (20 * 86400)  # older than 10 days
+    fresh_times = [now - i for i in range(3)]
+    gone = _seed_report(ipc / "resolved", _report_name(seq=1), old)
+    kept = [_seed_report(ipc / "history", _report_name(seq=10 + i), mt) for i, mt in enumerate(fresh_times)]
+
+    result = cli.cleanup_error_reports(ipc, force=True, now=now)  # no explicit days/max
+
+    assert not gone.exists()
+    assert result["deleted_age"] == 1
+    assert result["deleted_cap"] == 1  # 3 fresh -> cap 2
+    assert sum(1 for p in kept if p.exists()) == 2
+
+
+def test_cleanup_swallows_unexpected_errors(tmp_path, monkeypatch):
+    ipc = _ipc(tmp_path)
+    monkeypatch.setattr(cli, "_iter_retention_candidates", lambda _root: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = cli.cleanup_error_reports(ipc, force=True)
+    assert result["deleted_age"] == 0
+    assert isinstance(result, dict)
