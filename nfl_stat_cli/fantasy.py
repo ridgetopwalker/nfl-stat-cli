@@ -44,6 +44,14 @@ FANTASY_DST_BLOCK_PTS = 2.0
 FANTASY_DST_TD_PTS = 6.0
 
 
+def _flag(p: Dict[str, Any], key: str) -> int:
+    """0/1 event flag from a play dict; missing, None or NaN values count as 0."""
+    try:
+        return int(float(p.get(key) or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _dst_play_events(p: Dict[str, Any], team_abbr: str) -> Dict[str, int]:
     """
     Classify one play, seen from the defending team `team_abbr`, into D/ST scoring events (0/1 each).
@@ -51,22 +59,26 @@ def _dst_play_events(p: Dict[str, Any], team_abbr: str) -> Dict[str, int]:
     touchdown into a defensive one. Shared by the leaderboard and the single-team profile.
     """
     desc = str(p.get("desc") or "").lower()
-    is_sack = int(p.get("sack", 0)) == 1 or ("sacked" in desc and "penalty" not in desc)
-    is_int = int(p.get("interception", 0)) == 1 or ("intercepted" in desc and "penalty" not in desc)
-    is_fr = int(p.get("fumble_lost", 0)) == 1 or ("fumble" in desc and "recovered" in desc and (team_abbr.lower() in desc or "defense" in desc))
-    is_safety = int(p.get("safety", 0)) == 1 or ("safety" in desc and "safety valve" not in desc)
-    is_block = int(p.get("blocked_kick", 0)) == 1 or int(p.get("punt_blocked", 0)) == 1 or (
+    is_sack = _flag(p, "sack") == 1 or ("sacked" in desc and "penalty" not in desc)
+    is_int = _flag(p, "interception") == 1 or ("intercepted" in desc and "penalty" not in desc)
+    is_fr = _flag(p, "fumble_lost") == 1 or ("fumble" in desc and "recovered" in desc and (team_abbr.lower() in desc or "defense" in desc))
+    is_safety = _flag(p, "safety") == 1 or ("safety" in desc and "safety valve" not in desc)
+    is_block = _flag(p, "blocked_kick") == 1 or _flag(p, "punt_blocked") == 1 or (
         "blocked" in desc and any(k in desc for k in ("punt", "field goal", "extra point", "fg", "pat", "kick"))
     )
 
     is_def_td = False
-    if int(p.get("touchdown", 0)) == 1 or "touchdown" in desc:
-        is_pass_td = int(p.get("pass_touchdown", 0)) == 1 or "pass to" in desc
-        is_rush_td = int(p.get("rush_touchdown", 0)) == 1 or "run for" in desc or "rush for" in desc
+    if _flag(p, "touchdown") == 1 or "touchdown" in desc:
+        is_pass_td = _flag(p, "pass_touchdown") == 1 or "pass to" in desc
+        is_rush_td = _flag(p, "rush_touchdown") == 1 or "run for" in desc or "rush for" in desc
         scoring_team = str(p.get("td_team") or "").strip().upper()
-        if scoring_team and scoring_team != team_abbr.upper():
-            is_def_td = False  # the touchdown was scored by the other side
-        elif is_int or is_fr or is_block or (not is_pass_td and not is_rush_td and ("return" in desc or "recovery" in desc or "intercept" in desc)):
+        offence_team = str(p.get("posteam") or "").strip().upper()
+        # The possessing team scored (td_team == posteam): never a D/ST touchdown, whatever else happened
+        offence_scored = bool(scoring_team) and scoring_team == offence_team and scoring_team != team_abbr.strip().upper()
+        if not offence_scored and (
+            is_int or is_fr or is_block
+            or (not is_pass_td and not is_rush_td and ("return" in desc or "recovery" in desc or "intercept" in desc))
+        ):
             is_def_td = True
 
     return {
