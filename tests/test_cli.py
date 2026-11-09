@@ -1777,6 +1777,49 @@ def test_sportsbook_underdog_leaders_and_error_regression():
     assert "Total (O/U)" not in out
 
 
+def test_custom_stat_formula_with_contracts_and_results_for_money_regression(tmp_path):
+    """
+    Regression test for err_20261108_201746:
+    'which player has the best results for the money (yards per game / yearly salary against cap)'
+    - Verifies find_contract_by_name handles initial + last name abbreviations (e.g. J.Taylor, A.St. Brown).
+    - Verifies BASE_METRIC_KEYS includes cap_hit, yearly_salary_against_cap, yards_per_game.
+    - Verifies query parses to intent='create_stat' with group_by='player' and normalized formula.
+    - Verifies StatEngine leaderboard evaluation ranks players accurately.
+    """
+    # 1. Verify contract lookup abbreviation & player preference
+    jt = cli.find_contract_by_name("J.Taylor")
+    assert jt is not None
+    assert jt.name == "Jonathan Taylor"
+    assert jt.contract_type == "player"
+
+    asb = cli.find_contract_by_name("A.St. Brown")
+    assert asb is not None
+    assert asb.name == "Amon-Ra St. Brown"
+    assert asb.contract_type == "player"
+
+    # 2. Verify BASE_METRIC_KEYS
+    for metric in ("yards_per_game", "yearly_salary_against_cap", "cap_hit", "salary"):
+        assert metric in cli.BASE_METRIC_KEYS
+
+    # 3. Query parsing regression test
+    query = "which player has the best results for the money (yards per game / yearly salary against cap)"
+    engine = cli.StatEngine()
+    parsed = cli.NaturalLanguageStatAssistant.interpret_query(query, engine=engine, slm_model="off")
+    assert parsed["intent"] == "create_stat"
+    assert parsed["stat_name"] == "results_for_the_money"
+    assert parsed["group_by"] == "player"
+    assert parsed["formula"] == "yards_per_game / yearly_salary_against_cap"
+
+    # 4. Stat registration and evaluation
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS, interactive=False))
+    assert "Results For The Money" in out
+    assert "PLAYER" in out
+    assert "Plays" in out
+    assert "#1" in out
+    assert "X.Worthy" in out
+
+
+
 
 
 

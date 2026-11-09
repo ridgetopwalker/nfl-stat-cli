@@ -1740,6 +1740,93 @@ def extract_formula_dependencies(expr: str) -> List[str]:
     return deps
 
 
+FORMULA_PHRASE_MAP: List[Tuple[str, str]] = [
+    ("passing yards per game", "passing_yards_per_game"),
+    ("pass yards per game", "passing_yards_per_game"),
+    ("rushing yards per game", "rushing_yards_per_game"),
+    ("rush yards per game", "rushing_yards_per_game"),
+    ("yards per game", "yards_per_game"),
+    ("yearly salary against cap", "yearly_salary_against_cap"),
+    ("salary against cap", "salary_against_cap"),
+    ("cap hit current m", "cap_hit_current_m"),
+    ("cap hit", "cap_hit"),
+    ("yearly salary", "yearly_salary_against_cap"),
+    ("annual salary", "apy"),
+    ("total salary", "salary"),
+    ("yards per play", "yards_per_play"),
+    ("yards per attempt", "yards_per_attempt"),
+    ("yards per pass", "yards_per_attempt"),
+    ("yards per completion", "yards_per_completion"),
+    ("yards per rush", "yards_per_rush"),
+    ("total air yards", "total_air_yards"),
+    ("air yards per play", "air_yards_per_play"),
+    ("air yards per attempt", "air_yards_per_attempt"),
+    ("air yards", "total_air_yards"),
+    ("total yac", "total_yac"),
+    ("yac per play", "yac_per_play"),
+    ("yac per completion", "yac_per_completion"),
+    ("completion pct", "completion_pct"),
+    ("completion percentage", "completion_pct"),
+    ("pass attempts", "pass_attempts"),
+    ("rush attempts", "rush_attempts"),
+    ("total epa", "total_epa"),
+    ("epa per play", "epa_per_play"),
+    ("pass epa per play", "pass_epa_per_play"),
+    ("rush epa per play", "rush_epa_per_play"),
+    ("total wpa", "total_wpa"),
+    ("wpa per play", "wpa_per_play"),
+    ("wpa per game", "wpa_per_game"),
+    ("avg cpoe", "avg_cpoe"),
+    ("cpoe", "avg_cpoe"),
+    ("pass touchdowns", "pass_touchdowns"),
+    ("passing touchdowns", "pass_touchdowns"),
+    ("pass tds", "pass_touchdowns"),
+    ("rush touchdowns", "rush_touchdowns"),
+    ("rushing touchdowns", "rush_touchdowns"),
+    ("rush tds", "rush_touchdowns"),
+    ("touchdowns", "touchdowns"),
+    ("fumbles lost", "fumbles_lost"),
+    ("first downs", "first_downs"),
+    ("first down rate", "first_down_rate"),
+    ("explosive plays", "explosive_plays"),
+    ("explosive play rate", "explosive_play_rate"),
+    ("turnover rate", "turnover_rate"),
+    ("sack rate", "sack_rate"),
+    ("td rate", "td_rate"),
+    ("int rate", "int_rate"),
+    ("success rate", "success_rate"),
+    ("passer rating", "nfl_passer_rating"),
+    ("fantasy points per game", "fantasy_ppg"),
+    ("fantasy ppg", "fantasy_ppg"),
+    ("fantasy points", "fantasy_points"),
+    ("games played", "games_played"),
+    ("games won", "games_won"),
+    ("games lost", "games_lost"),
+    ("passing yards", "passing_yards"),
+    ("pass yards", "passing_yards"),
+    ("rushing yards", "rushing_yards"),
+    ("rush yards", "rushing_yards"),
+    ("total yards", "total_yards"),
+    ("interceptions", "interceptions"),
+    ("turnovers", "turnovers"),
+    ("penalties", "penalties"),
+    ("penalty yards", "penalty_yards"),
+    ("sacks", "sacks"),
+    ("salary", "salary"),
+    ("contract value", "contract_value_m"),
+    ("guaranteed money", "guaranteed_m"),
+]
+
+
+def normalize_nl_formula(raw_formula: str) -> str:
+    """Normalize natural language terms inside a formula string to valid base metric keys."""
+    res = raw_formula.strip().lower()
+    for phrase, metric_key in sorted(FORMULA_PHRASE_MAP, key=lambda x: len(x[0]), reverse=True):
+        pattern = rf"\b{re.escape(phrase)}\b"
+        res = re.sub(pattern, metric_key, res)
+    return res
+
+
 # ---------------------------------------------------------------------------
 # General-Purpose Stat Definition & Multi-Scope Composable Stat Engine
 # ---------------------------------------------------------------------------
@@ -2402,6 +2489,9 @@ BASE_METRIC_KEYS: Set[str] = {
     "timeouts", "timeouts_used", "timeouts_called",
     "fantasy_points", "fantasy_points_std", "fantasy_points_ppr", "fantasy_points_half_ppr",
     "fantasy_ppg", "fantasy_ppg_ppr", "fantasy_ppg_std",
+    "yards_per_game", "passing_yards_per_game", "rushing_yards_per_game",
+    "cap_hit", "cap_hit_current_m", "yearly_salary_against_cap", "salary_against_cap",
+    "apy", "apy_m", "salary", "guaranteed_m", "contract_value_m",
 }
 
 PLAY_ROW_KEYS: Set[str] = {
@@ -2891,6 +2981,27 @@ class StatEngine:
         # Official NFL Passer Rating calculation (uses passing_yards and pass_touchdowns)
         nfl_passer_rating = calculate_passer_rating(pass_attempts, completions, passing_yards, pass_touchdowns, interceptions)
 
+        # Look up player contract if plays belong to a specific player/rusher/receiver/QB
+        p_name = ""
+        for p in plays:
+            cand = (
+                p.get("player_name")
+                or p.get("receiver_player_name")
+                or p.get("rusher_player_name")
+                or p.get("qb_name")
+                or p.get("kicker_player_name")
+                or p.get("punter_player_name")
+            )
+            if cand and str(cand).strip():
+                p_name = str(cand).strip()
+                break
+
+        c_rec = find_contract_by_name(p_name) if p_name else None
+        cap_val = float(c_rec.cap_hit_current_m) if c_rec else 0.0
+        apy_val = float(c_rec.apy_m) if c_rec else 0.0
+        tot_val = float(c_rec.total_value_m) if c_rec else 0.0
+        gtd_val = float(c_rec.guaranteed_m) if c_rec else 0.0
+
         base: Dict[str, float] = {
             "plays": float(len(plays)),
             "games_played": float(games_played),
@@ -2967,6 +3078,18 @@ class StatEngine:
             "fantasy_ppg": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
             "fantasy_ppg_ppr": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
             "fantasy_ppg_std": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0)) / float(games_played), 2),
+            "yards_per_game": round(total_yards / float(games_played), 2),
+            "passing_yards_per_game": round(passing_yards / float(games_played), 2),
+            "rushing_yards_per_game": round(rushing_yards / float(games_played), 2),
+            "cap_hit": cap_val,
+            "cap_hit_current_m": cap_val,
+            "yearly_salary_against_cap": cap_val if cap_val > 0 else apy_val,
+            "salary_against_cap": cap_val if cap_val > 0 else apy_val,
+            "apy": apy_val,
+            "apy_m": apy_val,
+            "salary": apy_val if apy_val > 0 else cap_val,
+            "guaranteed_m": gtd_val,
+            "contract_value_m": tot_val,
         }
         return base
 
@@ -4933,14 +5056,14 @@ class NaturalLanguageStatAssistant:
                 "explanation": f"Delete custom stat `{del_m.group(1)}`.",
             }
 
-        # Check if user is asking to CREATE a custom stat
+        # Check if user is asking to CREATE a custom stat explicitly
         if any(ql.startswith(prefix) for prefix in ("create stat", "create a stat", "make a stat", "make stat", "define stat", "build stat")):
             name_m = re.search(r"(?:called|named)\s+([a-zA-Z0-9_]+)", ql)
             formula_m = re.search(r"formula\s+(.+?)(?:\s+where\s+|\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|player|game)\b|$)", q, flags=re.IGNORECASE)
             where_m = re.search(r"\bwhere\s+(.+?)(?:\s+by\s+(?:qb|team|play_concept|conference|receiver|rusher|player|game)\b|$)", q, flags=re.IGNORECASE)
             by_m = re.search(r"\bby\s+(qb|team|play_concept|conference|receiver|rusher|player|game)\b", ql)
             s_name = name_m.group(1) if name_m else "custom_user_stat"
-            s_formula = formula_m.group(1).strip() if formula_m else "yards_per_play + (epa_per_play * 10)"
+            s_formula = normalize_nl_formula(formula_m.group(1).strip()) if formula_m else "yards_per_play + (epa_per_play * 10)"
             s_filter = where_m.group(1).strip() if where_m else ""
             s_group = by_m.group(1) if by_m else "qb"
             return {
@@ -4964,6 +5087,70 @@ class NaturalLanguageStatAssistant:
                 "show_field": False,
                 "explanation": f"Created custom stat `{s_name}` grouped by `{s_group}` using formula `{s_formula}`.",
             }
+
+        # Check if query defines a custom metric formula or ratio (e.g. parenthetical formulas or "results for the money")
+        paren_m = re.search(r"\(([^)]*[/+*-\^][^)]*)\)", q)
+        is_ratio_stat = bool(paren_m) or any(phrase in ql for phrase in (
+            "results for the money", "value for the money", "bang for the buck",
+            "production for the money", "efficiency for the money",
+        ))
+        if is_ratio_stat:
+            if paren_m:
+                raw_f = paren_m.group(1).strip()
+                s_formula = normalize_nl_formula(raw_f)
+            else:
+                s_formula = "yards_per_game / yearly_salary_against_cap"
+
+            name_m = re.search(r"\b(?:best|highest|top|most|rank(?:\s+players)?\s+by)\s+([a-zA-Z0-9_\s]+?)\s*\(", ql)
+            if name_m:
+                cand_name = name_m.group(1).strip()
+                s_name = re.sub(r"[^\w]+", "_", cand_name).strip("_")
+            elif "results for the money" in ql:
+                s_name = "results_for_the_money"
+            elif "value for the money" in ql:
+                s_name = "value_for_the_money"
+            elif "bang for the buck" in ql:
+                s_name = "bang_for_the_buck"
+            else:
+                s_name = "custom_calculated_stat"
+
+            if any(w in ql for w in ("player", "players", "receiver", "receivers", "rusher", "rushers", "kicker", "punter")) or any(k in s_formula for k in ("cap_hit", "salary", "yearly_salary_against_cap", "apy", "guaranteed_m", "contract_value_m")):
+                s_group = "player"
+            elif any(w in ql for w in ("qb", "qbs", "quarterback", "quarterbacks", "passer", "passers")):
+                s_group = "qb"
+            elif any(w in ql for w in ("team", "teams", "defense", "defteam", "offense")):
+                s_group = "team"
+            else:
+                s_group = "player"
+
+            top_m = re.search(r"\btop\s+(\d+)\b", ql)
+            lim_val = int(top_m.group(1)) if top_m else 15
+
+            deps = extract_formula_dependencies(s_formula)
+            allowed_metric_names = BASE_METRIC_KEYS | PLAY_ROW_KEYS
+            if not deps or all(d in allowed_metric_names for d in deps):
+                return {
+                    "intent": "create_stat",
+                    "stat_name": s_name,
+                    "query": query,
+                    "title": s_name.replace("_", " ").title(),
+                    "group_by": s_group,
+                    "formula": s_formula,
+                    "filter_expr": "",
+                    "scope": "season",
+                    "agg": "formula",
+                    "season": season,
+                    "week": week,
+                    "qtr": qtr,
+                    "division": division,
+                    "conf": conf,
+                    "team": team_filter,
+                    "player": player_filter,
+                    "position": position,
+                    "limit": lim_val,
+                    "show_field": False,
+                    "explanation": f"Created custom stat `{s_name}` grouped by `{s_group}` using formula `{s_formula}`.",
+                }
 
         # Check if user is asking to DRILL DOWN into a team or player
         is_drill_kw = any(w in ql for w in ("drill down", "drilldown", "team profile", "team breakdown", "player profile", "player breakdown"))
@@ -6359,7 +6546,7 @@ def handle_nl_query_result(
             else f"  {C.YELLOW}ℹ Evaluated '{sdef.name}' for this session only (not saved to custom_stats.json).{C.RESET}\n"
         )
         return header + "\n" + status_msg + render_general_stat_view(
-            engine, s_plays, sdef.name, season, conf=conf, team=team, view_mode="table", division=division, week=week, qtr=qtr
+            engine, s_plays, sdef.name, season, conf=conf, team=team, view_mode="table", division=division, week=week, qtr=qtr, limit=parsed.get("limit"), position=parsed.get("position")
         )
 
     if intent == "specific_play" or parsed.get("show_field") is True:
