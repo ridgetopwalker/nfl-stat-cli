@@ -8014,7 +8014,8 @@ def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None
     oc_name = staff.get("oc", "N/A")
     dc_name = staff.get("dc", "N/A")
     summary = f"  {C.BOLD}Head Coach:{C.RESET} {C.CYAN}{hc_name}{C.RESET}  │  {C.BOLD}OC:{C.RESET} {oc_name}  │  {C.BOLD}DC:{C.RESET} {dc_name}\n"
-    return summary + table
+    footer = f"\n  {C.DIM}Coaching staffs: compiled from public team announcements; may be out of date.{C.RESET}"
+    return summary + table + footer
 
 
 def render_team_drilldown_view(

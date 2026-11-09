@@ -3,3 +3,4 @@ This software is MIT-licensed (see LICENSE). The MIT license covers the code onl
 NFL play-by-play and related data come from nflverse (https://github.com/nflverse/nflverse-data), licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
 Changes: we filter, aggregate, and compute derived statistics and model outputs from that data. Results are not the original nflverse data.
 This project is not affiliated with or endorsed by nflverse, FTN, the NFL, or any team.
+Contract and coaching-staff tables are compiled by RidgetopWalker LLC from public reports, are approximate, and may be out of date. sportsdataverse-py is MIT-licensed; data it fetches comes from third-party sources and is not nflverse data.

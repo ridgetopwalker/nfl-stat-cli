@@ -70,6 +70,89 @@ def test_readme_license_section_carries_attribution():
     assert "CC BY 4.0" in readme
 
 
+# Lawyer attribution follow-up (exact wording from Athena / Lawyer, 2026-11-09).
+LAWYER_README_LICENSE_LINE = (
+    "Code: MIT (see LICENSE). Data: nflverse (https://github.com/nflverse/nflverse-data), "
+    "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); we aggregate and derive "
+    "statistics from it. Optional Python backend: sportsdataverse-py "
+    "(https://github.com/sportsdataverse/sportsdataverse-py, MIT). Contract and "
+    "coaching-staff tables are compiled by us from public reports. See NOTICE. "
+    "Not affiliated with or endorsed by the NFL, nflverse, sportsdataverse, Over The Cap, or Spotrac."
+)
+
+LAWYER_CONTRACT_FOOTER = (
+    "Contract figures: compiled from public reports; approximate and may be out of date. "
+    "Not affiliated with Over The Cap or Spotrac."
+)
+
+LAWYER_COACH_FOOTER = (
+    "Coaching staffs: compiled from public team announcements; may be out of date."
+)
+
+LAWYER_NOTICE_EXTRA = (
+    "Contract and coaching-staff tables are compiled by RidgetopWalker LLC from public reports, "
+    "are approximate, and may be out of date. sportsdataverse-py is MIT-licensed; data it fetches "
+    "comes from third-party sources and is not nflverse data."
+)
+
+
+def test_readme_license_line_matches_lawyer_exact_wording():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert LAWYER_README_LICENSE_LINE in readme
+    assert attr.README_LICENSE_LINE == LAWYER_README_LICENSE_LINE
+
+
+def test_notice_includes_lawyer_contract_and_sportsdataverse_paragraph():
+    text = (ROOT / "NOTICE").read_text(encoding="utf-8")
+    assert LAWYER_NOTICE_EXTRA in text
+    assert text == attr.render_notice()
+    about = attr.about_text()
+    assert LAWYER_NOTICE_EXTRA in about
+    assert attr.PRODUCT_NAME  # about is built from constants; PRODUCT_NAME still defined
+
+
+def test_no_verified_otc_spotrac_sourcing_claim_in_package():
+    """BLOCKER: never claim verified OverTheCap / Spotrac NFL contract filings."""
+    banned_phrases = (
+        "Verified public OverTheCap",
+        "OverTheCap & Spotrac NFL contract filings",
+        "OverTheCap & Spotrac verified filings",
+        "verified filings",
+    )
+    hits = []
+    for path in (ROOT / "nfl_stat_cli").rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix not in {".py", ".md", ".txt", ".R"} and path.name not in {"NOTICE"}:
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for phrase in banned_phrases:
+            if phrase in text:
+                hits.append(f"{path.relative_to(ROOT)}: {phrase!r}")
+        # Capital-V "Verified" as a sourcing claim (ignore "not verified").
+        for i, line in enumerate(text.splitlines(), 1):
+            if "Verified" in line and "not verified" not in line.lower():
+                low = line.lower()
+                if any(k in low for k in ("overthecap", "spotrac", "contract filing", "filings", "contract source")):
+                    hits.append(f"{path.relative_to(ROOT)}:{i}: {line.strip()!r}")
+    assert not hits, "banned verified sourcing claims:\n" + "\n".join(hits)
+
+
+def test_contract_and_coach_footers_use_lawyer_wording():
+    from nfl_stat_cli.contracts import render_contracts_leaderboard_view
+    board = cli.strip_ansi(render_contracts_leaderboard_view(contract_type="player", limit=5))
+    assert LAWYER_CONTRACT_FOOTER in board
+    assert "Verified" not in board
+    coach = cli.strip_ansi(cli.render_coaching_staff_view("KC"))
+    assert LAWYER_COACH_FOOTER in coach
+    # module docstring / comment also updated
+    csrc = (ROOT / "nfl_stat_cli" / "contracts.py").read_text(encoding="utf-8")
+    assert "compiled from public reports (approximate)" in csrc
+    assert "OverTheCap & Spotrac verified filings" not in csrc
+
+
 def test_notice_is_tracked_and_not_excluded_from_the_sdist():
     """setuptools ships NOTICE* by default (checked by building the sdist); guard against ignoring/excluding it."""
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
