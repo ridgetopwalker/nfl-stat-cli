@@ -3536,7 +3536,7 @@ class StatEngine:
         self,
         plays: List[Dict[str, Any]],
         only: Optional[Iterable[str]] = None,
-        _closure: Optional[Set[str]] = None,
+        _closure: Optional[Set[str]] = None,  # internal: precomputed stat_dependency_closure(only)
     ) -> Dict[str, float]:
         """
         Compute base traditional metrics AND resolve all composable custom stats across

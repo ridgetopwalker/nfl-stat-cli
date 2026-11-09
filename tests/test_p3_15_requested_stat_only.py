@@ -85,7 +85,7 @@ def test_only_requested_stats_are_evaluated(engine, monkeypatch):
     monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig_all(self, plays, only=None))
     _board(engine, "yards_per_play")
     full = len(calls)
-    assert 0 < fast < full, (fast, full)
+    assert 0 < fast and fast * 3 <= full, (fast, full)
 
 
 def test_unrelated_stats_are_not_evaluated(engine, monkeypatch):
@@ -151,9 +151,9 @@ def _mk(name, formula, scope="season", agg="formula", filter_expr="", deps=()):
 def _parity(engine, monkeypatch, stat):
     fast = _comparable(_board(engine, stat))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
-    full = _comparable(_board(engine, stat))
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
+        full = _comparable(_board(engine, stat))
     assert fast == full
     return fast
 
