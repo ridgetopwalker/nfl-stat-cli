@@ -38,10 +38,14 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .fantasy import (
     calculate_player_fantasy_points,
+    calculate_dst_points_allowed_score,
     compute_player_fantasy_profile,
     compute_all_fantasy_leaders,
+    compute_team_dst_fantasy_leaders,
+    compute_team_dst_fantasy_profile,
     render_fantasy_leaderboard_view,
     render_player_fantasy_profile_view,
+    render_team_dst_fantasy_profile_view,
     interactive_fantasy_browser,
 )
 from .sportsbook import (
@@ -4657,7 +4661,7 @@ class NaturalLanguageStatAssistant:
             position = "K"
         elif re.search(r"\b(?:punter|punters)\b", ql):
             position = "P"
-        elif re.search(r"\b(?:defense|defensive|pass\s*rusher|edge\s*rusher|cornerback|safety|linebacker|def)\b", ql):
+        elif re.search(r"\b(?:defense|defenses|defensive|pass\s*rusher|edge\s*rusher|cornerback|safety|linebacker|def|dst|d/st)\b", ql):
             position = "DEF"
         elif not has_generic_player_prompt:
             if re.search(r"\b(?:passer|passers|passing|pass)\b", ql):
@@ -4712,6 +4716,12 @@ class NaturalLanguageStatAssistant:
             if re.search(rf"\b{re.escape(alias)}\b", ql):
                 team_filter = abbr
                 break
+        if not team_filter:
+            for abbr, full_name in sorted(TEAM_FULL_NAMES.items(), key=lambda x: len(x[1]), reverse=True):
+                city_name = " ".join(full_name.split()[:-1]).lower()
+                if full_name.lower() in ql or (city_name and re.search(rf"\b{re.escape(city_name)}\b", ql)):
+                    team_filter = "LA" if abbr == "LAR" else abbr
+                    break
         if not team_filter:
             for t_abbr in sorted(AFC_TEAMS | NFC_TEAMS):
                 if t_abbr in cls.AMBIGUOUS_TEAM_ABBRS:
@@ -5020,6 +5030,7 @@ class NaturalLanguageStatAssistant:
                     "subquery": "player",
                     "query": query,
                     "player": player_filter,
+                    "team": team_filter,
                     "position": position,
                     "season": season,
                     "week": week,
@@ -5029,11 +5040,28 @@ class NaturalLanguageStatAssistant:
                     "show_field": False,
                     "explanation": f"Fantasy Football profile and scoring breakdown for {player_filter.title()} ({season}).",
                 }
+            if team_filter and (position in ("DEF", "DST", "D/ST") or any(w in ql for w in ("defense", "def", "dst"))):
+                return {
+                    "intent": "fantasy_report",
+                    "subquery": "player",
+                    "query": query,
+                    "player": f"{team_filter} Defense",
+                    "team": team_filter,
+                    "position": "DEF",
+                    "season": season,
+                    "week": week,
+                    "latest_week": is_latest_week,
+                    "scoring_format": scoring_fmt,
+                    "limit": lim_val,
+                    "show_field": False,
+                    "explanation": f"Fantasy Football Team D/ST scoring breakdown for {team_filter} Defense ({season}).",
+                }
             return {
                 "intent": "fantasy_report",
                 "subquery": "leaderboard",
                 "query": query,
                 "player": None,
+                "team": team_filter,
                 "position": position,
                 "season": season,
                 "week": week,
@@ -6215,12 +6243,22 @@ def handle_nl_query_result(
         target_p = parsed.get("player") or player
         scoring = parsed.get("scoring_format") or "ppr"
         if subq == "player" and target_p:
+            clean_tp = target_p.strip()
+            is_dst_query = (
+                clean_tp.lower().endswith("defense") or clean_tp.lower().endswith("def")
+                or clean_tp.lower().endswith("dst") or clean_tp.lower().endswith("d/st")
+            )
+            t_cand = re.sub(r"\s+(?:defense|def|dst|d/st)$", "", clean_tp, flags=re.IGNORECASE).strip()
+            res_team = resolve_team_abbr(t_cand) or resolve_team_abbr(clean_tp)
+            if is_dst_query or (res_team and parsed.get("position") in ("DEF", "DST", "D/ST")):
+                return header + "\n" + render_team_dst_fantasy_profile_view(res_team or target_p, s_plays, season=season)
             return header + "\n" + render_player_fantasy_profile_view(target_p, s_plays, season=season)
         pos = parsed.get("position")
         w_filter = week if week is not None else parsed.get("week")
         lim = parsed.get("limit") or 15
+        t_filter = team or parsed.get("team")
         return header + "\n" + render_fantasy_leaderboard_view(
-            s_plays, season=season, scoring_format=scoring, position=pos, week=w_filter, limit=lim
+            s_plays, season=season, scoring_format=scoring, position=pos, team=t_filter, week=w_filter, limit=lim
         )
 
     if intent == "sportsbook_report":
@@ -8740,7 +8778,7 @@ def interactive_tui(
                 elif cmd_token in ("/fantasy", "/fant", "/fp"):
                     if cmd_args:
                         arg_str = " ".join(cmd_args).strip()
-                        pos_match = arg_str.upper() if arg_str.upper() in ("QB", "RB", "WR", "TE", "K") else None
+                        pos_match = arg_str.upper() if arg_str.upper() in ("QB", "RB", "WR", "TE", "K", "DEF", "DST", "D/ST") else None
                         if pos_match:
                             s_plays = require_season_plays(plays, active_season)
                             print(render_fantasy_leaderboard_view(s_plays, season=active_season, position=pos_match))
