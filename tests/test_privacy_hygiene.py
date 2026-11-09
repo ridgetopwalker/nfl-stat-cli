@@ -21,19 +21,21 @@ FREE_MAIL_DOMAINS = (
     "fastmail.com", "yandex.com", "yandex.ru", "qq.com", "163.com", "126.com", "zoho.com",
 )
 FREE_MAIL = re.compile(
-    r"(?P<local>[\w.+-]+)@(?:" + "|".join(re.escape(d) for d in FREE_MAIL_DOMAINS) + r")(?![\w-])", re.I
+    r"(?<![\w.+-])(?P<local>[\w.+-]+)@(?:" + "|".join(re.escape(d) for d in FREE_MAIL_DOMAINS) + r")(?![\w-])", re.I
 )
 PLACEHOLDER_EMAIL_LOCALS = {"you", "user", "name", "example", "yourname", "username", "email", "someone", "test"}
 
 # Absolute paths that embed a person's account name on Windows, Linux or macOS.
 LOCAL_PATH = re.compile(
-    r"(?i:[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2})(?P<win>[^\\/\s\"'<>%${}]+)"
-    r"|(?<![\w.-])/home/(?P<linux>[A-Za-z_][\w.-]*)(?=[/\\\s\"']|$)"
-    r"|(?<![\w.-])/Users/(?P<mac>[A-Za-z][\w.-]*)(?=[/\\\s\"']|$)"
+    r"(?<![A-Za-z])(?i:[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2})(?P<win>[^\\/\s\"'<>%${}*]+)"
+    r"|(?<![\w.-])(?:/mnt)?/[a-z]/(?i:Users)/(?P<wsl>[^/\s\"'<>%${}*]+)"
+    r"|(?<![\w.-])/home/(?P<linux>[A-Za-z_][\w.-]*)(?![\w.-])"
+    r"|(?<![\w.-])/Users/(?P<mac>[A-Za-z][\w.-]*)(?![\w.-])"
 )
 PLACEHOLDER_USERS = {
     "user", "username", "you", "yourname", "example", "runner", "runneradmin", "me", "name",
     "public", "default", "shared", "ubuntu", "vscode", "appuser", "node", "root",
+    "circleci", "travis", "vagrant", "app", "git",
 }
 
 # TODO(#44): remove PENDING_44 and the xfail test below once the triage skill no longer
@@ -95,7 +97,7 @@ def scan(files, root=ROOT):
                 if m.group("local").lower() not in PLACEHOLDER_EMAIL_LOCALS:
                     hits.append(f"{name}:{lineno}: free-mail address")
             for m in LOCAL_PATH.finditer(line):
-                user = (m.group("win") or m.group("linux") or m.group("mac") or "").lower()
+                user = (m.group("win") or m.group("wsl") or m.group("linux") or m.group("mac") or "").lower()
                 if user and user not in PLACEHOLDER_USERS:
                     hits.append(f"{name}:{lineno}: local machine path")
     return hits
@@ -112,6 +114,10 @@ SHOULD_FLAG = {
     "linux-path": "/ho" + "me/jdoe/proj",
     "linux-path-end-of-line": "cd /ho" + "me/jdoe",
     "mac-path": "/Us" + "ers/jdoe/proj",
+    "markdown-backticks": "`/ho" + "me/jdoe`",
+    "path-in-list": "PATH=/ho" + "me/jdoe:/usr/bin",
+    "wsl-path": "/mnt/c/Us" + "ers/jdoe/proj",
+    "git-bash-path": "/c/Us" + "ers/jdoe/proj",
 }
 SHOULD_PASS = {
     "project-address": "dev@ridgetopwalker.com",
@@ -124,6 +130,9 @@ SHOULD_PASS = {
     "mac-shared": "/Us" + "ers/Shared/x",
     "route-not-a-path": "GET https://example.com/api/users/42/home/x",
     "relative-lookalike": "app/ho" + "me/index/page",
+    "scheme-lookalike": "redis://us" + "ers/0 and uid:/us" + "ers/x",
+    "windows-glob": "C:" + BS + "Users" + BS + "*" + BS + "AppData",
+    "ci-user": "/ho" + "me/circleci/project",
 }
 
 
@@ -160,7 +169,9 @@ def test_tree_has_no_personal_email_or_local_paths():
     assert scan(files) == []
 
 
-@pytest.mark.xfail(raises=AssertionError, reason="local paths in the triage skill are being removed on the #44 branch", strict=False)
+@pytest.mark.xfail(raises=AssertionError, reason="local paths in the triage skill are being removed on the #44 branch", strict=True)
 def test_error_triage_skill_has_no_local_paths():
+    """strict: once #44 removes the paths this XPASSes and fails, which is the signal to delete PENDING_44."""
     files = [n for n in tracked_files() if n.startswith(PENDING_44)]
+    assert files, "the exempted folder is gone: remove PENDING_44"
     assert scan(files) == []
