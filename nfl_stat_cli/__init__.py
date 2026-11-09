@@ -1457,17 +1457,6 @@ def require_season_plays(plays: List[Dict[str, Any]], season: int) -> List[Dict[
     )
 
 
-def _downcast_dataframe_floats(df: Any) -> Any:
-    """Downcast float64 columns to float32 to reduce memory consumption and speed up processing."""
-    try:
-        float_cols = df.select_dtypes(include=["float64"]).columns
-        if len(float_cols) > 0:
-            df[float_cols] = df[float_cols].astype("float32")
-    except Exception:
-        pass
-    return df
-
-
 R_CACHE_FORMAT = "v2"
 R_TIMEOUT_DEFAULT_SECONDS = 300
 R_TIMEOUT_ENV = "NFL_STAT_R_TIMEOUT"
@@ -1544,6 +1533,17 @@ def _validate_r_csv(path: Path, seasons: Tuple[int, ...]) -> Optional[str]:
     except (OSError, UnicodeDecodeError, csv.Error) as exc:
         return f"unreadable ({exc})"
     return None
+
+
+def _downcast_dataframe_floats(df: Any) -> Any:
+    """Downcast float64 columns to float32 to reduce memory consumption and speed up processing."""
+    try:
+        float_cols = df.select_dtypes(include=["float64"]).columns
+        if len(float_cols) > 0:
+            df[float_cols] = df[float_cols].astype("float32")
+    except Exception:
+        pass
+    return df
 
 
 class NFLDataBridge:
