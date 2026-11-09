@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-pro-football-slm: Cross-Platform (*nix & Windows) Colorized Terminal NFL Analytics,
-Multi-Angle Play Visualizer (Behind Offense, Behind Defense, Sideline), & General Composable Custom Stat Engine.
-Powered by sportsdataverse-py (Python), nflverse / nflreadr / nflfastR (R), and Local Small Language Model (SLM via Ollama) + Deterministic Engine.
+Pro Football SLM: the American pro football stat engine.
+
+Cross-platform (*nix & Windows) colorized terminal analytics, multi-angle play
+visualizer (behind offense, behind defense, sideline), and composable custom
+stat engine. Powered by sportsdataverse-py (Python), nflverse / nflreadr /
+nflfastR (R), and an optional local small language model (SLM via Ollama).
+Not affiliated with or endorsed by the NFL.
 """
 
 from __future__ import annotations
@@ -37,6 +41,8 @@ from importlib import resources
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+
+from .legacy_compat import default_data_dir, env_get, env_truthy
 
 from .fantasy import (
     calculate_player_fantasy_points,
@@ -77,6 +83,13 @@ from .contracts import (
 __version__ = "2.0.0"
 __author__ = "Sean McClain"
 __license__ = "MIT"
+
+# Single product-name constant — every user-facing brand string must use this.
+PRODUCT_NAME = "Pro Football SLM"
+PRODUCT_TAGLINE = "Pro Football SLM: the American pro football stat engine"
+PRODUCT_SLUG = "pro-football-slm"
+PRODUCT_MODULE = "pro_football_slm"
+AFFILIATION_DISCLAIMER = "Not affiliated with or endorsed by the NFL"
 
 
 def current_nfl_season(today: Optional[dt.date] = None) -> int:
@@ -1476,7 +1489,7 @@ class NFLDataBridge:
     """
 
     def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto") -> None:
-        self.cache_dir = cache_dir or (Path.home() / ".pro_football_slm" / "cache")
+        self.cache_dir = cache_dir or (default_data_dir() / "cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.engine = engine.lower()
         self.last_source_used = "built-in-nflverse-sample"
@@ -2913,7 +2926,7 @@ class StatEngine:
     """Manages custom stats, evaluates multi-scope composable formulas, and tracks the user's Stat Page."""
 
     def __init__(self, storage_dir: Optional[Path] = None) -> None:
-        self.storage_dir = storage_dir or (Path.home() / ".pro_football_slm")
+        self.storage_dir = storage_dir or default_data_dir()
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
@@ -3173,7 +3186,7 @@ class StatEngine:
             if include_traditional or v.category == "custom"
         }
         payload = {
-            "package": "pro-football-slm",
+            "package": PRODUCT_SLUG,
             "schema_version": "2.0",
             "exported_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "stat_count": len(exported),
@@ -3807,15 +3820,19 @@ class AsciiArtRenderer:
 
     @staticmethod
     def banner() -> str:
+        # Brand art spells PFSLM only — never "NFL" in the logo / product name.
         lines = [
-            f"{C.BOLD}{C.GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.CYAN}███╗   ██╗███████╗██╗         ███████╗████████╗ █████╗ ████████╗   ██████╗██╗     ██╗{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.CYAN}████╗  ██║██╔════╝██║         ██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝  ██╔════╝██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.WHITE}██╔██╗ ██║█████╗  ██║   █████╗███████╗   ██║   ███████║   ██║     ██║     ██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.GREEN}██║╚██╗██║██╔══╝  ██║   ╚════╝╚════██║   ██║   ██╔══██║   ██║     ██║     ██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.GREEN}██║ ╚████║██║     ███████╗    ███████║   ██║   ██║  ██║   ██║     ╚██████╗███████╗██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.DIM}{C.WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer    {C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}╚═══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}",
+            f"{C.BOLD}{C.GOLD}╔══════════════════════════════════════════════════════════════════════════╗{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.CYAN}██████╗ ███████╗███████╗██╗     ███╗   ███╗{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.CYAN}██╔══██╗██╔════╝██╔════╝██║     ████╗ ████║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.WHITE}██████╔╝█████╗  ███████╗██║     ██╔████╔██║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}██╔═══╝ ██╔══╝  ╚════██║██║     ██║╚██╔╝██║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}██║     ██║     ███████║███████╗██║ ╚═╝ ██║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}╚═╝     ╚═╝     ╚══════╝╚══════╝╚═╝     ╚═╝{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.WHITE}{PRODUCT_TAGLINE:<68}{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.DIM}{C.WHITE}{'nflverse + sportsdataverse-py • custom stats & play visualizer':<68}{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.DIM}{C.WHITE}{AFFILIATION_DISCLAIMER:<68}{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}╚══════════════════════════════════════════════════════════════════════════╝{C.RESET}",
         ]
         return "\n".join(lines)
 
@@ -4982,12 +4999,12 @@ class NaturalLanguageStatAssistant:
             return None
         if requested_model and requested_model.strip().lower() != "auto":
             return requested_model.strip()
-        env_model = os.environ.get("PFSLM_SLM_MODEL")
+        env_model = env_get("PFSLM_SLM_MODEL")
         if env_model:
             if env_model.strip().lower() in ("none", "off", "disable", "disabled"):
                 return None
             return env_model.strip()
-        base_url = os.environ.get("PFSLM_OLLAMA_URL", "http://127.0.0.1:11434")
+        base_url = env_get("PFSLM_OLLAMA_URL", "http://127.0.0.1:11434")
         try:
             req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
             with urllib.request.urlopen(req, timeout=0.8) as resp:
@@ -5037,7 +5054,7 @@ class NaturalLanguageStatAssistant:
     @classmethod
     def query_local_slm(cls, query: str, engine: StatEngine, model_name: str) -> Optional[Dict[str, Any]]:
         """Call local Ollama SLM to parse natural language into structured JSON intent."""
-        base_url = os.environ.get("PFSLM_OLLAMA_URL", "http://127.0.0.1:11434")
+        base_url = env_get("PFSLM_OLLAMA_URL", "http://127.0.0.1:11434")
         available_stats = list(engine.stats.keys())
         system_prompt = (
             "You are the NFL-Stat-CLI Local Small Language Model parser. "
@@ -9521,7 +9538,7 @@ def reload_pro_football_slm(pull_git: bool = False) -> Any:
 def render_slash_help() -> str:
     return f"""
 {C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
-│                      NFL-STAT-CLI : NATURAL LANGUAGE & /COMMANDS                      │
+│                      {PRODUCT_NAME} : NATURAL LANGUAGE & /COMMANDS                      │
 ├───────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}
   {C.BOLD}{C.GOLD}Default Mode (Natural Language):{C.RESET}
     Type any question or stat request directly (no slash needed):
@@ -9556,7 +9573,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Report parsing or interpretation error to Antigravity AI agent
     {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place with latest patches from Antigravity
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
-    {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit pro-football-slm
+    {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit {PRODUCT_NAME}
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
 
 
@@ -9645,7 +9662,7 @@ def show_startup_loading(is_interactive: bool = True, seasons: Optional[List[int
         (f"Loading NFL play-by-play data for years [{seasons_str}]...", 45),
         ("Downcasting floats & optimizing memory...", 70),
         ("Calibrating chalkboard & multi-angle visualizers...", 90),
-        ("Ready! Launching NFL-STAT-CLI...", 100),
+        ("Ready! Launching " + PRODUCT_NAME + "...", 100),
     ]
     bar_width = 30
     frames = ConsoleSpinner.SPINNER_FRAMES
@@ -9714,9 +9731,9 @@ def interactive_tui(
         try:
             if _GLOBAL_COMPLETER:
                 _GLOBAL_COMPLETER.set_context(None)
-            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}pro-football-slm > {C.RESET}").lstrip("\ufeff").strip()
+            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}{PRODUCT_SLUG} > {C.RESET}").lstrip("\ufeff").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nExiting pro-football-slm.")
+            print(f"\nExiting {PRODUCT_NAME}.")
             break
 
         if not raw_in:
@@ -9724,7 +9741,7 @@ def interactive_tui(
 
         low_in = raw_in.lower()
         if low_in in ("q", "quit", "/quit", "/q", "close", "/close", "exit", "/exit"):
-            print("Exiting pro-football-slm.")
+            print(f"Exiting {PRODUCT_NAME}.")
             break
 
         try:
@@ -10042,7 +10059,7 @@ def interactive_tui(
                     else:
                         print(f"  {C.DIM}Report saved. Type `/reload` or `/update` once the fix is deployed to update your programming.{C.RESET}")
                 elif cmd_token in ("/reload", "/update", "/refresh"):
-                    print(f"  {C.CYAN}🔄 Reloading pro-football-slm modules and custom stats in-place...{C.RESET}")
+                    print(f"  {C.CYAN}🔄 Reloading {PRODUCT_NAME} modules and custom stats in-place...{C.RESET}")
                     try:
                         _cur_mod = reload_pro_football_slm(pull_git=True)
                         engine = _cur_mod.StatEngine()
@@ -10161,6 +10178,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         parents=[common],
         description="Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, multi-angle play diagrammer, & composable custom stat CLI.",
     )
+    parser.add_argument("--about", action="store_true", help="Show product name, tagline, and attribution")
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.set_defaults(
         engine="auto",
@@ -10254,6 +10272,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "about", False):
+        print(PRODUCT_NAME)
+        print(PRODUCT_TAGLINE)
+        print(AFFILIATION_DISCLAIMER)
+        notice = Path(__file__).resolve().parent.parent / "NOTICE"
+        if notice.is_file():
+            print()
+            print(notice.read_text(encoding="utf-8").rstrip())
+        return 0
 
     if args.no_color:
         C.disable()

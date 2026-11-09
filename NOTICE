@@ -1,0 +1,8 @@
+This software is MIT-licensed (see LICENSE). The MIT license covers the code only.
+
+Pro Football SLM: the American pro football stat engine.
+
+NFL play-by-play and related data come from nflverse (https://github.com/nflverse/nflverse-data), licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
+Changes: we filter, aggregate, and compute derived statistics and model outputs from that data. Results are not the original nflverse data.
+
+Not affiliated with or endorsed by the NFL, nflverse, or any team.

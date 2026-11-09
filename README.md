@@ -1,4 +1,8 @@
-# pro-football-slm 🏈
+# Pro Football SLM 🏈
+
+**Pro Football SLM: the American pro football stat engine.**
+
+Not affiliated with or endorsed by the NFL.
 
 A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and interactive terminal analytics suite with **colorized ASCII art** (multi-angle play diagrams in **Behind-the-Offense**, **Behind-the-Defense**, and **Sideline** views, plus clean Unicode tables) and a **general-purpose composable Custom Stat Engine** powered by **[nflverse](https://nflverse.nflverse.com/) (R)**, **[nfl_data_py](https://github.com/nflverse/nfl_data_py) / [sportsdataverse-py](https://py.sportsdataverse.org/) (Python)**, and an optional **Local Small Language Model (SLM via Ollama)**.
 
@@ -128,3 +132,7 @@ pip install "pro-football-slm[live]"
 ## License
 
 Released under the [MIT License](LICENSE). Play-by-play data provided via [nflverse/nflverse-data](https://github.com/nflverse/nflverse-data) (CC-BY 4.0) and [sportsdataverse-py](https://github.com/sportsdataverse/sportsdataverse-py).
+
+## Command rename
+
+The CLI entry points are `pro-football-slm` and the short alias `pfslm`. The old `nfl-stat` command still works for one release and prints a rename notice to stderr.

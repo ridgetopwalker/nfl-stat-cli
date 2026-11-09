@@ -366,7 +366,7 @@ def test_show_startup_loading(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "Loading..." in out
     assert "100%" in out
-    assert "Ready! Launching NFL-STAT-CLI..." in out
+    assert "Ready! Launching Pro Football SLM..." in out
 
 
 def test_stat_page_loading_and_render(engine, capsys):
@@ -697,7 +697,7 @@ def test_show_startup_loading_includes_years_and_downcast(capsys, monkeypatch):
     assert "Loading..." in out
     assert "2024, 2025" in out
     assert "Downcasting floats" in out
-    assert "Ready! Launching NFL-STAT-CLI..." in out
+    assert "Ready! Launching Pro Football SLM..." in out
 
 
 def test_nl_most_yards_queries_and_top_5_limit(engine, sample_plays):
