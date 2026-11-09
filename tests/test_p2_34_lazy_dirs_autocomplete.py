@@ -211,3 +211,18 @@ def test_get_ipc_dir_read_only_tolerates_a_directory_vanishing(ipc_env, monkeypa
     (ipc_env / "pending").mkdir()
     monkeypatch.setattr(cli.os, "lstat", flaky)
     assert cli.get_ipc_dir(create=False) == ipc_env
+
+
+def test_cleanup_error_reports_does_not_create_ipc_dir(tmp_path, monkeypatch):
+    """Retention cleanup is read-only: with no existing IPC dir it must not mkdir (Refs #34 + #45)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("NFL_STAT_IPC_DIR", raising=False)
+    target = home / ".nfl_stat_cli" / "error_ipc"
+    assert not target.exists()
+    result = cli.cleanup_error_reports(force=True)
+    assert isinstance(result, dict)
+    assert result.get("skipped") == 1
+    assert not target.exists()
+    assert not (home / ".nfl_stat_cli").exists()

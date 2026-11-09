@@ -9899,7 +9899,8 @@ def cleanup_error_reports(
     """
     result = {"skipped": 0, "deleted_age": 0, "deleted_cap": 0, "kept": 0, "examined": 0}
     try:
-        root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir()
+        # never create from cleanup: read-only path, consistent with get_ipc_dir(create=False)
+        root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir(create=False)
         try:
             root_st = os.lstat(root)
             if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
