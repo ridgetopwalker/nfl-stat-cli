@@ -1242,5 +1242,97 @@ def test_clean_successful_plays_query_not_penalties():
         assert pass_short["value"] < pass_short["yards_per_play"]
 
 
+def test_register_custom_stat_persist_flag(tmp_path):
+    engine = cli.StatEngine(storage_dir=tmp_path)
+
+    # 1. Ephemeral stat (persist=False)
+    s_ephem = engine.register_custom_stat(
+        name="ephem_rate",
+        title="Ephemeral Rate",
+        group_by="qb",
+        formula="yards_per_play * 1.5",
+        description="Session-only stat",
+        calculation_explained="Test",
+        persist=False,
+    )
+    assert s_ephem.name == "ephem_rate"
+    assert "ephem_rate" in engine.stats
+    assert "ephem_rate" in engine.ephemeral_stats
+    assert "ephem_rate" not in engine.stat_page.get("pinned_stats", [])
+
+    # Ensure custom_stats.json does NOT contain ephem_rate
+    if engine.custom_stats_file.exists():
+        disk_data = json.loads(engine.custom_stats_file.read_text(encoding="utf-8"))
+        assert "ephem_rate" not in disk_data.get("stats", {})
+
+    # Trigger explicit save_state and ensure still excluded
+    engine.save_state()
+    disk_data = json.loads(engine.custom_stats_file.read_text(encoding="utf-8"))
+    assert "ephem_rate" not in disk_data.get("stats", {})
+
+    # 2. Persistent stat (persist=True)
+    s_perm = engine.register_custom_stat(
+        name="perm_rate",
+        title="Permanent Rate",
+        group_by="qb",
+        formula="yards_per_play * 2.0",
+        description="Permanent stat",
+        calculation_explained="Test",
+        persist=True,
+    )
+    assert s_perm.name == "perm_rate"
+    assert "perm_rate" in engine.stats
+    assert "perm_rate" not in engine.ephemeral_stats
+    disk_data = json.loads(engine.custom_stats_file.read_text(encoding="utf-8"))
+    assert "perm_rate" in disk_data.get("stats", {})
+    assert "ephem_rate" not in disk_data.get("stats", {})
+
+
+def test_nl_query_create_stat_interactive_prompt_yes(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "prompt_input", lambda prompt: "y")
+    engine = cli.StatEngine(storage_dir=tmp_path)
+
+    parsed = {
+        "intent": "create_stat",
+        "stat_name": "prompt_yes_stat",
+        "title": "Prompt Yes Stat",
+        "group_by": "qb",
+        "formula": "yards_per_play + 1",
+        "explanation": "Custom stat created via query",
+        "season": 2026,
+    }
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS, interactive=True))
+    assert "Saved 'prompt_yes_stat' permanently to custom_stats.json" in out
+    assert "prompt_yes_stat" in engine.stats
+    assert "prompt_yes_stat" not in engine.ephemeral_stats
+
+    disk_data = json.loads(engine.custom_stats_file.read_text(encoding="utf-8"))
+    assert "prompt_yes_stat" in disk_data.get("stats", {})
+
+
+def test_nl_query_create_stat_interactive_prompt_no(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "prompt_input", lambda prompt: "n")
+    engine = cli.StatEngine(storage_dir=tmp_path)
+
+    parsed = {
+        "intent": "create_stat",
+        "stat_name": "prompt_no_stat",
+        "title": "Prompt No Stat",
+        "group_by": "qb",
+        "formula": "yards_per_play + 2",
+        "explanation": "Custom stat created via query",
+        "season": 2026,
+    }
+    out = cli.strip_ansi(cli.handle_nl_query_result(parsed, engine, cli.SAMPLE_PBP_PLAYS, interactive=True))
+    assert "Evaluated 'prompt_no_stat' for this session only" in out
+    assert "prompt_no_stat" in engine.stats
+    assert "prompt_no_stat" in engine.ephemeral_stats
+
+    if engine.custom_stats_file.exists():
+        disk_data = json.loads(engine.custom_stats_file.read_text(encoding="utf-8"))
+        assert "prompt_no_stat" not in disk_data.get("stats", {})
+
+
+
 
 
