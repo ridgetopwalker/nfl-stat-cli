@@ -83,6 +83,8 @@ keep_cols <- intersect(
   names(pbp)
 )
 
-out_df <- pbp[!is.na(pbp$posteam) & ((!is.na(pbp$pass_attempt) & pbp$pass_attempt == 1) | (!is.na(pbp$rush_attempt) & pbp$rush_attempt == 1) | (!is.na(pbp$penalty) & pbp$penalty == 1) | (!is.na(pbp$timeout) & pbp$timeout == 1)), keep_cols]
+# Export every play with a possession team; the Python loader applies the shared
+# play-inclusion predicate (_pbp_row_is_playable) so all backends keep the same rows.
+out_df <- pbp[!is.na(pbp$posteam), keep_cols]
 write.csv(out_df, file = output_csv, row.names = FALSE, na = "")
 message(sprintf("[nflverse-bridge] Exported %d plays to %s", nrow(out_df), output_csv))
