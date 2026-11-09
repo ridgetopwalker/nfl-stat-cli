@@ -61,6 +61,7 @@ NFL_CONTRACTS: List[ContractRecord] = [
 
     # ------------------ RUNNING BACKS ------------------
     ContractRecord("Christian McCaffrey", "SF", "RB", "player", 38.0, 19.0, 24.0, 2, 2024, 2028, 6.7, "Highest-paid RB in NFL history ($19.0M APY)"),
+    ContractRecord("Luke McCaffrey", "WAS", "WR", "player", 5.56, 1.39, 1.05, 4, 2024, 2028, 1.39, "Rookie draft contract (Round 3)"),
     ContractRecord("Jonathan Taylor", "IND", "RB", "player", 42.0, 14.0, 26.5, 3, 2023, 2027, 10.6, "3-yr extension with $19.3M fully guaranteed"),
     ContractRecord("Saquon Barkley", "PHI", "RB", "player", 37.75, 12.58, 26.0, 3, 2024, 2027, 3.8, "3-yr free agent deal with $26M guaranteed"),
     ContractRecord("Josh Jacobs", "GB", "RB", "player", 48.0, 12.0, 12.5, 4, 2024, 2028, 5.3, "4-yr free agent contract, $12.5M signing bonus"),

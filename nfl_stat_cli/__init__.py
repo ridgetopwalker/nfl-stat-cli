@@ -7551,17 +7551,17 @@ def find_matching_player_candidates(
 
             key = (target_surname, init)
             if key not in candidates_map:
-                full_name = clean_name if len(c_toks) >= 2 and len(c_toks[0]) > 1 else ""
+                full_name = clean_name if len(c_toks) >= 2 and len(c_toks[0]) > 1 and "." not in c_toks[0] else ""
+                contract_pos = ""
+                contract_team = ""
                 try:
                     from .contracts import NFL_CONTRACTS
                     for c in NFL_CONTRACTS:
-                        c_toks = re.sub(r"[^\w\s]", " ", c.name).split()
-                        if len(c_toks) >= 2 and c_toks[-1].lower() == target_surname and c_toks[0][0].lower() == init:
+                        c_toks_c = re.sub(r"[^\w\s]", " ", c.name).split()
+                        if len(c_toks_c) >= 2 and c_toks_c[-1].lower() == target_surname and c_toks_c[0][0].lower() == init:
                             full_name = c.name
-                            if not pos and c.position:
-                                pos = c.position
-                            if not tm and c.team:
-                                tm = c.team
+                            contract_pos = c.position or ""
+                            contract_team = c.team or ""
                             break
                 except Exception:
                     pass
@@ -7572,7 +7572,9 @@ def find_matching_player_candidates(
                 candidates_map[key] = {
                     "name": full_name,
                     "team_counts": Counter(),
-                    "position": pos or "Unknown",
+                    "pos_counts": Counter(),
+                    "contract_pos": contract_pos,
+                    "contract_team": contract_team,
                     "play_count": 0,
                     "search_name": full_name,
                 }
@@ -7580,16 +7582,23 @@ def find_matching_player_candidates(
             candidates_map[key]["play_count"] += 1
             if tm:
                 candidates_map[key]["team_counts"][tm] += 1
-            if pos and candidates_map[key]["position"] == "Unknown":
-                candidates_map[key]["position"] = pos
+            if pos:
+                candidates_map[key]["pos_counts"][pos] += 1
+            # Upgrade initial name if a full name is discovered in subsequent plays
+            if len(c_toks) >= 2 and len(c_toks[0]) > 1 and "." not in c_toks[0]:
+                curr_name = candidates_map[key]["name"]
+                if not curr_name or "." in curr_name.split()[0]:
+                    candidates_map[key]["name"] = clean_name
+                    candidates_map[key]["search_name"] = clean_name
 
     results: List[Dict[str, Any]] = []
     for cand in candidates_map.values():
-        primary_team = cand["team_counts"].most_common(1)[0][0] if cand["team_counts"] else ""
+        primary_team = cand["team_counts"].most_common(1)[0][0] if cand["team_counts"] else (cand["contract_team"] or "")
+        primary_pos = cand["contract_pos"] or (cand["pos_counts"].most_common(1)[0][0] if cand["pos_counts"] else "Unknown")
         results.append({
             "name": cand["name"],
             "team": primary_team,
-            "position": cand["position"],
+            "position": primary_pos,
             "play_count": cand["play_count"],
             "search_name": cand["search_name"],
         })
