@@ -25,7 +25,7 @@ def export_env(tmp_path, monkeypatch):
     "a\\..\\..\\x.json",
     "/tmp/out.json",
     "\\\\server\\share\\x.csv",
-    "C:\\Users\\x\\out.csv",
+    "C:\\Users\\user\\out.csv",
     "~/out.csv",
     "",
     "   ",
