@@ -2084,20 +2084,9 @@ def test_generic_player_disambiguation(monkeypatch, engine):
     assert "PLAYER DRILL-DOWN" in out
     assert "SF" in out
 
-    # Non-interactive defaults cleanly to top candidate
+    # Non-interactive no longer silently picks the first candidate (follow-up to #6): it lists the
+    # candidates and asks for a full name instead.
     out_non_int = cli.strip_ansi(cli.render_player_drilldown_view(engine, multi_player_plays, season=2026, player_name="McCaffrey", interactive=False))
-    assert "PLAYER DRILL-DOWN" in out_non_int
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    assert "PLAYER DRILL-DOWN" not in out_non_int
+    assert "can't answer" in out_non_int
+    assert "Christian McCaffrey" in out_non_int and "Luke McCaffrey" in out_non_int
