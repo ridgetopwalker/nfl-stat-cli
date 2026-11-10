@@ -32,6 +32,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+import uuid
 import urllib.error
 import urllib.request
 from contextlib import nullcontext
@@ -1478,6 +1479,84 @@ def require_season_plays(plays: List[Dict[str, Any]], season: int) -> List[Dict[
     )
 
 
+R_CACHE_FORMAT = "v2"
+R_TIMEOUT_DEFAULT_SECONDS = 300
+R_TIMEOUT_ENV = "NFL_STAT_R_TIMEOUT"
+# Columns that every valid bridge CSV must carry
+_R_CSV_REQUIRED_COLUMNS = ("season", "posteam", "play_type", "pass_attempt", "rush_attempt")
+
+
+def _pbp_row_is_playable(r: Dict[str, Any]) -> bool:
+    """
+    Single play-inclusion predicate shared by every data backend (Python dataframes and the R bridge CSV),
+    so the same season yields the same row set whichever backend loaded it.
+    Keeps rows with a possession team that are pass/rush attempts, typed pass/run, or penalty/timeout plays.
+    """
+    if _is_missing(r.get("posteam")):
+        return False
+    pa = _safe_int(r.get("pass_attempt"), 0)
+    ra = _safe_int(r.get("rush_attempt"), 0)
+    pt = _safe_str(r.get("play_type"), "").lower()
+    pen = _safe_opt_flag(r.get("penalty")) or 0
+    to = _safe_opt_flag(r.get("timeout")) or 0
+    desc = _safe_str(r.get("desc"), "").lower()
+    if pa == 0 and ra == 0 and pt not in ("pass", "run") and not pen and not to and "penalty" not in desc and "timeout" not in desc:
+        return False
+    return True
+
+
+def _r_timeout_seconds() -> int:
+    """Rscript timeout in seconds; override with NFL_STAT_R_TIMEOUT (invalid or non-positive values are ignored)."""
+    raw = os.environ.get(R_TIMEOUT_ENV, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return R_TIMEOUT_DEFAULT_SECONDS
+    return value if value > 0 else R_TIMEOUT_DEFAULT_SECONDS
+
+
+def _normalize_seasons(seasons: Any) -> Tuple[int, ...]:
+    """Sorted, de-duplicated tuple of int seasons, so [2025, 2024] and (2024, 2025) share one cache entry."""
+    if isinstance(seasons, (str, bytes)):
+        raise TypeError("seasons must be an iterable of ints, not a string")
+    out = set()
+    for s in seasons:
+        if isinstance(s, float) and not s.is_integer():
+            raise ValueError(f"season {s!r} is not an integer year")
+        out.add(int(s))
+    return tuple(sorted(out))
+
+
+def _validate_r_csv(path: Path, seasons: Tuple[int, ...]) -> Optional[str]:
+    """Return None when the bridge CSV looks complete, else a short reason (truncated, wrong seasons, empty)."""
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return "empty file"
+            missing = [c for c in _R_CSV_REQUIRED_COLUMNS if c not in header]
+            if missing:
+                return "missing column(s): " + ", ".join(missing)
+            season_idx = header.index("season")
+            wanted = set(seasons)
+            n_rows = 0
+            for row in reader:
+                if len(row) != len(header):
+                    return f"row {n_rows + 2} has {len(row)} fields, expected {len(header)} (truncated or corrupt)"
+                try:
+                    if int(float(row[season_idx])) not in wanted:
+                        return f"row {n_rows + 2} has a season outside the requested set"
+                except (ValueError, OverflowError):
+                    return f"row {n_rows + 2} has a non-numeric season"
+                n_rows += 1
+            if n_rows == 0:
+                return "no data rows"
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        return f"unreadable ({exc})"
+    return None
+
+
 def _downcast_dataframe_floats(df: Any) -> Any:
     """Downcast float64 columns to float32 to reduce memory consumption and speed up processing."""
     try:
@@ -1599,46 +1678,87 @@ class NFLDataBridge:
         if not rscript_bin:
             return None
         try:
+            season_key = _normalize_seasons(seasons)
+        except (TypeError, ValueError) as exc:
+            self.last_error = f"Rscript error: invalid seasons ({exc})"
+            return None
+        try:
             # Python 3.9+ resource lookup; retain the path fallback for Python 3.8.
             bridge_resource = resources.files(__package__).joinpath("nflverse_bridge.R")
         except (AttributeError, TypeError):  # Python 3.8 or direct module loading
             bridge_resource = Path(__file__).parent / "nflverse_bridge.R"
         bridge_script = bridge_resource
-        out_csv = self.cache_dir / f"nflverse_pbp_{'_'.join(map(str, seasons))}.csv"
-        seasons_arg = ",".join(map(str, seasons))
+        out_csv = self.cache_dir / f"nflverse_pbp_{R_CACHE_FORMAT}_{'_'.join(map(str, season_key))}.csv"
+        seasons_arg = ",".join(map(str, season_key))
+        tmp_csv = out_csv.with_name(f".{out_csv.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        # Remove temp files left behind by an earlier process that was killed mid-write
         try:
-            # Reuse cached CSV if younger than 12 hours
+            for stale in self.cache_dir.glob(".nflverse_pbp_*.tmp"):
+                if dt.datetime.now().timestamp() - stale.stat().st_mtime > 86400:
+                    stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            # Reuse a cached CSV only if it is younger than 12 hours AND passes the structural check
             use_cached = False
             if out_csv.exists():
                 age_sec = dt.datetime.now().timestamp() - out_csv.stat().st_mtime
                 if age_sec < 43200 and out_csv.stat().st_size > 256:
-                    use_cached = True
+                    reason = _validate_r_csv(out_csv, season_key)
+                    if reason is None:
+                        use_cached = True
+                    else:
+                        out_csv.unlink(missing_ok=True)  # corrupt or truncated: drop it and refetch
             if not use_cached:
-                if bridge_script.is_file():
-                    with (nullcontext(bridge_script) if isinstance(bridge_script, Path)
-                          else resources.as_file(bridge_script)) as bridge_path:
-                        cmd = [rscript_bin, str(bridge_path), "--seasons", seasons_arg, "--output", str(out_csv)]
-                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-                else:
-                    # Pass arguments via commandArgs(trailingOnly=TRUE) — never interpolate paths into R source
-                    r_code = (
-                        "args <- commandArgs(trailingOnly=TRUE); "
-                        "seasons <- as.integer(unlist(strsplit(args[1], ','))); "
-                        "out_csv <- args[2]; "
-                        "suppressPackageStartupMessages(library(nflreadr)); "
-                        "pbp <- load_pbp(seasons=seasons); "
-                        "pbp <- pbp[!is.na(pbp$posteam) & ((!is.na(pbp$pass_attempt) & pbp$pass_attempt == 1) | (!is.na(pbp$rush_attempt) & pbp$rush_attempt == 1)), ]; "
-                        "write.csv(pbp, file=out_csv, row.names=FALSE, na='')"
-                    )
-                    cmd = [rscript_bin, "-e", r_code, seasons_arg, str(out_csv)]
-                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-                if res.returncode != 0:
-                    self.last_error = f"Rscript exit {res.returncode}: {res.stderr.strip()[:160]}"
+                timeout_s = _r_timeout_seconds()
+                try:
+                    # R writes to a temp file; the cache path only ever sees a complete, validated file
+                    if bridge_script.is_file():
+                        with (nullcontext(bridge_script) if isinstance(bridge_script, Path)
+                              else resources.as_file(bridge_script)) as bridge_path:
+                            cmd = [rscript_bin, str(bridge_path), "--seasons", seasons_arg, "--output", str(tmp_csv)]
+                            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+                    else:
+                        # Pass arguments via commandArgs(trailingOnly=TRUE) — never interpolate paths into R source
+                        r_code = (
+                            "args <- commandArgs(trailingOnly=TRUE); "
+                            "seasons <- as.integer(unlist(strsplit(args[1], ','))); "
+                            "out_csv <- args[2]; "
+                            "suppressPackageStartupMessages(library(nflreadr)); "
+                            "pbp <- load_pbp(seasons=seasons); "
+                            "pbp <- pbp[!is.na(pbp$posteam), ]; "
+                            "write.csv(pbp, file=out_csv, row.names=FALSE, na='')"
+                        )
+                        cmd = [rscript_bin, "-e", r_code, seasons_arg, str(tmp_csv)]
+                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+                    if res.returncode != 0:
+                        self.last_error = f"Rscript exit {res.returncode}: {res.stderr.strip()[:160]}"
+                        return None
+                    if not tmp_csv.exists():
+                        self.last_error = "Rscript produced no output file"
+                        return None
+                    reason = _validate_r_csv(tmp_csv, season_key)
+                    if reason is not None:
+                        self.last_error = f"Rscript output rejected: {reason}"
+                        return None
+                    os.replace(tmp_csv, out_csv)
+                except subprocess.TimeoutExpired:
+                    self.last_error = f"Rscript timed out after {timeout_s}s (raise {R_TIMEOUT_ENV} to allow longer)"
                     return None
+                finally:
+                    try:
+                        tmp_csv.unlink()
+                    except FileNotFoundError:
+                        pass
             if out_csv.exists():
                 with open(out_csv, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
-                    rows = [self._normalize_row(r, idx) for idx, r in enumerate(reader, 1) if not _is_missing(r.get("posteam"))]
+                    # idx is only a fallback for rows with no play_id (real nflverse data always has one)
+                    rows = [
+                        self._normalize_row(r, idx)
+                        for idx, r in enumerate(reader, 1)
+                        if _pbp_row_is_playable(r)
+                    ]
                     if rows:
                         return rows
         except Exception as exc:
@@ -1651,15 +1771,7 @@ class NFLDataBridge:
         records = df.to_dict(orient="records")
         out: List[Dict[str, Any]] = []
         for idx, r in enumerate(records, 1):
-            if _is_missing(r.get("posteam")):
-                continue
-            pa = _safe_int(r.get("pass_attempt"), 0)
-            ra = _safe_int(r.get("rush_attempt"), 0)
-            pt = _safe_str(r.get("play_type"), "").lower()
-            pen = _safe_opt_flag(r.get("penalty")) or 0
-            to = _safe_opt_flag(r.get("timeout")) or 0
-            desc = _safe_str(r.get("desc"), "").lower()
-            if pa == 0 and ra == 0 and pt not in ("pass", "run") and not pen and not to and "penalty" not in desc and "timeout" not in desc:
+            if not _pbp_row_is_playable(r):
                 continue
             out.append(self._normalize_row(r, idx))
         return out
