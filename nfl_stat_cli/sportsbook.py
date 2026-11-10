@@ -1,12 +1,15 @@
 """
-NFL-Stat-CLI Sportsbook & Game Handicapping Engine.
-Applies quantitative sports betting modeling to NFL game data:
-- Team Power Ratings derived from Net EPA/play, offensive scoring efficiency, and success rate.
-- Modern Home Field Advantage (HFA = 1.8 pts).
-- Point Spread derivation with key-number snapping (3, 7, 6, 10, 4, 14).
-- Game Total (Over/Under) estimation from scoring pace and drive efficiency.
-- Win Probability via normal distribution (NFL margin std dev = 13.5 pts) and American Moneylines.
-- Against The Spread (ATS) and Over/Under validation on historical and live game results.
+Model Projections: statistical game projections built from play-by-play data.
+- Team power ratings derived from net EPA/play, scoring differential, and success rate.
+- Home-field advantage (HFA = 1.8 pts).
+- Projected point spread: snapped onto an NFL key number (3, 7, 10, 6, 4, in that priority order) when the
+  raw margin is within 0.5 pts of one, otherwise rounded to the nearest half point (see KEY_NFL_NUMBERS,
+  KEY_NUMBER_SNAP_WINDOW and SPREAD_ROUNDING_STEP).
+- Projected game total from scoring pace and drive efficiency.
+- Win probability from a normal model (margin standard deviation = 13.5 pts) and moneyline-style
+  conversions that include a modeled margin.
+- Model accuracy vs. actual results on completed games, using only games played before each game's week.
+Use `--explain` / `/explain` for the formulas, generated from the constants in this module.
 """
 
 from __future__ import annotations
@@ -14,11 +17,64 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+PROJECTIONS_TITLE = "Model Projections"
+PROJECTIONS_DISCLAIMER = (
+    "Statistical model projections for analysis and entertainment. Not betting advice. "
+    "We don't take bets or link to sportsbooks, and we aren't affiliated with the NFL."
+)
+
 HOME_FIELD_ADVANTAGE_PTS = 1.8
 NFL_MARGIN_STD_DEV = 13.5
 LEAGUE_AVERAGE_TOTAL = 44.0
 
-KEY_NFL_NUMBERS = [3.0, 7.0, 6.0, 10.0, 4.0, 14.0]
+# Spread key-number snapping (see snap_to_sportsbook_spread):
+# - KEY_NFL_NUMBERS: the most common NFL final margins, in PRIORITY order. When the absolute raw spread is
+#   within KEY_NUMBER_SNAP_WINDOW (inclusive) of one or more key numbers, the line snaps to the key listed
+#   first here (so 3.5 -> 3 because 3 outranks 4, and 6.5 -> 7 because 7 outranks 6).
+# - Otherwise the spread is rounded to the nearest SPREAD_ROUNDING_STEP. The sign is kept (negative = home favored).
+KEY_NFL_NUMBERS = [3.0, 7.0, 10.0, 6.0, 4.0]
+KEY_NUMBER_SNAP_WINDOW = 0.5
+
+# Spread rounding step for lines that are not snapped onto a key number (nearest half point).
+SPREAD_ROUNDING_STEP = 0.5
+
+# Tolerance for float noise when comparing a margin's distance with KEY_NUMBER_SNAP_WINDOW.
+_SNAP_EPSILON = 1e-9
+
+# Power rating = POWER_EPA_SCALE * net EPA/play * POWER_EPA_WEIGHT + point differential * POWER_DIFF_WEIGHT
+POWER_EPA_SCALE = 26.0
+POWER_EPA_WEIGHT = 0.65
+POWER_DIFF_WEIGHT = 0.35
+
+# Projected total = LEAGUE_AVERAGE_TOTAL + TOTAL_EPA_SCALE * (EPA adjustment), clamped to [TOTAL_MIN, TOTAL_MAX]
+# and rounded to the nearest half point. These mirror the literals inside handicap_matchup();
+# tests/test_model_projections.py keeps them in sync.
+TOTAL_EPA_SCALE = 24.0
+TOTAL_MIN = 37.0
+TOTAL_MAX = 56.0
+TOTAL_ROUNDING_STEP = 0.5
+
+# Moneyline conversion: each side's win probability is clamped to [MONEYLINE_PROB_MIN, MONEYLINE_PROB_MAX],
+# multiplied by MONEYLINE_MARGIN_FACTOR (the modeled margin), capped at MONEYLINE_IMPLIED_CAP, then converted.
+MONEYLINE_PROB_MIN = 0.01
+MONEYLINE_PROB_MAX = 0.99
+MONEYLINE_MARGIN_FACTOR = 1.045   # 4.5% modeled margin; labels and --explain text are derived from this
+MONEYLINE_IMPLIED_CAP = 0.98
+
+
+def modeled_margin_pct() -> float:
+    """The modeled margin built into the moneylines, as a percentage (from MONEYLINE_MARGIN_FACTOR)."""
+    return round((MONEYLINE_MARGIN_FACTOR - 1.0) * 100.0, 4)
+
+
+def _fmt_num(x: float) -> str:
+    """Compact number text for labels (13.5 -> '13.5', 26.0 -> '26', 2.5000 -> '2.5')."""
+    return f"{x:.4f}".rstrip("0").rstrip(".") if x != int(x) else str(int(x))
+
+
+def modeled_margin_label() -> str:
+    """Exact label shown wherever moneylines are displayed."""
+    return f"Includes a modeled {_fmt_num(modeled_margin_pct())}% margin (typical market hold)"
 
 
 def normal_cdf(x: float) -> float:
@@ -79,8 +135,8 @@ def compute_team_power_ratings(plays: List[Dict[str, Any]], season: int) -> Dict
         pt_diff = avg_pts_for - avg_pts_against
 
         # Quantitative power rating scaled to points relative to average NFL team (0.0):
-        # Net EPA scaled by ~25.0 points per EPA/play unit, blended with scoring differential
-        power_rating = (net_epa * 26.0) * 0.65 + (pt_diff * 0.35)
+        # Net EPA scaled by POWER_EPA_SCALE points per EPA/play unit, blended with scoring differential
+        power_rating = (net_epa * POWER_EPA_SCALE) * POWER_EPA_WEIGHT + (pt_diff * POWER_DIFF_WEIGHT)
 
         raw_stats[t] = {
             "team": t,
@@ -100,25 +156,50 @@ def compute_team_power_ratings(plays: List[Dict[str, Any]], season: int) -> Dict
 
 def snap_to_sportsbook_spread(raw_spread: float) -> float:
     """
-    Snap continuous mathematical margin to standard half-point sportsbook hook lines
-    while respecting key NFL margin distribution numbers (3, 7, 6, 10).
+    Turn a continuous projected spread into a displayed line.
+
+    Works on the absolute value of raw_spread:
+    - if it is within KEY_NUMBER_SNAP_WINDOW (inclusive) of a number in KEY_NFL_NUMBERS, the line snaps to
+      that key number; when several keys are in range, the one listed first in KEY_NFL_NUMBERS wins;
+    - otherwise it is rounded to the nearest SPREAD_ROUNDING_STEP.
+    The sign is then restored (negative = home favored). A zero result is always 0.0, never -0.0.
     """
-    # Round to nearest 0.5
-    rounded = round(raw_spread * 2.0) / 2.0
-    # Avoid flat 0.0 if there is any slight edge (make it -0.5 or +0.5 or PK)
-    return rounded
+    sign = -1.0 if raw_spread < 0 else 1.0
+    mag = abs(raw_spread)
+    snapped = None
+    for key in KEY_NFL_NUMBERS:
+        if abs(mag - key) <= KEY_NUMBER_SNAP_WINDOW + _SNAP_EPSILON:
+            snapped = float(key)
+            break
+    if snapped is None:
+        snapped = _round_to_spread_step(mag)
+    result = sign * snapped
+    return 0.0 if result == 0 else result
+
+
+def _round_to_spread_step(raw_spread: float) -> float:
+    """Plain rounding to the nearest SPREAD_ROUNDING_STEP (no key-number snapping), symmetric in sign."""
+    sign = -1.0 if raw_spread < 0 else 1.0
+    result = sign * (round(abs(raw_spread) / SPREAD_ROUNDING_STEP) * SPREAD_ROUNDING_STEP)
+    return 0.0 if result == 0 else result
+
+
+def spread_snapped_to_key(raw_spread: float) -> bool:
+    """True when the key-number rule moved the line away from plain SPREAD_ROUNDING_STEP rounding."""
+    return abs(snap_to_sportsbook_spread(raw_spread) - _round_to_spread_step(raw_spread)) > _SNAP_EPSILON
 
 
 def calculate_american_moneyline(win_prob: float) -> Tuple[int, int]:
     """
-    Derive American Moneyline odds for home and away teams from win probability
-    with standard ~4.5% sportsbook theoretical hold (vigorish).
+    Convert a win probability into American-style moneyline values for home and away.
+    Each side's probability is multiplied by MONEYLINE_MARGIN_FACTOR (the modeled margin, see
+    modeled_margin_label()) before conversion.
     """
-    p = max(0.01, min(0.99, win_prob))
+    p = max(MONEYLINE_PROB_MIN, min(MONEYLINE_PROB_MAX, win_prob))
 
-    # Incorporate vig into implied book probabilities
-    p_home_vig = min(0.98, p * 1.025)
-    p_away_vig = min(0.98, (1.0 - p) * 1.025)
+    # Include the modeled margin in the implied probabilities
+    p_home_vig = min(MONEYLINE_IMPLIED_CAP, p * MONEYLINE_MARGIN_FACTOR)
+    p_away_vig = min(MONEYLINE_IMPLIED_CAP, (1.0 - p) * MONEYLINE_MARGIN_FACTOR)
 
     def to_american(prob: float) -> int:
         if prob >= 0.50:
@@ -140,8 +221,9 @@ def handicap_matchup(
     away_score: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Complete quantitative sportsbook handicapping of an NFL game:
-    Spread, Moneyline, Over/Under Total, Win Probability, and ATS cover validation.
+    Complete model projection for an NFL game:
+    projected spread, moneyline-style values, projected total, win probability, and, when the
+    game has been played, how the model's projection compared with the actual result.
     """
     home_pr = power_ratings.get(home_team, {}).get("power_rating", 0.0)
     away_pr = power_ratings.get(away_team, {}).get("power_rating", 0.0)
@@ -158,7 +240,10 @@ def handicap_matchup(
     # Traditional spread is expressed from home perspective:
     # If Home is favored by 3.5, spread = -3.5
     raw_spread = -raw_home_margin
+    # The snapped line drives everything shown below (labels, projected score, result vs. projection);
+    # the raw margin stays available as expected_margin.
     spread_line = snap_to_sportsbook_spread(raw_spread)
+    snapped_to_key = spread_snapped_to_key(raw_spread)
 
     # Favorite display
     if spread_line < 0:
@@ -168,8 +253,8 @@ def handicap_matchup(
         fav_label = f"{away_team} {-spread_line:+.1f}"
         dog_label = f"{home_team} {+spread_line:+.1f}"
     else:
-        fav_label = "PK (Pick'em)"
-        dog_label = "PK (Pick'em)"
+        fav_label = "EVEN (0.0)"
+        dog_label = "EVEN (0.0)"
 
     # Total (Over/Under) estimation:
     # Baseline 44.0 + offensive EPA/play + EPA/play *allowed* by each defence.
@@ -200,22 +285,22 @@ def handicap_matchup(
         actual_margin = home_score - away_score
         actual_total = home_score + away_score
 
-        # ATS: Home covers if actual_margin > -spread_line
-        # (e.g. spread = -3.5, home wins by 4 -> 4 > 3.5 -> Home Covered)
+        # Margin vs. projection: the home team finished above the projected margin if
+        # actual_margin > -spread_line (e.g. projected -3.5, home wins by 4 -> 4 > 3.5)
         if actual_margin > -spread_line:
-            ats_result = f"{home_team} Covered"
+            ats_result = f"{home_team} above projection"
         elif actual_margin < -spread_line:
-            ats_result = f"{away_team} Covered"
+            ats_result = f"{away_team} above projection"
         else:
-            ats_result = "PUSH"
+            ats_result = "At projection"
 
-        # Over / Under
+        # Total vs. projected total
         if actual_total > total_line:
-            ou_result = f"OVER ({actual_total} > {total_line})"
+            ou_result = f"Above projected total ({actual_total} vs {total_line})"
         elif actual_total < total_line:
-            ou_result = f"UNDER ({actual_total} < {total_line})"
+            ou_result = f"Below projected total ({actual_total} vs {total_line})"
         else:
-            ou_result = f"PUSH ({actual_total})"
+            ou_result = f"At projected total ({actual_total})"
 
     return {
         "home_team": home_team,
@@ -226,6 +311,7 @@ def handicap_matchup(
         "hfa": HOME_FIELD_ADVANTAGE_PTS,
         "expected_margin": round(raw_home_margin, 2),
         "spread": spread_line,
+        "spread_snapped_to_key": snapped_to_key,
         "favorite_str": fav_label,
         "underdog_str": dog_label,
         "total": total_line,
@@ -244,25 +330,97 @@ def handicap_matchup(
     }
 
 
+def plays_before_week(plays: List[Dict[str, Any]], season: int, week: Optional[int]) -> List[Dict[str, Any]]:
+    """Plays from `season` in weeks strictly before `week` (what was known before that week's games)."""
+    if week is None:
+        return [p for p in plays if int(p.get("season", 0) or 0) == int(season)]
+    return [
+        p for p in plays
+        if int(p.get("season", 0) or 0) == int(season) and int(p.get("week", 0) or 0) < int(week)
+    ]
+
+
+class PregameRatings:
+    """Power ratings for a game, built only from games played in earlier weeks of that season.
+
+    Using season-to-date ratings for a game that is already in the data would let the model "see"
+    that game (and later ones), which makes accuracy numbers look better than they are.
+    """
+
+    def __init__(self, plays: List[Dict[str, Any]], season: int) -> None:
+        self._plays = plays
+        self._season = season
+        self._cache: Dict[Optional[int], Dict[str, Dict[str, Any]]] = {}
+
+    def for_week(self, week: Optional[int]) -> Dict[str, Dict[str, Any]]:
+        key = int(week) if week is not None else None
+        if key not in self._cache:
+            self._cache[key] = compute_team_power_ratings(
+                plays_before_week(self._plays, self._season, key), self._season
+            )
+        return self._cache[key]
+
+
+def summarize_model_accuracy(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Summarize how projections compared with actual results over completed games."""
+    done = [r for r in results if r.get("actual_margin") is not None]
+    if not done:
+        return None
+    n = len(done)
+    decided = [r for r in done if r["actual_margin"] != 0]  # ties have no winner to project
+    winner_ok = sum(1 for r in decided if (r["expected_margin"] > 0) == (r["actual_margin"] > 0))
+    margin_err = sum(abs(r["actual_margin"] - r["expected_margin"]) for r in done) / n
+    total_err = sum(abs(r["actual_total"] - r["total"]) for r in done) / n
+    return {
+        "games": n,
+        "winner_games": len(decided),
+        "winner_correct": winner_ok,
+        "winner_pct": round(winner_ok / len(decided) * 100.0, 1) if decided else 0.0,
+        "avg_margin_error": round(margin_err, 1),
+        "avg_total_error": round(total_err, 1),
+    }
+
+
+def render_accuracy_line(summary: Optional[Dict[str, Any]]) -> str:
+    if not summary:
+        return ""
+    return (
+        f"Model accuracy vs. actual results ({summary['games']} completed games): projected winner "
+        f"{summary['winner_correct']}/{summary['winner_games']} ({summary['winner_pct']:.1f}%), "
+        f"average margin error {summary['avg_margin_error']:.1f} pts, "
+        f"average total error {summary['avg_total_error']:.1f} pts."
+    )
+
+
+def render_disclaimer_block() -> str:
+    from . import C
+
+    return f"\n  {C.BOLD}{PROJECTIONS_DISCLAIMER}{C.RESET}"
+
+
 def render_sportsbook_board_view(
     plays: List[Dict[str, Any]],
     season: int,
     week_filter: Optional[int] = None,
 ) -> str:
-    """Render a colorized ASCII table of NFL matchups with Vegas-modeled spreads, moneylines, and O/U."""
+    """Render a colorized ASCII table of NFL matchups with modeled spreads, moneylines, and totals."""
     from . import C, AsciiArtRenderer, extract_games_summary
 
-    power_ratings = compute_team_power_ratings(plays, season)
+    pregame = PregameRatings(plays, season)
     games = extract_games_summary(plays, season)
     if week_filter is not None:
         games = [g for g in games if int(g.get("week", -1)) == int(week_filter)]
 
     if not games:
-        return f"\n{C.YELLOW}⚠ No games recorded in dataset for season {season}{f' Week {week_filter}' if week_filter else ''}.{C.RESET}"
+        return (
+            f"{render_disclaimer_block()}\n{C.YELLOW}⚠ No games recorded in dataset for season {season}"
+            f"{f' Week {week_filter}' if week_filter else ''}.{C.RESET}"
+        )
 
-    title_str = f"🎲 Sportsbook Betting Lines & Game Handicapping ({season}{f' • Week {week_filter}' if week_filter else ''})"
-    headers = ["Week", "Matchup", "Spread Line", "Total (O/U)", "Moneyline (H / A)", "Model Score", "Actual", "ATS Result"]
+    title_str = f"📊 {PROJECTIONS_TITLE} ({season}{f' • Week {week_filter}' if week_filter else ''})"
+    headers = ["Week", "Matchup", "Model Spread", "Model Total", "Model Moneyline (H / A)", "Model Score", "Actual", "Model vs. Actual"]
     rows = []
+    results: List[Dict[str, Any]] = []
 
     for g in games:
         h = g["home_team"]
@@ -271,7 +429,8 @@ def render_sportsbook_board_view(
         hs = g.get("home_score")
         as_ = g.get("away_score")
 
-        hc = handicap_matchup(h, a, power_ratings, week=wk, home_score=hs, away_score=as_)
+        hc = handicap_matchup(h, a, pregame.for_week(wk), week=wk, home_score=hs, away_score=as_)
+        results.append(hc)
 
         ml_h_str = f"{hc['home_ml']:+d}"
         ml_a_str = f"{hc['away_ml']:+d}"
@@ -280,17 +439,17 @@ def render_sportsbook_board_view(
         actual_str = f"{as_}-{hs}" if (hs is not None and as_ is not None) else "TBD"
         score_str = f"{hc['proj_away_score']:.1f}-{hc['proj_home_score']:.1f}"
 
-        ats_color = C.GREEN if "Covered" in hc["ats_result"] else C.RESET
+        res_color = C.GREEN if "above projection" in hc["ats_result"] else C.RESET
 
         rows.append([
             f"Wk {wk}",
             f"{a} @ {C.BOLD}{h}{C.RESET}",
             f"{C.BOLD}{C.GOLD}{hc['favorite_str']}{C.RESET}",
-            f"O/U {hc['total']:.1f}",
+            f"{hc['total']:.1f}",
             ml_str,
             score_str,
             actual_str,
-            f"{ats_color}{hc['ats_result']}{C.RESET}",
+            f"{res_color}{hc['ats_result']}{C.RESET}",
         ])
 
     tbl = AsciiArtRenderer.render_table(
@@ -299,8 +458,18 @@ def render_sportsbook_board_view(
         rows,
         alignments=["center", "left", "center", "center", "center", "center", "center", "center"],
     )
-    footer = f"\n  {C.DIM}Lines modeled via Power Rating differentials, Home Field Advantage (+{HOME_FIELD_ADVANTAGE_PTS} pts), & Net EPA. Standings Std Dev = {NFL_MARGIN_STD_DEV} pts.{C.RESET}"
-    return f"\n{tbl}{footer}"
+    notes = [
+        f"Projections use power-rating differences, home-field advantage (+{HOME_FIELD_ADVANTAGE_PTS} pts), and net EPA; "
+        f"win probability uses a normal model with a margin standard deviation of {NFL_MARGIN_STD_DEV} pts.",
+        modeled_margin_label(),
+        "Each game's ratings use only games from earlier weeks, so Week 1 has no prior games (ratings start at 0).",
+    ]
+    acc = render_accuracy_line(summarize_model_accuracy(results))
+    if acc:
+        notes.append(acc)
+    notes.append("Formulas: run with --explain (or type /explain).")
+    footer = "\n" + "\n".join(f"  {C.DIM}{n}{C.RESET}" for n in notes)
+    return f"{render_disclaimer_block()}\n{tbl}{footer}"
 
 
 def render_power_ratings_view(plays: List[Dict[str, Any]], season: int) -> str:
@@ -310,7 +479,7 @@ def render_power_ratings_view(plays: List[Dict[str, Any]], season: int) -> str:
     ratings = compute_team_power_ratings(plays, season)
     sorted_teams = sorted(ratings.values(), key=lambda x: x["power_rating"], reverse=True)
 
-    title_str = f"⚡ NFL Team Power Ratings & Handicapper Efficiency ({season})"
+    title_str = f"⚡ NFL Team Power Ratings & Efficiency ({season}, season to date)"
     headers = ["Rank", "Team", "Power Rating", "Net EPA/Play", "Off EPA", "Def EPA", "Success %", "Avg Pts For", "Avg Pts Against", "Point Diff"]
     rows = []
 
@@ -335,7 +504,7 @@ def render_power_ratings_view(plays: List[Dict[str, Any]], season: int) -> str:
         rows,
         alignments=["right", "center", "right", "right", "right", "right", "right", "right", "right", "right"],
     )
-    return f"\n{tbl}"
+    return f"{render_disclaimer_block()}\n{tbl}"
 
 
 def compute_underdog_leaders(
@@ -345,12 +514,13 @@ def compute_underdog_leaders(
     limit: Optional[int] = 5,
 ) -> List[Dict[str, Any]]:
     """
-    Compute straight-up (SU) and against-the-spread (ATS) performance for NFL teams playing as underdogs.
-    Sorted primarily by straight-up upset wins (most wins as an underdog), then win percentage, then ATS covers.
+    Compute straight-up (SU) results and results versus the projected margin for NFL teams that the model
+    projects as underdogs. Sorted primarily by outright wins as an underdog, then win percentage, then the
+    share of games finished above the projected margin.
     """
     from . import resolve_team_abbr, extract_games_summary
 
-    ratings = compute_team_power_ratings(plays, season)
+    pregame = PregameRatings(plays, season)
     games = extract_games_summary(plays, season)
 
     dog_stats: Dict[str, Dict[str, Any]] = {}
@@ -363,7 +533,7 @@ def compute_underdog_leaders(
         hs = g.get("home_score")
         as_ = g.get("away_score")
 
-        hc = handicap_matchup(h, a, power_ratings=ratings, week=wk, home_score=hs, away_score=as_)
+        hc = handicap_matchup(h, a, power_ratings=pregame.for_week(wk), week=wk, home_score=hs, away_score=as_)
         spread = hc["spread"]
 
         if spread < 0:
@@ -463,16 +633,16 @@ def render_underdog_leaderboard_view(
 
     leaders = compute_underdog_leaders(plays, season, team_filter=team_filter, limit=limit)
     if not leaders:
-        return f"\n{C.YELLOW}⚠ No underdog games recorded for season {season}.{C.RESET}"
+        return f"{render_disclaimer_block()}\n{C.YELLOW}⚠ No underdog games recorded for season {season}.{C.RESET}"
 
     sub_parts = [str(season)]
     if team_filter:
         sub_parts.append(f"Team: {team_filter.upper()}")
     if limit and not team_filter:
         sub_parts.append(f"Top {limit}")
-    title_str = f"🎲 NFL Underdog Performance Leaders: Most Wins as Underdog ({' • '.join(sub_parts)})"
+    title_str = f"📊 NFL Underdog Performance Leaders: Most Wins as Underdog ({' • '.join(sub_parts)})"
 
-    headers = ["Rank", "Team", "Dog Games", "SU Wins", "SU Record", "Win %", "ATS Record", "Cover %", "Avg Spread"]
+    headers = ["Rank", "Team", "Dog Games", "SU Wins", "SU Record", "Win %", "Vs Model Margin", "Above Margin %", "Avg Spread"]
     rows = []
     for idx, r in enumerate(leaders, 1):
         su_win_color = C.GREEN if r["su_wins"] > 0 else C.RESET
@@ -494,8 +664,11 @@ def render_underdog_leaderboard_view(
         rows,
         alignments=["right", "center", "center", "center", "center", "right", "center", "right", "right"],
     )
-    footer = f"\n  {C.DIM}Straight-Up (SU) wins indicate outright underdog victories (upsets). Lines derived from Net EPA & power ratings.{C.RESET}"
-    return f"\n{tbl}{footer}"
+    footer = (
+        f"\n  {C.DIM}Straight-Up (SU) wins are outright underdog victories (upsets). Projections come from Net EPA & power ratings "
+        f"using only earlier weeks. 'Vs Model Margin' is wins-losses-ties for finishing above the projected margin.{C.RESET}"
+    )
+    return f"{render_disclaimer_block()}\n{tbl}{footer}"
 
 
 
@@ -506,10 +679,9 @@ def render_game_handicap_dossier_view(
     season: int,
     week: Optional[int] = None,
 ) -> str:
-    """Render an in-depth quantitative sportsbook handicapping dossier for a single matchup."""
+    """Render an in-depth model projection dossier for a single matchup."""
     from . import C, AsciiArtRenderer, extract_games_summary
 
-    power_ratings = compute_team_power_ratings(plays, season)
     games = extract_games_summary(plays, season)
     target_game = next(
         (g for g in games if g["home_team"].upper() == home_team.upper() and g["away_team"].upper() == away_team.upper()),
@@ -519,6 +691,9 @@ def render_game_handicap_dossier_view(
     as_ = target_game.get("away_score") if target_game else None
     wk = target_game.get("week") if target_game else week
 
+    # A game already in the data is projected from earlier weeks only; an unplayed matchup uses season to date.
+    power_ratings = PregameRatings(plays, season).for_week(wk if target_game else None)
+
     hc = handicap_matchup(home_team, away_team, power_ratings, week=wk, home_score=hs, away_score=as_)
 
     h_bar_len = int(round(hc["home_win_prob"] / 2.5))
@@ -526,20 +701,22 @@ def render_game_handicap_dossier_view(
     win_bar = f"{C.CYAN}{'█' * h_bar_len}{C.RESET}{C.YELLOW}{'░' * a_bar_len}{C.RESET}"
 
     lines = [
+        render_disclaimer_block(),
         f"\n{C.BOLD}{C.GOLD}╔══════════════════════════════════════════════════════════════════════════╗{C.RESET}",
-        f"{C.BOLD}{C.GOLD}║             🎲 SPORTSBOOK HANDICAPPING DOSSIER & GAME ODDS               ║{C.RESET}",
+        f"{C.BOLD}{C.GOLD}║                   📊 MODEL PROJECTION DOSSIER                            ║{C.RESET}",
         f"{C.BOLD}{C.GOLD}╚══════════════════════════════════════════════════════════════════════════╝{C.RESET}",
         f"  {C.BOLD}Matchup:{C.RESET} {away_team} @ {C.BOLD}{home_team}{C.RESET} (Season {season}{f' • Week {wk}' if wk else ''})",
         "",
-        f"  {C.CYAN}📊 SPREAD & TOTAL (OVER/UNDER):{C.RESET}",
+        f"  {C.CYAN}📊 MODELED SPREAD & TOTAL:{C.RESET}",
         f"     • Point Spread:        {C.BOLD}{C.GOLD}{hc['favorite_str']}{C.RESET} (Raw Margin: {hc['expected_margin']:+.2f} pts)",
-        f"     • Over / Under Total:  {C.BOLD}{hc['total']:.1f} pts{C.RESET}",
+        f"     • Projected Total:     {C.BOLD}{hc['total']:.1f} pts{C.RESET}",
         f"     • Projected Score:     {C.BOLD}{away_team} {hc['proj_away_score']:.1f}  -  {home_team} {hc['proj_home_score']:.1f}{C.RESET}",
         "",
-        f"  {C.GREEN}💰 AMERICAN MONEYLINES & WIN PROBABILITIES:{C.RESET}",
+        f"  {C.GREEN}📈 MODELED MONEYLINES & WIN PROBABILITIES:{C.RESET}",
         f"     • {home_team} (Home):         {C.BOLD}{hc['home_ml']:+d}{C.RESET}  (Win Probability: {C.BOLD}{hc['home_win_prob']:.1f}%{C.RESET})",
         f"     • {away_team} (Away):         {C.BOLD}{hc['away_ml']:+d}{C.RESET}  (Win Probability: {C.BOLD}{hc['away_win_prob']:.1f}%{C.RESET})",
         f"     • Probability Bar:     [{win_bar}]",
+        f"     • {C.DIM}{modeled_margin_label()}{C.RESET}",
         "",
         f"  {C.MAGENTA}⚖️  POWER RATINGS & ADVANTAGES:{C.RESET}",
         f"     • {home_team} Power Rating:   {hc['home_rating']:+.2f} pts",
@@ -550,12 +727,16 @@ def render_game_handicap_dossier_view(
     if hs is not None and as_ is not None:
         lines.extend([
             "",
-            f"  {C.YELLOW}🏁 COMPLETED GAME OUTCOME & ATS EVALUATION:{C.RESET}",
+            f"  {C.YELLOW}🏁 COMPLETED GAME: MODEL VS. ACTUAL RESULT:{C.RESET}",
             f"     • Final Score:         {away_team} {as_}  -  {home_team} {hs}",
-            f"     • Spread Result (ATS): {C.BOLD}{hc['ats_result']}{C.RESET}",
-            f"     • Total Result (O/U):  {C.BOLD}{hc['ou_result']}{C.RESET}",
+            f"     • Margin vs. Model:    {C.BOLD}{hc['ats_result']}{C.RESET}",
+            f"     • Total vs. Model:     {C.BOLD}{hc['ou_result']}{C.RESET}",
         ])
 
+    lines.extend([
+        "",
+        f"  {C.DIM}Ratings use only games from earlier weeks. Formulas: run with --explain (or type /explain).{C.RESET}",
+    ])
     return "\n".join(lines)
 
 
@@ -563,21 +744,23 @@ def interactive_sportsbook_browser(
     plays: List[Dict[str, Any]],
     active_season: int,
 ) -> None:
-    """Interactive drill-down menu for NFL Sportsbook odds, spreads, and power ratings."""
+    """Interactive drill-down menu for Model Projections: spreads, totals, win probability, and power ratings."""
     from . import C, prompt_input, extract_games_summary
 
     while True:
-        print(f"\n{C.BOLD}{C.GOLD}=== 🎲 NFL SPORTSBOOK HANDICAPPING CENTER ==={C.RESET}")
+        print(f"\n{C.BOLD}{C.GOLD}=== 📊 {PROJECTIONS_TITLE.upper()} ==={C.RESET}")
+        print(f"  {C.BOLD}{PROJECTIONS_DISCLAIMER}{C.RESET}")
         print(f"  Active Season: {C.BOLD}{active_season}{C.RESET}")
-        print("  Select Handicapping Browsing Mode:")
-        print(f"    [1] {C.BOLD}Browse Weekly Betting Board{C.RESET} (Spreads, Moneylines, Totals & ATS Results)")
-        print(f"    [2] {C.BOLD}NFL 32-Team Power Ratings{C.RESET} (Handicapper Power Standings)")
-        print(f"    [3] {C.BOLD}Single Matchup Deep Dive{C.RESET} (Odds, Win Probability & Key Numbers)")
-        print(f"    [4] {C.BOLD}Underdog Performance Leaders{C.RESET} (Most Outright Wins & Covers as Underdog)")
+        print("  Select Browsing Mode:")
+        print(f"    [1] {C.BOLD}Browse Weekly Projections Board{C.RESET} (Spreads, Moneylines, Totals & Model vs. Actual)")
+        print(f"    [2] {C.BOLD}NFL 32-Team Power Ratings{C.RESET} (Team Power Standings)")
+        print(f"    [3] {C.BOLD}Single Matchup Deep Dive{C.RESET} (Projections, Win Probability & Key Numbers)")
+        print(f"    [4] {C.BOLD}Underdog Performance Leaders{C.RESET} (Most Outright Wins as Underdog)")
+        print(f"    [5] {C.BOLD}How these projections are computed{C.RESET} (Formulas)")
         print(f"    [q] {C.DIM}Return to main menu{C.RESET}")
 
         try:
-            choice = prompt_input("  Choose mode [1-4, q] (default: 1): ").strip().lower() or "1"
+            choice = prompt_input("  Choose mode [1-5, q] (default: 1): ").strip().lower() or "1"
         except (EOFError, KeyboardInterrupt):
             break
 
@@ -610,3 +793,117 @@ def interactive_sportsbook_browser(
                 print(render_game_handicap_dossier_view(chosen["home_team"], chosen["away_team"], plays, active_season, week=chosen["week"]))
         elif choice == "4":
             print(render_underdog_leaderboard_view(plays, active_season, limit=10))
+        elif choice == "5":
+            print(render_model_explanation())
+
+
+def explanation_example() -> Dict[str, Any]:
+    """A worked example computed by calling the real functions, so it can never drift from the code."""
+    ratings = {
+        "HOME": {"power_rating": 4.0, "off_epa": 0.05, "def_epa": 0.0},
+        "AWAY": {"power_rating": 1.0, "off_epa": 0.03, "def_epa": 0.0},
+    }
+    hc = handicap_matchup("HOME", "AWAY", ratings)
+    hc["inputs"] = ratings
+    return hc
+
+
+def spread_snap_examples() -> List[Tuple[float, float]]:
+    """
+    (raw margin, line) pairs for the explanation, chosen from the snapping constants and computed with the real
+    snap_to_sportsbook_spread(), so the text can never drift: just inside the window of the first two keys, each
+    exact tie between two keys (higher priority wins), one value no key is near, and one negative (home favored).
+    """
+    keys = [float(k) for k in KEY_NFL_NUMBERS]
+    window = KEY_NUMBER_SNAP_WINDOW
+    raw: List[float] = []
+    if keys:
+        raw.append(keys[0] - window * 0.2)
+    if len(keys) > 1:
+        raw.append(keys[1] + window * 0.8)
+    ties = sorted({round((a + b) / 2.0, 4) for i, a in enumerate(keys) for b in keys[i + 1:]
+                   if 0 < abs(a - b) <= 2 * window + _SNAP_EPSILON})
+    raw.extend(ties)
+    start = min(keys) if keys else 0.0
+    for i in range(1, 200):
+        v = round(start + i * SPREAD_ROUNDING_STEP, 4)
+        if all(abs(v - k) > window + _SNAP_EPSILON for k in keys):
+            raw.append(v)
+            break
+    if len(keys) > 1:
+        raw.append(-(keys[1] + window * 0.8))
+    out: List[Tuple[float, float]] = []
+    for m in raw:
+        m = round(m, 4)
+        if all(m != prev for prev, _ in out):
+            out.append((m, snap_to_sportsbook_spread(m)))
+    return out
+
+
+def render_model_explanation() -> str:
+    """Plain-language formulas behind the projections, generated from this module's constants."""
+    from . import C
+
+    n = _fmt_num
+    keys = ", ".join(n(k) for k in KEY_NFL_NUMBERS)
+    snap_examples = ", ".join(f"{n(m)} -> {n(s)}" for m, s in spread_snap_examples())
+    ex = explanation_example()
+    ex_raw_spread = -ex["expected_margin"]
+    ex_snap_note = (
+        f"(snapped onto key number {n(abs(ex['spread']))})" if ex["spread_snapped_to_key"]
+        else f"(no key number within {n(KEY_NUMBER_SNAP_WINDOW)} pts; rounded to the nearest {n(SPREAD_ROUNDING_STEP)})"
+    )
+    z = ex["expected_margin"] / NFL_MARGIN_STD_DEV
+    p_cap = n(MONEYLINE_IMPLIED_CAP)
+    lines = [
+        render_disclaimer_block(),
+        "",
+        f"{C.BOLD}{C.GOLD}HOW {PROJECTIONS_TITLE.upper()} ARE COMPUTED{C.RESET}",
+        f"{C.DIM}Every number below is read from the constants in the code; the worked example calls the real functions.{C.RESET}",
+        "",
+        f"{C.BOLD}1. Team power rating{C.RESET} (points relative to an average team)",
+        "   net EPA/play = offense EPA/play - EPA/play allowed by the defense",
+        f"   power rating = {n(POWER_EPA_SCALE)} x net EPA/play x {n(POWER_EPA_WEIGHT)}"
+        f" + average point differential x {n(POWER_DIFF_WEIGHT)}",
+        "   Ratings for a game use only games played in earlier weeks of that season.",
+        "",
+        f"{C.BOLD}2. Projected spread and key numbers{C.RESET}",
+        f"   expected home margin = home rating - away rating + home-field advantage ({n(HOME_FIELD_ADVANTAGE_PTS)} pts)",
+        "   spread (home view) = -(expected home margin), then snapped to a key number or rounded:",
+        f"   Key numbers ({keys}, in priority order) are the most common final margins in NFL games.",
+        f"   If the absolute spread is within {n(KEY_NUMBER_SNAP_WINDOW)} pts (inclusive) of a key number, the line moves"
+        " onto it; if more than one key is in range, the one listed first wins.",
+        f"   Otherwise the spread is rounded to the nearest {n(SPREAD_ROUNDING_STEP)} point."
+        " The sign is kept (negative = home favored).",
+        f"   Examples: {snap_examples}",
+        "",
+        f"{C.BOLD}3. Win probability (normal model){C.RESET}",
+        f"   P(home wins) = NormalCDF(expected home margin / {n(NFL_MARGIN_STD_DEV)}), "
+        f"where {n(NFL_MARGIN_STD_DEV)} pts is the assumed standard deviation of NFL final margins",
+        "   P(away wins) = 1 - P(home wins)",
+        "",
+        f"{C.BOLD}4. Moneyline-style values{C.RESET}",
+        f"   Each side's win probability is limited to {n(MONEYLINE_PROB_MIN)}-{n(MONEYLINE_PROB_MAX)}, multiplied by "
+        f"{n(MONEYLINE_MARGIN_FACTOR)}, and capped at {p_cap}.",
+        f"   {modeled_margin_label()}",
+        "   If that probability p is 0.5 or more: value = -(p / (1 - p)) x 100; otherwise value = +((1 - p) / p) x 100 (rounded).",
+        "",
+        f"{C.BOLD}5. Projected total and score{C.RESET}",
+        f"   total = {n(LEAGUE_AVERAGE_TOTAL)} + {n(TOTAL_EPA_SCALE)} x (EPA adjustment from both teams' offense and defense EPA/play),"
+        f" limited to {n(TOTAL_MIN)}-{n(TOTAL_MAX)} and rounded to the nearest {n(TOTAL_ROUNDING_STEP)}",
+        "   projected score: home = (total - spread) / 2, away = (total + spread) / 2",
+        "",
+        f"{C.BOLD}6. Model accuracy vs. actual results{C.RESET}",
+        "   For completed games the board compares each projection with the final score: whether the projected winner won,",
+        "   and the average margin and total error. Only earlier weeks feed each game's ratings.",
+        "",
+        f"{C.BOLD}Worked example{C.RESET} (home rating {ex['inputs']['HOME']['power_rating']:+.1f}, "
+        f"away rating {ex['inputs']['AWAY']['power_rating']:+.1f}, offense EPA/play "
+        f"{ex['inputs']['HOME']['off_epa']:.2f} and {ex['inputs']['AWAY']['off_epa']:.2f}, defense EPA/play 0.00)",
+        f"   expected home margin = {ex['home_rating']:.1f} - {ex['away_rating']:.1f} + {n(HOME_FIELD_ADVANTAGE_PTS)}"
+        f" = {ex['expected_margin']:.2f}  ->  raw spread {ex_raw_spread:+.2f}  ->  spread {ex['spread']:+.1f} {ex_snap_note}",
+        f"   z = {ex['expected_margin']:.2f} / {n(NFL_MARGIN_STD_DEV)} = {z:.3f}  ->  P(home wins) = {ex['home_win_prob']:.1f}%",
+        f"   moneyline values: home {ex['home_ml']:+d}, away {ex['away_ml']:+d}   ({modeled_margin_label()})",
+        f"   projected total {ex['total']:.1f}  ->  projected score home {ex['proj_home_score']:.1f}, away {ex['proj_away_score']:.1f}",
+    ]
+    return "\n".join(lines)
