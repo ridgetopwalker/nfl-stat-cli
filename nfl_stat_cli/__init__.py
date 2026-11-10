@@ -1643,19 +1643,69 @@ def _pbp_row_is_playable(r: Dict[str, Any]) -> bool:
     """
     Single play-inclusion predicate shared by every data backend (Python dataframes and the R bridge CSV),
     so the same season yields the same row set whichever backend loaded it.
-    Keeps rows with a possession team that are pass/rush attempts, typed pass/run, or penalty/timeout plays.
+
+    Keeps rows with a possession team that are pass/rush attempts or typed pass/run, plus genuine penalty and
+    timeout plays (those rows feed the penalty/timeout stats; per-play rates skip them, see
+    _is_scrimmage_down). An explicit penalty/timeout flag is trusted over the description. Without a flag, a
+    punt, kick, kneel or spike whose description only mentions a declined penalty is not kept. A kneel or spike
+    is never a scrimmage down for rates (even when it carries an attempt flag, in which case the row is kept
+    for the volume stats only), so its clock-killing yards stay out of the efficiency numbers.
     """
     if _is_missing(r.get("posteam")):
         return False
     pa = _safe_int(r.get("pass_attempt"), 0)
     ra = _safe_int(r.get("rush_attempt"), 0)
     pt = _safe_str(r.get("play_type"), "").lower()
-    pen = _safe_opt_flag(r.get("penalty")) or 0
-    to = _safe_opt_flag(r.get("timeout")) or 0
+    if pa or ra or pt in ("pass", "run"):
+        return True
     desc = _safe_str(r.get("desc"), "").lower()
-    if pa == 0 and ra == 0 and pt not in ("pass", "run") and not pen and not to and "penalty" not in desc and "timeout" not in desc:
+    pen_flag = _safe_opt_flag(r.get("penalty"))
+    to_flag = _safe_opt_flag(r.get("timeout"))
+    # Typed rows other than no_play (punt, kickoff, field_goal, qb_kneel, qb_spike, ...) are special-teams or
+    # clock plays; a description that only mentions a declined penalty does not make them a penalty play.
+    non_scrimmage = pt not in ("", "no_play")
+    declined_only = "declined" in desc and not re.search(r"\b(enforced|accepted|offsetting)\b", desc)
+    if pen_flag is None:
+        pen = "penalty" in desc and not declined_only
+    else:
+        pen = pen_flag == 1
+    if to_flag is None:
+        to = "timeout" in desc and not non_scrimmage
+    else:
+        to = to_flag == 1
+    return bool(pen or to)
+
+
+def _is_scrimmage_down(p: Dict[str, Any]) -> bool:
+    """True for a real offensive down (pass or run); penalty/timeout-only rows and special teams are not."""
+    pt = str(p.get("play_type", "")).lower()
+    if pt in ("no_play", "qb_kneel", "qb_spike"):
+        return False  # whatever attempt flags they carry, clock plays and no-plays are not downs for rates
+    if int(p.get("pass_attempt", 0) or 0) == 1 or int(p.get("rush_attempt", 0) or 0) == 1:
+        return True
+    return pt in ("pass", "run")
+
+
+def _is_offense_touchdown(p: Dict[str, Any]) -> bool:
+    """A touchdown scored by the team with the ball; interception/fumble/kick returns belong to the other side."""
+    if int(p.get("touchdown", 0) or 0) != 1:
         return False
-    return True
+    return not _is_defensive_score(p)
+
+
+def _is_defensive_score(r: Dict[str, Any]) -> bool:
+    """True when a score on this play went to the team without the ball (td_team, else the return_touchdown flag)."""
+    td_team = _safe_str(r.get("td_team"), "").upper()
+    posteam = _safe_str(r.get("posteam"), "").upper()
+    if td_team and posteam:
+        return td_team != posteam
+    return _safe_int(r.get("return_touchdown"), 0) == 1
+
+
+def _game_id_parts(game_id: str) -> Tuple[int, int]:
+    """(season, week) read from an nflverse-style game id such as 2025_07_AAA_BBB; (0, 0) when unreadable."""
+    m = re.match(r"^(\d{4})_(\d{1,2})_", str(game_id or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
 def _r_timeout_seconds() -> int:
@@ -1984,11 +2034,13 @@ class NFLDataBridge:
         yards_gained = _safe_float(r.get("yards_gained"), 0.0)
         ydstogo = _safe_int(r.get("ydstogo"), 10)
         touchdown = _safe_int(r.get("touchdown"), 0)
-        pass_td = _safe_int(r.get("pass_touchdown"), touchdown if (pass_attempt == 1 and sack == 0) else 0)
-        rush_td = _safe_int(r.get("rush_touchdown"), touchdown if rush_attempt == 1 else 0)
+        # a touchdown scored by the defence on a pass/rush (pick-six, fumble return) is not a passing/rushing TD
+        offense_td = touchdown if not _is_defensive_score(r) else 0
+        pass_td = _safe_int(r.get("pass_touchdown"), offense_td if (pass_attempt == 1 and sack == 0) else 0)
+        rush_td = _safe_int(r.get("rush_touchdown"), offense_td if rush_attempt == 1 else 0)
         yardline_100 = _safe_int(r.get("yardline_100"), 50)
         raw_fd = _safe_opt_flag(r.get("first_down"))
-        first_down = raw_fd if raw_fd is not None else (1 if (yards_gained >= ydstogo or touchdown == 1) else 0)
+        first_down = raw_fd if raw_fd is not None else (1 if (yards_gained >= ydstogo or offense_td == 1) else 0)
 
         passer_name = _safe_str(r.get("passer_player_name"), "")
         rusher_name = _safe_str(r.get("rusher_player_name"), "")
@@ -2053,10 +2105,12 @@ class NFLDataBridge:
                 team_win = 0
 
         epa_val = _safe_float(r.get("epa"), 0.0)
-        raw_ss = _safe_opt_flag(r.get("success"))
-        if raw_ss is None:
-            raw_ss = _safe_opt_flag(r.get("series_success"))
-        series_success = raw_ss if raw_ss is not None else (1 if epa_val > 0.0 else 0)
+        # nflverse: success = EPA > 0; series_success = the play scored a TD or earned a first down.
+        # They are different measures, so each keeps its own column and its own fallback.
+        raw_success = _safe_opt_flag(r.get("success"))
+        success = raw_success if raw_success is not None else (1 if epa_val > 0.0 else 0)
+        raw_ss = _safe_opt_flag(r.get("series_success"))
+        series_success = raw_ss if raw_ss is not None else (1 if (first_down == 1 or offense_td == 1) else 0)
 
         # Penalty attributes
         raw_pen = _safe_opt_flag(r.get("penalty"))
@@ -2105,7 +2159,11 @@ class NFLDataBridge:
                 penalty_player_name = m_pplayer.group(1).strip()
 
         # Coaching attributes
-        season_val = _safe_int(r.get("season"), 2025)
+        # Unknown stays unknown: a missing season/week comes from the game id when it carries one, else 0
+        # (0 means "unknown season": season-aware lookups must treat it as not cataloged, never as a real year)
+        game_id_raw = _safe_str(r.get("game_id"), "")
+        gid_season, gid_week = _game_id_parts(game_id_raw)
+        season_val = _safe_int(r.get("season"), gid_season)
         home_team = _safe_str(r.get("home_team"), "") or posteam
         away_team = _safe_str(r.get("away_team"), "") or defteam
         home_coach = _safe_str(r.get("home_coach"), "") or get_team_head_coach(home_team, season=season_val)
@@ -2152,8 +2210,8 @@ class NFLDataBridge:
         return {
             "play_id": _safe_int(r.get("play_id"), idx),
             "season": season_val,
-            "week": _safe_int(r.get("week"), 1),
-            "game_id": _safe_str(r.get("game_id"), "2025_01_UNK"),
+            "week": _safe_int(r.get("week"), gid_week),
+            "game_id": game_id_raw or "unknown_game",
             "posteam": posteam,
             "defteam": defteam,
             "conf": conf,
@@ -2210,10 +2268,13 @@ class NFLDataBridge:
             "down": _safe_int(r.get("down"), 1),
             "ydstogo": ydstogo,
             "yardline_100": yardline_100,
+            "success": success,
             "series_success": series_success,
             "first_down": first_down,
             "explosive_play": 1 if yards_gained >= 20.0 else 0,
             "touchdown": touchdown,
+            "td_team": _safe_str(r.get("td_team"), ""),
+            "return_touchdown": _safe_int(r.get("return_touchdown"), 0),
             "pass_touchdown": pass_td,
             "rush_touchdown": rush_td,
             "interception": _safe_int(r.get("interception"), 0),
@@ -2600,8 +2661,8 @@ DEFAULT_STATS: Dict[str, StatDefinition] = {
         category="traditional",
         group_by="team",
         formula="success_rate * 100.0",
-        description="Percentage of plays that achieve positive series/down success.",
-        calculation_explained="Divides successful plays (series_success == 1 or EPA > 0) by total plays, multiplied by 100.",
+        description="Percentage of offensive plays with positive EPA (nflverse success).",
+        calculation_explained="Divides plays with positive EPA (nflverse success, EPA > 0) by total offensive plays, multiplied by 100.",
         unit="%",
         dependencies=["success_rate"],
     ),
@@ -3738,23 +3799,29 @@ class StatEngine:
 
     def _compute_base_metrics(self, plays: List[Dict[str, Any]], entity: Optional[str] = None) -> Dict[str, float]:
         n = max(1, len(plays))
-        total_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays)
+        # Per-play rates divide by real offensive downs: penalty/timeout-only rows, special teams and clock plays
+        # are not plays, and their yards, EPA, first downs and TDs do not feed the rate numerators either
+        down_plays = [p for p in plays if _is_scrimmage_down(p)]
+        scrimmage_plays = len(down_plays)
+        n = max(1, scrimmage_plays)
+        total_yards = sum(float(p.get("yards_gained", 0.0)) for p in down_plays)
         passing_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays if int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0)
         rushing_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays if int(p.get("rush_attempt", 0)) == 1)
-        total_air = sum(float(p.get("air_yards", 0.0)) for p in plays)
-        total_yac = sum(float(p.get("yards_after_catch", 0.0)) for p in plays)
-        total_xyac = sum(float(p.get("xyac_mean_yardage", 0.0)) for p in plays)
-        total_epa = sum(float(p.get("epa", 0.0)) for p in plays)
+        total_air = sum(float(p.get("air_yards", 0.0)) for p in down_plays)
+        total_yac = sum(float(p.get("yards_after_catch", 0.0)) for p in down_plays)
+        total_xyac = sum(float(p.get("xyac_mean_yardage", 0.0)) for p in down_plays)
+        total_epa = sum(float(p.get("epa", 0.0)) for p in down_plays)
         pass_plays = [p for p in plays if int(p.get("pass_attempt", 0)) == 1]
         rush_plays = [p for p in plays if int(p.get("rush_attempt", 0)) == 1]
         pass_epa = sum(float(p.get("epa", 0.0)) for p in pass_plays)
         rush_epa = sum(float(p.get("epa", 0.0)) for p in rush_plays)
-        total_wpa = sum(float(p.get("wpa", 0.0)) for p in plays)
+        total_wpa = sum(float(p.get("wpa", 0.0)) for p in down_plays)
         completions = sum(int(p.get("complete_pass", 0)) for p in plays)
         # Official pass attempts exclude sacks (in nflverse, pass_attempt == 1 on sacks)
         pass_attempts = sum(1 for p in plays if int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0)
         rush_attempts = sum(int(p.get("rush_attempt", 0)) for p in plays)
-        touchdowns = sum(int(p.get("touchdown", 0)) for p in plays)
+        # interception/fumble/kick-return touchdowns are the other side's scores, not offensive touchdowns
+        touchdowns = sum(1 for p in down_plays if _is_offense_touchdown(p))
         pass_touchdowns = sum(
             int(p.get("pass_touchdown", p.get("touchdown", 0) if (int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0) else 0))
             for p in plays
@@ -3768,9 +3835,12 @@ class StatEngine:
         turnovers = interceptions + fumbles_lost
         sacks = sum(int(p.get("sack", 0)) for p in plays)
         sack_yards_est = sum(abs(float(p.get("yards_gained", 0.0))) for p in plays if int(p.get("sack", 0)) == 1)
-        success_plays = sum(int(p.get("series_success", 0)) for p in plays)
-        first_downs = sum(int(p.get("first_down", 0)) for p in plays)
-        explosive_plays = sum(1 for p in plays if float(p.get("yards_gained", 0.0)) >= 20.0)
+        success_plays = sum(
+            int(p["success"]) if "success" in p else (1 if float(p.get("epa", 0.0)) > 0.0 else 0)
+            for p in down_plays
+        )
+        first_downs = sum(int(p.get("first_down", 0)) for p in down_plays)
+        explosive_plays = sum(1 for p in down_plays if float(p.get("yards_gained", 0.0)) >= 20.0)
         screen_plays = sum(1 for p in plays if int(p.get("is_screen", 0)) == 1)
         play_action_plays = sum(1 for p in plays if int(p.get("play_action", 0)) == 1)
         penalties = sum(int(p.get("penalty", 0)) for p in plays)
@@ -3818,7 +3888,7 @@ class StatEngine:
             f_recs = float(completions)
 
         base: Dict[str, float] = {
-            "plays": float(len(plays)),
+            "plays": float(scrimmage_plays),
             "games_played": float(games_played),
             "games_won": float(games_won),
             "games_lost": float(games_lost),
