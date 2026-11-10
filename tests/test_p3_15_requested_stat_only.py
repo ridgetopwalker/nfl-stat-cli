@@ -27,8 +27,8 @@ def full_evaluation(monkeypatch):
     """Reference behaviour: ignore `only` so every registered stat is evaluated, as before the fix."""
     orig = cli.StatEngine.evaluate_all_metrics_for_group
 
-    def full(self, plays, only=None, _closure=None):
-        return orig(self, plays, only=None)
+    def full(self, plays, only=None, _closure=None, entity=None):
+        return orig(self, plays, only=None, entity=entity)
 
     monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", full)
 
@@ -48,7 +48,7 @@ def test_every_stat_gives_the_same_leaderboard_as_full_evaluation(engine, monkey
     assert len(names) > 40
     fast = {n: _comparable(_board(engine, n)) for n in names}
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None, entity=None: orig(self, plays, only=None, entity=entity))
     for n in names:
         assert fast[n] == _comparable(_board(engine, n)), n
 
@@ -57,7 +57,7 @@ def test_every_stat_gives_the_same_leaderboard_as_full_evaluation(engine, monkey
 def test_group_overrides_match_full_evaluation(engine, monkeypatch, group):
     fast = _comparable(_board(engine, "big_gain_per_play", group_override=group))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None, entity=None: orig(self, plays, only=None, entity=entity))
     assert fast == _comparable(_board(engine, "big_gain_per_play", group_override=group))
 
 
@@ -82,7 +82,7 @@ def test_only_requested_stats_are_evaluated(engine, monkeypatch):
     fast = len(calls)
     calls.clear()
     orig_all = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig_all(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None, entity=None: orig_all(self, plays, only=None, entity=entity))
     _board(engine, "yards_per_play")
     full = len(calls)
     assert 0 < fast and fast * 3 <= full, (fast, full)
@@ -125,14 +125,14 @@ def test_qb_wins_view_matches_full_evaluation(tmp_path, monkeypatch):
     eng = cli.StatEngine(storage_dir=tmp_path)
     fast = cli.strip_ansi(cli.render_qb_meaningful_wins_view(eng, PLAYS, 2024, None, view_mode="table"))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None, entity=None: orig(self, plays, only=None, entity=entity))
     assert fast == cli.strip_ansi(cli.render_qb_meaningful_wins_view(eng, PLAYS, 2024, None, view_mode="table"))
 
 
 def test_general_view_output_is_unchanged(engine, monkeypatch):
     fast = cli.strip_ansi(cli.render_general_stat_view(engine, PLAYS, "epa_per_play", 2024, view_mode="table"))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
-    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
+    monkeypatch.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None, entity=None: orig(self, plays, only=None, entity=entity))
     assert fast == cli.strip_ansi(cli.render_general_stat_view(engine, PLAYS, "epa_per_play", 2024, view_mode="table"))
 
 
@@ -152,7 +152,7 @@ def _parity(engine, monkeypatch, stat):
     fast = _comparable(_board(engine, stat))
     orig = cli.StatEngine.evaluate_all_metrics_for_group
     with monkeypatch.context() as m:
-        m.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None: orig(self, plays, only=None))
+        m.setattr(cli.StatEngine, "evaluate_all_metrics_for_group", lambda self, plays, only=None, _closure=None, entity=None: orig(self, plays, only=None, entity=entity))
         full = _comparable(_board(engine, stat))
     assert fast == full
     return fast
