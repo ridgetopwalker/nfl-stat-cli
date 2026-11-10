@@ -809,7 +809,7 @@ NFL_COACHING_STAFFS: Dict[str, Dict[str, Any]] = {
 def get_team_coaching_staff(team_abbr: str, season: Optional[int] = None) -> Dict[str, Any]:
     """Retrieve full coaching staff dictionary (HC, OC, DC, position coaches) for a given team."""
     resolved = resolve_team_abbr(team_abbr) or team_abbr.upper()
-    return NFL_COACHING_STAFFS.get(resolved, NFL_COACHING_STAFFS.get("KC", {}))
+    return NFL_COACHING_STAFFS.get(resolved, {})
 
 
 def get_team_head_coach(team_abbr: str, season: Optional[int] = None) -> str:
@@ -4773,6 +4773,57 @@ class AsciiArtRenderer:
 # Hybrid Local Small Language Model (SLM) + Deterministic NL-to-Stat Engine
 # ---------------------------------------------------------------------------
 
+# Questions we can detect as asking for data this engine does not have; these must produce an explicit
+# "can't answer" instead of being mapped onto a loosely related stat.
+UNSUPPORTED_STAT_TERMS: Tuple[Tuple[str, str], ...] = (
+    (r"\byards\s+after\s+contact\b", "yards after contact"),
+    (r"\b(?:targets?|target\s+share)\b", "targets"),
+    (r"\breceptions\b", "receptions"),
+    (r"\breceiving\s+(?:yards?|yds?|touchdowns?|tds?)\b", "receiving yards/touchdowns"),
+    (r"\btackles\b", "tackles"),
+    (r"\bcomebacks\b", "comebacks"),
+    (r"\bstandings\b", "standings"),
+)
+SPORTSBOOK_OR_COACH_RE = re.compile(
+    r"\b(?:spread|odds|moneyline|bets?|betting|favou?rites?|underdogs?|handicap|coach|coaches|hc|oc|dc)\b"
+)
+
+
+def _one_line_text(text: Any, limit: int = 400) -> str:
+    """Printable single-line text (no ANSI/control characters) for echoing user-derived strings."""
+    return "".join(ch if ch.isprintable() else " " for ch in strip_ansi(str(text)))[:limit]
+
+
+def build_unanswered_query(
+    query: str,
+    reason: str,
+    season: int,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Structured 'can't answer' parse result (rendered by the `ambiguous` intent)."""
+    res: Dict[str, Any] = {
+        "intent": "ambiguous",
+        "status": "unanswered",
+        "reason": reason,
+        "query": query,
+        "stat_name": None,
+        "group_by": None,
+        "season": season,
+        "week": None,
+        "qtr": None,
+        "division": None,
+        "conf": None,
+        "team": None,
+        "player": None,
+        "position": None,
+        "filter_expr": "",
+        "show_field": False,
+        "explanation": f"Can't answer: {reason}",
+    }
+    res.update(extra)
+    return res
+
+
 class NaturalLanguageStatAssistant:
     """
     Translates natural-language user questions or custom-stat requests into structured
@@ -5271,6 +5322,15 @@ class NaturalLanguageStatAssistant:
                     "penalty", "penalties", "flags", "timeout", "timeouts", "favor", "benefited", "benefitted", "drawn", "called", "used",
                 } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
                 cand_words = set(cand_low.split())
+                _cw = cand.split()
+                if (
+                    len(_cw) == 2 and _cw[0][:1].isupper() and _cw[0].lower() not in ignore_words and _cw[1].lower() in ignore_words
+                    and not resolve_team_abbr(_cw[0]) and not resolve_team_matches(_cw[0])
+                ):
+                    # "show Zorblax touchdown play": keep the unknown name so it cannot be silently dropped
+                    cand = _cw[0]
+                    cand_low = cand.lower()
+                    cand_words = {cand_low}
                 if not cand_words.intersection(ignore_words) and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
 
@@ -5293,6 +5353,19 @@ class NaturalLanguageStatAssistant:
             )
         )
 
+        # Comparing two players is not supported; do not let the coach table or a stat default answer it.
+        _compare_m = re.search(r"\b(?:compare|comparison|versus|vs\.?)\b", ql)
+        if _compare_m and not SPORTSBOOK_OR_COACH_RE.search(ql):
+            _named = [k for k in cls.KNOWN_PLAYERS if re.search(rf"\b{re.escape(k)}\b", ql_no_apostrophe)]
+            if len(_named) >= 2:
+                return build_unanswered_query(
+                    query, "side-by-side player comparisons are not supported yet; ask about one player or stat at a time.", season, week=week,
+                )
+
+        # A bare surname only counts as a coach when the question is about coaching and the name is
+        # not also a known player (e.g. "Allen" the QB vs the NO head coach, "Jefferson" the WR).
+        _has_coach_word = bool(re.search(r"\b(?:coach|coaches|coaching|hc|oc|dc|coordinator|staff)\b", ql))
+        _player_surnames = {k.lower() for k in cls.KNOWN_PLAYERS}
         c_found_team: Optional[str] = team_filter
         c_found_role: Optional[str] = None
         if not c_found_team:
@@ -5304,15 +5377,21 @@ class NaturalLanguageStatAssistant:
                     c_found_team = c_info[0]
                     c_found_role = c_info[2]
                     break
-            if not c_found_team:
+            if not c_found_team and _has_coach_word:
                 for word in words:
+                    if word in _player_surnames:
+                        if find_coach_team(word):
+                            return build_unanswered_query(
+                                query, f"'{word.title()}' is both a player and a coach name; use the full name or name the team.", season,
+                            )
+                        continue
                     c_info = find_coach_team(word)
                     if c_info:
                         c_found_team = c_info[0]
                         c_found_role = c_info[2]
                         break
 
-        if not c_found_team and player_filter:
+        if not c_found_team and player_filter and _has_coach_word and player_filter.lower() not in _player_surnames:
             c_info = find_coach_team(player_filter)
             if c_info:
                 c_found_team = c_info[0]
@@ -5332,7 +5411,9 @@ class NaturalLanguageStatAssistant:
             elif "ol coach" in ql or "offensive line coach" in ql:
                 role_req = "ol"
 
-            target_team = c_found_team or "KC"
+            if not c_found_team:
+                return build_unanswered_query(query, "no team was given for the coaching question; name a team (e.g. 'head coach of the Chiefs').", season)
+            target_team = c_found_team
             role_label = role_req.upper() if role_req else "coaching staff"
             return {
                 "intent": "coaching_staff",
@@ -5885,6 +5966,15 @@ class NaturalLanguageStatAssistant:
                 "explanation": f"Top {limit_val or 1} matching plays for {player_filter or 'season'} (sorted by {sort_by}{', latest game' if is_latest_game else ''}).",
             }
 
+        # Stats the engine does not compute must not be answered with a loosely related stat
+        # (e.g. "yards after contact" or "receiving yards" must not fall into the generic "yards" rule).
+        for _u_pat, _u_label in UNSUPPORTED_STAT_TERMS:
+            if re.search(_u_pat, ql):
+                return build_unanswered_query(
+                    query, f"`{_u_label}` is not a stat this engine tracks. Type /stats to see supported stats.", season,
+                    week=week, qtr=qtr, division=division, conf=conf, team=team_filter, player=player_filter, position=position,
+                )
+
         # Match stat using canonical STAT_SYNONYM_MAP first
         matched_stat: Optional[str] = None
         matched_group: Optional[str] = None
@@ -5971,6 +6061,8 @@ class NaturalLanguageStatAssistant:
                     "position": position,
                     "filter_expr": " and ".join(filter_parts),
                     "show_field": False,
+                    "status": "unanswered",
+                    "reason": "the question did not match any supported stat, play, or action.",
                     "explanation": f"Could not determine a specific stat or play from query: '{query}'.",
                 }
 
@@ -6731,6 +6823,84 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
+_NL_NON_NAME_WORDS = frozenset("""
+a about above across after against all also am an and any are as at average avg be been before behind below best better between both but by
+can compare compared comparison could coverage did diagram do does down draw each early either epa every exactly explain fewer field first
+for found four from game games get give goff good greatest had has have he her here highest him his how however if in into is it its just
+last late latest least less like list lists longest lowest make many me more most much my need next no not now of off on one only or other our
+out over per play plays please pro rank ranked ranking rankings rate rating ratings recent rush rushing same say season second see
+several short shortest show shows since so some stat stats still table tell than that the their them then there these they third this those
+three through to top total totals touchdown touchdowns two under until up us use using vs versus was we week weeks well were what when where
+which while who whom whose why will with without worst would year years yes you your yards yard passing passer passers receiving receiver
+receivers rusher rushers kicker kickers punter punters offense defense offensive defensive special teams team conference division
+afc nfc nfl east west north south regular postseason playoffs playoff quarter quarters half halftime overtime red zone third fourth
+fifth screen deep sack sacks interception interceptions fumble fumbles penalty penalties blitz pressure pressures completion completions
+attempt attempts catch catches reception receptions target targets win wins loss losses lead leads leader leaders leaderboard
+quarterback quarterbacks running back backs wide receivers tight end ends line linebacker linebackers safety safeties cornerback cornerbacks
+january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday
+export save load reload help delete create custom example page coaches coach head coordinator staff contract contracts salary payroll
+spread odds line lines bets betting favorite favorites underdog underdogs power
+find display sort count calculate name names give pull fetch lookup look search compute render print output explain describe summarize
+summary analyze analysis report reports data information info details breakdown versus super bowl pro bowl monday night football sunday
+fantasy points point score scores scoring scored game's thanksgiving christmas mvp rookie rookies veteran veterans 
+overall combined average averages percent percentage ratio rate rates number numbers amount index metric
+metrics measure ranking position positions player players quarterbacks coaching starter starters backup backups""".split())
+
+
+def _unknown_name_tokens(query: str, all_plays: List[Dict[str, Any]], engine: "StatEngine") -> List[str]:
+    """
+    Capitalised words in the user's text that look like a person's name but match nothing we know
+    (no team, known player, stat term, or player in the loaded play data). Used so a leaderboard-style
+    question about an unknown player gets an explicit can't-answer instead of an unrelated answer.
+    Lower-case input is never treated as a name (we cannot tell it from an ordinary word).
+    """
+    known_players = {k.lower() for k in NaturalLanguageStatAssistant.KNOWN_PLAYERS}
+    team_words = {w.lower() for name in TEAM_FULL_NAMES.values() for w in re.split(r"\W+", name) if w}
+
+    def _is_ordinary(low: str, tok: str) -> bool:
+        if low in _NL_NON_NAME_WORDS or low.rstrip("s") in _NL_NON_NAME_WORDS or low in team_words:
+            return True
+        if low in TEAM_NICKNAMES_TO_ABBR or low in STATE_AND_REGION_TEAMS or tok.upper() in TEAM_DIVISIONS:
+            return True
+        if any(low in str(sid).lower().split("_") for sid in engine.stats):
+            return True
+        if any(low in re.split(r"\W+", str(getattr(sd, "title", "")).lower()) for sd in engine.stats.values()):
+            return True
+        return any(re.search(pat, low) for pat, _n, _g in NaturalLanguageStatAssistant.STAT_SYNONYM_MAP)
+
+    # Group consecutive name-like words ("Josh Allen") so a full name is checked as a full name.
+    runs: List[List[str]] = []
+    cur: List[str] = []
+    for tok in re.findall(r"[A-Za-z][A-Za-z'\u2019.-]*", str(query or "")):
+        core = re.sub(r"(?:'|\u2019)s$", "", tok.strip(".'-\u2019"), flags=re.IGNORECASE)
+        low = core.lower().replace("\u2019", "'")
+        if len(core) >= 3 and core[0].isupper() and core[1:2].islower() and not _is_ordinary(low, core):
+            cur.append(core)
+        else:
+            if cur:
+                runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+
+    out: List[str] = []
+    for run in runs:
+        if run[-1].lower() in known_players:  # "Josh Allen", "Allen", even if not in the loaded plays
+            continue
+        if find_player_plays(all_plays, " ".join(run)):
+            continue
+        out.append(" ".join(run).lower())
+    return out
+
+
+def _render_unanswered(parsed: Dict[str, Any], reason: str, engine: StatEngine) -> str:
+    """Render the explicit can't-answer response for a parsed query that cannot be completed safely."""
+    p = dict(parsed)
+    p["intent"] = "ambiguous"
+    p["reason"] = reason
+    return handle_nl_query_result(p, engine, [])
+
+
 def handle_nl_query_result(
     parsed: Dict[str, Any],
     engine: StatEngine,
@@ -6743,8 +6913,9 @@ def handle_nl_query_result(
     if intent == "ambiguous":
         stat_list = ", ".join(list(engine.stats.keys())[:8]) + "..."
         return (
-            f"\n{C.BOLD}{C.RED}\u2716 Unsupported or ambiguous query:{C.RESET} \"{parsed.get('query', '')}\"\n"
-            f"  {C.YELLOW}\U0001f4a1 Could not match your question to a recognized stat, play diagram, or custom stat action.{C.RESET}\n"
+            f"\n{C.BOLD}{C.RED}\u2716 Unsupported or ambiguous query:{C.RESET} \"{strip_ansi(parsed.get('query', ''))}\"\n"
+            f"  {C.BOLD}I can't answer that:{C.RESET} {_one_line_text(parsed.get('reason') or 'the question did not match any supported stat, play, or action.', 400)}\n"
+            + ("" if parsed.get("reason") else f"  {C.YELLOW}\U0001f4a1 Could not match your question to a recognized stat, play diagram, or custom stat action.{C.RESET}\n") +
             f"  \u2022 {C.BOLD}To evaluate a stat:{C.RESET} try 'epa per play', 'passer rating', 'yards after catch', or 'qb impact score'.\n"
             f"  \u2022 {C.BOLD}To diagram a play:{C.RESET} try 'show Mahomes touchdown play' or 'diagram Goff screen play'.\n"
             f"  \u2022 {C.BOLD}Available stats:{C.RESET} {stat_list} (type {C.CYAN}/stats{C.RESET} for full catalog, or {C.CYAN}/help{C.RESET} for guidance)."
@@ -6856,15 +7027,30 @@ def handle_nl_query_result(
             return header + f"\n  {C.RED}✖ {err}{C.RESET}"
 
     if intent == "coaching_staff":
-        resolved_t = resolve_team_abbr(team) or team or "KC"
+        resolved_t = resolve_team_abbr(team) or team
+        if not resolved_t:
+            return _render_unanswered(parsed, "no team was given for the coaching question.", engine)
         return header + "\n" + render_coaching_staff_view(resolved_t, role_filter=parsed.get("role"))
 
     if intent == "team_drilldown":
-        resolved_t = team or "KC"
+        resolved_t = team
+        if not resolved_t:
+            return _render_unanswered(parsed, "no team was given for the team question.", engine)
+        if not interactive:
+            _tm = resolve_team_matches(resolved_t)
+            if len(_tm) > 1:
+                return _render_unanswered(parsed, f"'{resolved_t}' matches several teams ({', '.join(_tm)}); use the team abbreviation.", engine)
         return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t, interactive=interactive)
 
     if intent == "player_drilldown":
-        target_player = player or "Mahomes"
+        target_player = player
+        if not target_player:
+            return _render_unanswered(parsed, "no player was given for the player question.", engine)
+        if not interactive:
+            _cands = find_matching_player_candidates(s_plays, target_player, season=season)
+            if len(_cands) > 1:
+                _opts = "; ".join(f"{c['name']} ({c['team']})" if c.get("team") else str(c["name"]) for c in _cands[:6])
+                return _render_unanswered(parsed, f"'{target_player}' matches several players ({_opts}); use the full name.", engine)
         return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=interactive)
 
     if intent == "fantasy_report":
@@ -6898,8 +7084,10 @@ def handle_nl_query_result(
             lim = parsed.get("limit", 5)
             return header + "\n" + render_underdog_leaderboard_view(s_plays, season=season, team_filter=team or parsed.get("team"), limit=lim)
         if subq == "matchup":
-            home_t = parsed.get("home_team") or team or "KC"
-            away_t = parsed.get("away_team") or "BUF"
+            home_t = parsed.get("home_team") or team
+            away_t = parsed.get("away_team")
+            if not home_t or not away_t:
+                return _render_unanswered(parsed, "a matchup needs two teams (e.g. 'spread for chiefs vs bills').", engine)
             w_val = parsed.get("week")
             return header + "\n" + render_game_handicap_dossier_view(home_t, away_t, s_plays, season=season, week=w_val)
         w_filter = parsed.get("week")
@@ -6911,7 +7099,9 @@ def handle_nl_query_result(
         if subq == "player" and target_p:
             return header + "\n" + render_player_contract_view(target_p, plays=s_plays, season=season)
         if subq == "team":
-            target_t = resolve_team_abbr(team) or team or "KC"
+            target_t = resolve_team_abbr(team) or team
+            if not target_t:
+                return _render_unanswered(parsed, "no team was given for the payroll question.", engine)
             return header + "\n" + render_team_payroll_view(target_t)
         if subq == "coaches":
             return header + "\n" + render_contracts_leaderboard_view(contract_type="coach", limit=parsed.get("limit", 15))
@@ -6982,6 +7172,9 @@ def handle_nl_query_result(
             game_id=parsed.get("game_id"),
         )
 
+    _unknown_names = _unknown_name_tokens(str(parsed.get("query", "")), all_plays, engine)
+    if _unknown_names:
+        return _render_unanswered(parsed, f"I don't know a player or team named '{_unknown_names[0].title()}' in the loaded data; check the spelling or use the full name.", engine)
     if player:
         p_low = str(player).lower()
         player_filtered = [
@@ -6994,15 +7187,21 @@ def handle_nl_query_result(
             or p_low in str(p.get("punter_player_name", "")).lower()
             or p_low in str(p.get("desc", "")).lower()
         ]
+        if not player_filtered:
+            player_filtered = find_player_plays(s_plays, str(player))
         if player_filtered:
             s_plays = player_filtered
+        elif all(w in _NL_NON_NAME_WORDS or w.rstrip("s") in _NL_NON_NAME_WORDS for w in str(player).strip().lower().split()) or resolve_team_abbr(str(player)):
+            pass  # a position/team word the parser mislabeled as a player: keep the unfiltered stat
+        else:
+            return _render_unanswered(parsed, f"no plays were found for '{_one_line_text(player, 60)}' in the {season} data, so I won't answer from other players' numbers.", engine)
 
     if intent == "qb_wins_report":
         return header + "\n" + render_qb_meaningful_wins_view(engine, s_plays, season, conf, view_mode=view_override, camera=camera, team=team)
 
-    stat_name = parsed.get("stat_name") or "yards_per_play"
-    if stat_name not in engine.stats:
-        stat_name = "yards_per_play"
+    stat_name = parsed.get("stat_name")
+    if not stat_name or stat_name not in engine.stats:
+        return _render_unanswered(parsed, f"`{stat_name or 'that stat'}` is not a registered stat. Type /stats to see supported stats.", engine)
     return header + "\n" + render_general_stat_view(
         engine,
         s_plays,
@@ -7626,23 +7825,30 @@ def render_player_drilldown_view(
     # If the user queried a name that matches multiple distinct players (e.g. /player McCaffrey -> Christian vs Luke)
     candidates = find_matching_player_candidates(s_plays, player_name, season=season)
     if len(candidates) > 1:
+        def _cand_label(cand: Dict[str, Any]) -> str:
+            pos = cand.get("position")
+            bits = ", ".join(str(x) for x in (cand.get("team"), pos, f"{cand['play_count']} plays") if x)
+            return f"{_one_line_text(cand['name'], 60)} ({bits})"
+
+        selected_cand = None
         if interactive and sys.stdin.isatty():
-            print(f"\n  {C.BOLD}{C.CYAN}Multiple players matched '{player_name}':{C.RESET}")
+            print(f"\n  {C.BOLD}{C.CYAN}Multiple players matched '{_one_line_text(player_name, 60)}':{C.RESET}")
             for idx, cand in enumerate(candidates, 1):
-                pos = cand.get("position") or "Unknown"
-                pos_str = f" - {pos}" if pos else ""
-                t_str = f" ({cand['team']}{pos_str}, {cand['play_count']} plays)" if cand.get("team") else f" ({cand['play_count']} plays)"
-                print(f"    [{idx}] {cand['name']}{t_str}")
+                print(f"    [{idx}] {_cand_label(cand)}")
             try:
-                sel = prompt_input(f"  Select player [1-{len(candidates)}] (default: 1): ").strip()
+                sel = prompt_input(f"  Select player [1-{len(candidates)}]: ").strip()
                 if sel.isdigit() and 1 <= int(sel) <= len(candidates):
                     selected_cand = candidates[int(sel) - 1]
-                else:
-                    selected_cand = candidates[0]
             except (EOFError, KeyboardInterrupt):
-                selected_cand = candidates[0]
-        else:
-            selected_cand = candidates[0]
+                selected_cand = None
+        if selected_cand is None:
+            # Never silently pick the first match: list the candidates and ask for a specific one.
+            opts = "\n".join(f"    - {_cand_label(c)}" for c in candidates[:10])
+            return (
+                f"\n{C.BOLD}{C.RED}\u2716 I can't answer that:{C.RESET} '{_one_line_text(player_name, 60)}' matches several players.\n"
+                f"{opts}\n"
+                f"  {C.DIM}Ask again with the full name (for example `{_one_line_text(candidates[0]['name'], 60)}`).{C.RESET}"
+            )
         player_name = selected_cand["search_name"]
 
     matching_plays = find_player_plays(s_plays, player_name, season=season)
@@ -7654,7 +7860,7 @@ def render_player_drilldown_view(
                 f"\n{C.YELLOW}⚠ No plays found for player '{player_name}' in the {season} season.{C.RESET}\n"
                 f"  💡 That player has data in season(s): {', '.join(map(str, seasons_found))}. Try `/season {seasons_found[-1]}`."
             )
-        return f"\n{C.RED}✖ No plays found for player '{player_name}'.{C.RESET}"
+        return f"\n{C.RED}✖ I can't answer that: no player matching '{_one_line_text(player_name, 60)}' was found in the loaded data.{C.RESET}"
 
     # SMART TEAM DETECTION:
     # "If the user picks a player be smart enough to list the teams they played for
@@ -7994,16 +8200,20 @@ def render_team_drilldown_view(
             for idx, t in enumerate(team_matches, 1):
                 full_n = TEAM_FULL_NAMES.get(t, t)
                 print(f"    [{idx}] {full_n} ({t})")
+            team_abbr = None
             try:
-                sel = prompt_input(f"  Select team [1-{len(team_matches)}] (default: 1): ").strip()
+                sel = prompt_input(f"  Select team [1-{len(team_matches)}]: ").strip()
                 if sel.isdigit() and 1 <= int(sel) <= len(team_matches):
                     team_abbr = team_matches[int(sel) - 1]
-                else:
-                    team_abbr = team_matches[0]
             except (EOFError, KeyboardInterrupt):
-                team_abbr = team_matches[0]
+                team_abbr = None
         else:
-            team_abbr = team_matches[0]
+            team_abbr = None
+        if team_abbr is None:
+            return (
+                f"\n{C.BOLD}{C.RED}\u2716 I can't answer that:{C.RESET} '{_one_line_text(team, 60)}' matches several teams "
+                f"({', '.join(team_matches)}). Ask again with the team abbreviation or full name."
+            )
     elif len(team_matches) == 1:
         team_abbr = team_matches[0]
     else:
@@ -9387,11 +9597,23 @@ def render_stats_catalog(engine: StatEngine) -> str:
 # IPC Error Reporting & Self-Healing Agent Signaling
 # ==============================================================================
 
-ERROR_IPC_ENV = "NFL_STAT_ENABLE_ERROR_IPC"
+ERROR_IPC_ENV = "NFL_STAT_ENABLE_ERROR_IPC"  # set to 0/false to turn local /error capture off
+ERROR_IPC_DISABLE_ENV = "NFL_STAT_DISABLE_ERROR_IPC"  # set to 1 to turn local /error capture off
 GIT_UPDATE_ENV = "NFL_STAT_ALLOW_GIT_UPDATE"
 IPC_WAIT_TIMEOUT_SECONDS = 600.0
 _IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
+_IPC_REPORT_FILE_RE = re.compile(r"^err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.json$", re.ASCII)
 IPC_MAX_FILE_BYTES = 65536
+IPC_MAX_RESPONSE_CHARS = 8000
+ERROR_RETENTION_DAYS_ENV = "PFSLM_ERROR_RETENTION_DAYS"  # preferred; falls back to NFL_STAT_ name
+ERROR_RETENTION_DAYS_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_DAYS"
+ERROR_RETENTION_MAX_ENV = "PFSLM_ERROR_RETENTION_MAX"
+ERROR_RETENTION_MAX_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_MAX"
+ERROR_RETENTION_DEFAULT_DAYS = 30
+ERROR_RETENTION_DEFAULT_MAX = 500
+ERROR_RETENTION_MIN_INTERVAL_SECONDS = 86400  # cheap check: at most once per day unless forced
+ERROR_RETENTION_STAMP_NAME = ".retention_cleanup_stamp"
+ERROR_RETENTION_SUBDIRS = ("resolved", "history")  # never touch pending/
 
 
 def _truthy_env(name: str) -> bool:
@@ -9399,8 +9621,16 @@ def _truthy_env(name: str) -> bool:
 
 
 def error_ipc_enabled() -> bool:
-    """The `/error` agent hand-off is opt-in (set NFL_STAT_ENABLE_ERROR_IPC=1)."""
-    return _truthy_env(ERROR_IPC_ENV)
+    """
+    Local `/error` report capture is ON by default: nothing is written unless the user types `/error`,
+    reports go only to a private per-user folder, and nothing is sent anywhere. Opt out with
+    NFL_STAT_DISABLE_ERROR_IPC=1 or NFL_STAT_ENABLE_ERROR_IPC=0. Force-reload and git updates are
+    separate and are never enabled by this. Any value not listed as "off" leaves capture on.
+    """
+    if _truthy_env(ERROR_IPC_DISABLE_ENV):
+        return False
+    raw = os.environ.get(ERROR_IPC_ENV, "").strip().lower()
+    return raw not in ("0", "false", "no", "off", "none", "disable", "disabled")
 
 
 def validate_report_id(report_id: str) -> str:
@@ -9438,6 +9668,269 @@ def get_ipc_dir() -> Path:
     return ipc_path
 
 
+def _env_int_with_fallback(
+    preferred: str,
+    legacy: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 10_000_000,
+) -> int:
+    """
+    Read an int env var; preferred name wins over legacy when it is a plain ASCII integer in range.
+    An invalid preferred value is skipped so a valid legacy value can still apply; if neither is
+    valid, ``default`` is returned.
+    """
+    for name in (preferred, legacy):
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        raw = raw.strip()
+        if not raw or not re.fullmatch(r"[0-9]+", raw, re.ASCII):
+            continue
+        try:
+            value = int(raw, 10)
+        except ValueError:
+            continue
+        if value < minimum or value > maximum:
+            continue
+        return value
+    return default
+
+
+def error_retention_days() -> int:
+    """Days to keep resolved/history error reports. Default 30. PFSLM_* wins over NFL_STAT_*."""
+    return _env_int_with_fallback(
+        ERROR_RETENTION_DAYS_ENV,
+        ERROR_RETENTION_DAYS_ENV_LEGACY,
+        ERROR_RETENTION_DEFAULT_DAYS,
+        minimum=1,
+        maximum=3650,
+    )
+
+
+def error_retention_max() -> int:
+    """Max resolved+history report files to keep. Default 500. PFSLM_* wins over NFL_STAT_*."""
+    return _env_int_with_fallback(
+        ERROR_RETENTION_MAX_ENV,
+        ERROR_RETENTION_MAX_ENV_LEGACY,
+        ERROR_RETENTION_DEFAULT_MAX,
+        minimum=1,
+        maximum=1_000_000,
+    )
+
+
+def _is_error_report_filename(name: str) -> bool:
+    return bool(isinstance(name, str) and _IPC_REPORT_FILE_RE.fullmatch(name))
+
+
+def _log_retention_issue(message: str) -> None:
+    try:
+        sys.stderr.write(f"nfl-stat-cli: error-report retention: {message}\n")
+    except Exception:
+        pass
+
+
+def _iter_retention_candidates(ipc_dir: Path) -> List[Tuple[Path, float]]:
+    """
+    List (path, mtime) for regular report files under resolved/ and history/.
+    Skips pending/, symlinks, non-matching names, and directories that are themselves symlinks.
+    """
+    out: List[Tuple[Path, float]] = []
+    for sub in ERROR_RETENTION_SUBDIRS:
+        d = ipc_dir / sub
+        try:
+            st_dir = os.lstat(d)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st_dir.st_mode) or not stat.S_ISDIR(st_dir.st_mode):
+            continue
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            if not _is_error_report_filename(name):
+                continue
+            p = d / name
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                continue
+            out.append((p, float(st.st_mtime)))
+    return out
+
+
+def _safe_unlink_report(path: Path) -> bool:
+    """Unlink a regular report file without following symlinks. Returns True if removed."""
+    try:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            return False
+        if not _is_error_report_filename(path.name):
+            return False
+        if path.parent.name not in ERROR_RETENTION_SUBDIRS:
+            return False
+        os.unlink(path)
+        return True
+    except FileNotFoundError:
+        return True  # already gone (concurrent cleanup); treat as removed
+    except OSError as exc:
+        _log_retention_issue(f"could not remove {path.name}: {getattr(exc, 'strerror', None) or exc.__class__.__name__}")
+        return False
+
+
+def _retention_stamp_path(ipc_dir: Path) -> Path:
+    return ipc_dir / ERROR_RETENTION_STAMP_NAME
+
+
+def _retention_cheap_check_ok(ipc_dir: Path, *, force: bool = False, now: Optional[float] = None) -> bool:
+    """Return True when cleanup should run. Stamp file throttles to about once per day."""
+    if force:
+        return True
+    stamp = _retention_stamp_path(ipc_dir)
+    try:
+        st = os.lstat(stamp)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            return True
+        age = (time.time() if now is None else now) - float(st.st_mtime)
+        return age >= float(ERROR_RETENTION_MIN_INTERVAL_SECONDS)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return True
+
+
+def _touch_retention_stamp(ipc_dir: Path) -> None:
+    stamp = _retention_stamp_path(ipc_dir)
+    try:
+        # Never follow a symlinked stamp: replace it with a fresh regular file via O_NOFOLLOW when possible.
+        try:
+            st = os.lstat(stamp)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                try:
+                    os.unlink(stamp)
+                except FileNotFoundError:
+                    pass
+        except FileNotFoundError:
+            pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(stamp), flags, 0o600)
+        try:
+            os.write(fd, str(int(time.time())).encode("ascii"))
+        finally:
+            os.close(fd)
+        if os.name != "nt":
+            try:
+                os.chmod(stamp, 0o600)
+            except OSError:
+                pass
+    except OSError as exc:
+        _log_retention_issue(f"could not write stamp: {getattr(exc, 'strerror', None) or exc.__class__.__name__}")
+
+
+def cleanup_error_reports(
+    ipc_dir: Optional[Path] = None,
+    *,
+    force: bool = False,
+    now: Optional[float] = None,
+    retention_days: Optional[int] = None,
+    retention_max: Optional[int] = None,
+) -> Dict[str, int]:
+    """
+    Prune old resolved/ and history/ error reports. Never touches pending/.
+
+    Deletes matching ``err_YYYYMMDD_HHMMSS_xxxxxxxx.json`` files older than the retention
+    window (default 30 days; ``PFSLM_ERROR_RETENTION_DAYS`` / ``NFL_STAT_ERROR_RETENTION_DAYS``),
+    then enforces a total cap (default 500; ``PFSLM_ERROR_RETENTION_MAX`` /
+    ``NFL_STAT_ERROR_RETENTION_MAX``) by removing oldest first. A stamp file limits work to
+    about once per day unless ``force=True``. Errors are swallowed and logged; this never
+    raises into the CLI.
+    """
+    result = {"skipped": 0, "deleted_age": 0, "deleted_cap": 0, "kept": 0, "examined": 0}
+    try:
+        root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir()
+        try:
+            root_st = os.lstat(root)
+            if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
+                _log_retention_issue("refusing to clean a non-directory or symlinked IPC root")
+                result["skipped"] = 1
+                return result
+        except FileNotFoundError:
+            result["skipped"] = 1
+            return result
+        if not _retention_cheap_check_ok(root, force=force, now=now):
+            result["skipped"] = 1
+            return result
+        days = int(retention_days) if retention_days is not None else error_retention_days()
+        cap = int(retention_max) if retention_max is not None else error_retention_max()
+        if days < 1:
+            days = ERROR_RETENTION_DEFAULT_DAYS
+        if cap < 1:
+            cap = ERROR_RETENTION_DEFAULT_MAX
+        cutoff = (time.time() if now is None else float(now)) - (days * 86400.0)
+        candidates = _iter_retention_candidates(root)
+        result["examined"] = len(candidates)
+        remaining: List[Tuple[Path, float]] = []
+        for path, mtime in candidates:
+            if mtime < cutoff:
+                if _safe_unlink_report(path):
+                    result["deleted_age"] += 1
+                else:
+                    remaining.append((path, mtime))
+            else:
+                remaining.append((path, mtime))
+        if len(remaining) > cap:
+            remaining.sort(key=lambda item: item[1])  # oldest first
+            overflow = remaining[: len(remaining) - cap]
+            survivors = remaining[len(remaining) - cap :]
+            for path, _mtime in overflow:
+                if _safe_unlink_report(path):
+                    result["deleted_cap"] += 1
+                else:
+                    survivors.append((path, _mtime))
+            remaining = survivors
+        result["kept"] = len(remaining)
+        _touch_retention_stamp(root)
+    except Exception as exc:
+        _log_retention_issue(f"cleanup aborted: {exc}")
+    return result
+
+
+def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
+    """Read a small regular JSON file from the IPC dir; never follows symlinks or blocks on special files."""
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > IPC_MAX_FILE_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _json_safe(value: Any) -> Any:
+    """Round-trip through JSON, stringifying non-JSON values; fall back to a repr for unserializable structures."""
+    def _clean(v: Any, depth: int = 0) -> Any:
+        if depth > 20:
+            return str(v)[:200]
+        if isinstance(v, dict):
+            return {(k if isinstance(k, str) else str(k)): _clean(x, depth + 1) for k, x in v.items()}
+        if isinstance(v, (list, tuple, set, frozenset)):
+            return [_clean(x, depth + 1) for x in v]
+        return v
+
+    try:
+        return json.loads(json.dumps(_clean(value), default=str))
+    except (TypeError, ValueError, RecursionError):
+        return {"unserializable_parse": repr(value)[:2000]}
+
+
 def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
     """Read a small regular JSON file from the IPC dir; never follows symlinks or blocks on special files."""
     try:
@@ -9456,8 +9949,13 @@ def create_error_report(
     parsed_nl: Dict[str, Any],
     user_explanation: str = "",
     season: Optional[int] = None,
+    response_text: str = "",
 ) -> Dict[str, Any]:
-    """Serializes an error report for a natural-language query and writes it to the IPC pending dir."""
+    """
+    Serializes an error report for a natural-language query and writes it to the IPC pending dir.
+    ``response_text`` is what the CLI showed the user (ANSI stripped, capped), so a wrong answer or a
+    can't-answer reason can be reviewed without re-running the query.
+    """
     ipc_dir = get_ipc_dir()
     now_dt = dt.datetime.now()
     report_id = f"err_{now_dt.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
@@ -9466,13 +9964,15 @@ def create_error_report(
         "timestamp": now_dt.isoformat(),
         "query": query_raw,
         "user_explanation": user_explanation or "Interpretation mismatch or unexpected query result.",
-        "parsed": parsed_nl,
+        "parsed": _json_safe(parsed_nl),
+        "response": strip_ansi(str(response_text or ""))[:IPC_MAX_RESPONSE_CHARS],
         "season": season or CURRENT_SEASON,
         "version": __version__,
         "status": "pending",
     }
     _atomic_write_json(ipc_dir / "pending" / f"{report_id}.json", report_data)
     _atomic_write_json(ipc_dir / "pending" / "latest.json", report_data)
+    cleanup_error_reports(ipc_dir)  # cheap, at-most-daily prune of resolved/history only
     return report_data
 
 
@@ -9499,6 +9999,18 @@ def write_resolution(
         history_file = ipc_dir / "history" / f"{report_id}.json"
         try:
             shutil.move(str(pending_file), str(history_file))
+            # rename keeps the old mtime; refresh so a long-pending report is not age-pruned immediately
+            try:
+                now_ts = time.time()
+                if os.utime in getattr(os, "supports_follow_symlinks", set()):
+                    os.utime(history_file, (now_ts, now_ts), follow_symlinks=False)
+                else:
+                    os.utime(history_file, (now_ts, now_ts))
+            except (OSError, TypeError, ValueError, NotImplementedError):
+                try:
+                    os.utime(history_file, (time.time(), time.time()))
+                except OSError:
+                    pass
         except Exception:
             pass
     pending_latest = ipc_dir / "pending" / "latest.json"
@@ -9510,6 +10022,7 @@ def write_resolution(
                 pending_latest.unlink(missing_ok=True)
         except Exception:
             pass
+    cleanup_error_reports(ipc_dir)  # prune resolved/history after a resolution lands
     return res_data
 
 
@@ -9622,7 +10135,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/export-stats{C.RESET} [file.json]       Export custom stats catalog to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
-    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save a local error report (opt-in: NFL_STAT_ENABLE_ERROR_IPC=1)
+    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save the last query + answer as a local error report (nothing is sent; old resolved/history pruned after 30d / ~500)
     {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs NFL_STAT_ALLOW_GIT_UPDATE=1)
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
@@ -9756,6 +10269,15 @@ def interactive_tui(
     seasons_to_load = sorted({active_season - 1, active_season})
     show_startup_loading(is_interactive=is_interactive, seasons=seasons_to_load)
     print(AsciiArtRenderer.banner())
+    if error_ipc_enabled():
+        try:
+            override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
+            existing = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
+            st = os.lstat(existing)
+            if (not stat.S_ISLNK(st.st_mode)) and stat.S_ISDIR(st.st_mode):
+                cleanup_error_reports(existing)  # once-daily prune; never raises
+        except Exception:
+            pass
     if initial_plays is not None:
         plays = initial_plays
     else:
@@ -9776,6 +10298,7 @@ def interactive_tui(
 
     last_parsed_nl: Optional[Dict[str, Any]] = None
     last_query_raw: Optional[str] = None
+    last_response_text: str = ""
 
     setup_readline_completer(engine)
 
@@ -9935,7 +10458,9 @@ def interactive_tui(
                             parsed["camera"] = default_camera
                         last_parsed_nl = parsed
                         last_query_raw = nl_play_q
-                        print(handle_nl_query_result(parsed, engine, plays, interactive=is_interactive))
+                        last_response_text = ""
+                        last_response_text = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
+                        print(last_response_text)
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
                 elif cmd_token in ("/games", "/game", "/matchup", "/matchups", "/boxscore", "/pbp"):
@@ -10051,8 +10576,8 @@ def interactive_tui(
                         print(f"  {C.DIM}No natural-language query has been run in this session yet.{C.RESET}")
                 elif cmd_token in ("/error", "/bug", "/report"):
                     if not error_ipc_enabled():
-                        print(f"  {C.YELLOW}⚠ Error-report hand-off is disabled by default.{C.RESET}")
-                        print(f"  {C.DIM}Set {ERROR_IPC_ENV}=1 to write reports to the private local IPC folder.{C.RESET}")
+                        print(f"  {C.YELLOW}⚠ Error reporting is turned off ({ERROR_IPC_DISABLE_ENV} / {ERROR_IPC_ENV}=0 is set).{C.RESET}")
+                        print(f"  {C.DIM}Unset it to let /error save reports to the private local folder.{C.RESET}")
                         continue
                     if not last_parsed_nl or not last_query_raw:
                         print(f"  {C.YELLOW}⚠ No natural-language query has been run in this session yet.{C.RESET}")
@@ -10063,19 +10588,28 @@ def interactive_tui(
                     if not user_notes:
                         print(f"\n{C.BOLD}{C.RED}=== 🚨 NATURAL LANGUAGE QUERY ERROR REPORT ==={C.RESET}")
                         print(f"  {C.BOLD}Failed Query:{C.RESET} \"{last_query_raw}\"")
-                        print(f"  {C.BOLD}Current Interpretation:{C.RESET} `{last_parsed_nl.get('stat_name')}` (group: `{last_parsed_nl.get('group_by')}`, filter: `{last_parsed_nl.get('filter_expr') or 'none'}`)")
+                        if last_parsed_nl.get("status") == "unanswered" or last_parsed_nl.get("intent") == "ambiguous":
+                            print(f"  {C.BOLD}I said I can't answer:{C.RESET} {_one_line_text(last_parsed_nl.get('reason') or 'no reason given', 300)}")
+                        else:
+                            print(f"  {C.BOLD}Current Interpretation:{C.RESET} intent `{last_parsed_nl.get('intent')}`, stat `{last_parsed_nl.get('stat_name')}` (group: `{last_parsed_nl.get('group_by')}`, filter: `{last_parsed_nl.get('filter_expr') or 'none'}`)")
                         try:
                             user_notes = prompt_input(f"\n  {C.BOLD}{C.GOLD}What was incorrect or what did you expect?{C.RESET} ").strip()
                         except (EOFError, KeyboardInterrupt):
                             print(f"\n  {C.DIM}Error report cancelled.{C.RESET}")
                             continue
 
-                    rep = create_error_report(
-                        query_raw=last_query_raw,
-                        parsed_nl=last_parsed_nl,
-                        user_explanation=user_notes,
-                        season=active_season,
-                    )
+                    try:
+                        rep = create_error_report(
+                            query_raw=last_query_raw,
+                            parsed_nl=last_parsed_nl,
+                            user_explanation=user_notes,
+                            season=active_season,
+                            response_text=last_response_text,
+                        )
+                    except OSError as save_err:
+                        print(f"  {C.RED}✖ Could not save the error report: {sanitize_ipc_text(save_err, 200)}{C.RESET}")
+                        print(f"  {C.DIM}Set NFL_STAT_IPC_DIR to a writable folder and try again.{C.RESET}")
+                        continue
                     rep_id = rep["id"]
                     print(f"\n  {C.GREEN}✔ Error report `{rep_id}` saved to the local error IPC folder.{C.RESET}")
                     print(f"  {C.DIM}Saved to: {get_ipc_dir() / 'pending' / 'latest.json'}{C.RESET}")
@@ -10116,7 +10650,8 @@ def interactive_tui(
                                         last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
                                     )
                                     last_parsed_nl = re_parsed
-                                    print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive))
+                                    last_response_text = _cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive)
+                                    print(last_response_text)
                                 except Exception as re_err:
                                     print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
                             else:
@@ -10223,8 +10758,10 @@ def interactive_tui(
                 parsed["camera"] = default_camera
             last_parsed_nl = parsed
             last_query_raw = raw_in
+            last_response_text = ""
             res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
             LAST_RAW_OUTPUT = strip_ansi(res_str)
+            last_response_text = res_str
             print(res_str)
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
@@ -10435,8 +10972,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 position=getattr(args, "position", None),
             ))
         elif cmd == "team":
-            resolved_t = resolve_team_abbr(args.team_name) or args.team_name or "KC"
-            print(render_team_drilldown_view(engine, season_plays, season=args.season, team=resolved_t))
+            # Pass the raw name so an ambiguous one ("New York") is listed instead of silently using the first match.
+            print(render_team_drilldown_view(engine, season_plays, season=args.season, team=args.team_name or "KC"))
         elif cmd == "player":
             print(render_player_drilldown_view(engine, season_plays, season=args.season, player_name=args.player_name, team=args.team, interactive=False))
         elif cmd == "play":
