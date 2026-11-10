@@ -303,7 +303,7 @@ def test_why_command_lists_player_not_qb():
     )
     assert res.returncode == 0, res.stderr
     assert "Last Natural Language Query Parsed Intent:" in res.stdout
-    why_block = cli.strip_ansi(res.stdout.split("Last Natural Language Query Parsed Intent:")[1].split("nfl-stat>")[0])
+    why_block = cli.strip_ansi(res.stdout.split("Last Natural Language Query Parsed Intent:")[1].split("pro-football-slm>")[0])
     json_start = why_block.find("{")
     json_end = why_block.rfind("}") + 1
     parsed_json = json.loads(why_block[json_start:json_end])

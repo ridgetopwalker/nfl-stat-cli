@@ -49,11 +49,13 @@ def _emit_env_deprecation(old_name: str, new_name: str) -> None:
         pass
 
 
-def env_get(name: str, default: Optional[str] = None) -> Optional[str]:
+def env_get(name: str, default: Optional[str] = None, *, legacy_only: bool = False) -> Optional[str]:
     """Read PFSLM_* first, then fall back to NFL_STAT_* with a one-time notice.
 
     ``name`` may be a full ``PFSLM_FOO`` / ``NFL_STAT_FOO`` key, or a bare suffix
     such as ``FOO`` / ``_FOO`` (normalized to ``PFSLM_FOO``).
+    ``legacy_only`` supports validated settings whose invalid preferred value
+    must fall back to a valid legacy value.
     """
     if name.startswith(NEW_ENV_PREFIX):
         new_name = name
@@ -67,7 +69,7 @@ def env_get(name: str, default: Optional[str] = None) -> Optional[str]:
         new_name = NEW_ENV_PREFIX + suffix
         old_name = OLD_ENV_PREFIX + suffix
 
-    if new_name in os.environ:
+    if not legacy_only and new_name in os.environ:
         return os.environ.get(new_name)
     if old_name in os.environ:
         _emit_env_deprecation(old_name, new_name)

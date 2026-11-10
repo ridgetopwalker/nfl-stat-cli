@@ -226,3 +226,36 @@ def test_manifest_and_readme_cover_live_requirements():
     assert "include requirements-live.txt" in (ROOT / "MANIFEST.in").read_text().splitlines()
     readme = (ROOT / "README.md").read_text()
     assert "--sample-only" in readme and "-SkipLivePackages" in readme
+
+
+def test_installers_publish_primary_short_and_legacy_commands():
+    loops = re.findall(r"for command in ([^;]+); do\s+link_path_command ([^\n]+)", INSTALL_SH)
+    assert len(loops) == 2
+    assert all(commands.split() == ["pro-football-slm", "pfslm", "nfl-stat"] for commands, _ in loops)
+    assert {body for _, body in loops} == {'"$HOME/.local/bin" "$command"', '"/usr/local/bin" "$command"'}
+    loop = re.search(r'foreach \(\$LauncherName in @\(([^)]+)\)\)\s*\{\s*Set-Content', INSTALL_PS1)
+    assert loop
+    assert re.findall(r'"([^"]+)"', loop[1]) == ["pro-football-slm.bat", "pfslm.bat", "nfl-stat.bat", "pro-football-slm-cli.bat"]
+    assert '"$SCRIPT_DIR/pro-football-slm" --version' in INSTALL_SH
+    assert '"pro-football-slm.bat") --version' in INSTALL_PS1
+
+
+@pytest.mark.skipif(BASH is None, reason="bash not available")
+def test_path_links_preserve_files_and_replace_symlinks(tmp_path):
+    home = tmp_path / "home"
+    bindir = home / ".local" / "bin"
+    bindir.mkdir(parents=True)
+    existing = bindir / "pro-football-slm"
+    existing.write_text("unrelated command\n")
+    (bindir / "pfslm").symlink_to(tmp_path / "missing-old-target")
+    # Exercise the actual helper without running installation or touching system PATH dirs.
+    helper = INSTALL_SH.split("link_path_command() {", 1)[1].split("\nprompt_add_to_path()", 1)[0]
+    script = 'link_path_command() {' + helper + '\nfor command in pro-football-slm pfslm nfl-stat; do\n link_path_command "$HOME/.local/bin" "$command"\ndone\n'
+    result = subprocess.run([BASH, "-c", script], env=dict(os.environ, HOME=str(home), SCRIPT_DIR=str(ROOT)), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert existing.read_text() == "unrelated command\n"
+    assert not existing.is_symlink()
+    assert "Warning:" in result.stderr and str(existing) in result.stderr
+    for name in ("pfslm", "nfl-stat"):
+        assert (bindir / name).is_symlink()
+        assert os.readlink(bindir / name) == str(ROOT / name)

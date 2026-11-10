@@ -1,5 +1,5 @@
 """
-NFL-Stat-CLI Fantasy Football Analytics Engine.
+Pro Football SLM Fantasy Football Analytics Engine.
 Calculates NFL Standard (non-PPR), Point-Per-Reception (PPR), and Half-PPR scoring
 directly from play-by-play events across seasons, weeks, games, and individual players.
 Includes interactive browser, weekly box scores, and game log drill-downs.

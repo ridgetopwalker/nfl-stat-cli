@@ -37,7 +37,8 @@ def test_workflow_runs_pytest_on_supported_pythons(workflow):
 def test_workflow_builds_and_checks_wheel(workflow):
     commands = "\n".join(step.get("run", "") for step in workflow["jobs"]["build"]["steps"])
     assert "python -m build" in commands
-    assert "pro_football_slm/nflverse_bridge.R" in commands
+    assert 'assert "pro_football_slm/nflverse_bridge.R" in names' in commands
+    assert 'assert "pro_football_slm/NOTICE.txt" in names' in commands
 
 
 def test_workflow_actions_are_pinned_to_commit_shas(workflow):
@@ -52,3 +53,11 @@ def test_workflow_avoids_dangerous_triggers(workflow):
     text = WORKFLOW.read_text()
     assert "pull_request_target" not in text
     assert "secrets." not in text
+
+
+def test_workflow_uses_current_package_and_all_commands(workflow):
+    commands = "\n".join(step.get("run", "") for job in workflow["jobs"].values() for step in job["steps"])
+    assert "--cov=pro_football_slm" in commands
+    assert "import importlib.resources as r, pro_football_slm" in commands
+    for command in ("pro-football-slm", "pfslm", "nfl-stat"):
+        assert f"/bin/{command} --version" in commands

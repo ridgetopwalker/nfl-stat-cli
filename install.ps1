@@ -6,7 +6,7 @@
       .\install.ps1 -v     Verbose mode (full command and pip output)
 
     Options:
-      -SkipLivePackages     Explicit sample mode: skip the live NFL data packages. nfl-stat then
+      -SkipLivePackages     Explicit sample mode: skip the live NFL data packages. pro-football-slm then
                             runs on the small built-in SAMPLE dataset.
       -WithLegacyNflDataPy  Also install the deprecated nfl_data_py fallback loader (opt-in;
                             nflreadpy is preferred on all supported Pythons).
@@ -220,7 +220,7 @@ if ($LASTEXITCODE -ne 0) { Add-InstallWarning "Could not upgrade pip/setuptools/
 # 3. Install required Python packages & pro-football-slm
 $RequirementsLive = Join-Path $ProjectRoot "requirements-live.txt"
 if ($SkipLivePackages) {
-    Add-InstallWarning "-SkipLivePackages: nfl-stat will use the built-in SAMPLE dataset, not live NFL data."
+    Add-InstallWarning "-SkipLivePackages: pro-football-slm will use the built-in SAMPLE dataset, not live NFL data."
     if ($VerboseMode) { Write-Host "[3/5] -SkipLivePackages: skipping live NFL data packages (sample dataset only)." -ForegroundColor DarkYellow }
 } else {
     if (-not (Test-Path $RequirementsLive)) { Stop-Install "requirements-live.txt not found next to install.ps1." }
@@ -272,7 +272,7 @@ if ($WithSLM) {
     }
 }
 
-# 5. Ensure portable local folder launchers (nfl-stat.bat & pro-football-slm.bat) & verify
+# 5. Ensure portable local folder launchers (primary, short form, and legacy alias) & verify
 $LauncherContent = @"
 @echo off
 setlocal
@@ -288,25 +288,26 @@ if exist "%~dp0.venv\Scripts\python.exe" (
     )
 )
 "@
-Set-Content -Path (Join-Path $ProjectRoot "nfl-stat.bat") -Value $LauncherContent -Encoding ASCII
-Set-Content -Path (Join-Path $ProjectRoot "pro-football-slm.bat") -Value $LauncherContent -Encoding ASCII
+foreach ($LauncherName in @("pro-football-slm.bat", "pfslm.bat", "nfl-stat.bat", "pro-football-slm-cli.bat")) {
+    Set-Content -Path (Join-Path $ProjectRoot $LauncherName) -Value $LauncherContent -Encoding ASCII
+}
 
 if ($VerboseMode) {
     Write-Host "[5/5] Verifying pro-football-slm installation..." -ForegroundColor Cyan
-    & (Join-Path $ProjectRoot "nfl-stat.bat") list-stats
+    & (Join-Path $ProjectRoot "pro-football-slm.bat") list-stats
     $VerifyCode = $LASTEXITCODE
     if ($VerifyCode -eq 0) {
-        Write-Host "  [OK] INSTALLATION COMPLETE! Run: .\nfl-stat" -ForegroundColor Green
+        Write-Host "  [OK] INSTALLATION COMPLETE! Run: .\pro-football-slm" -ForegroundColor Green
     } else {
         Write-Host "  [!] Verification failed (see $LogFile)." -ForegroundColor Red
         exit $VerifyCode
     }
 } else {
-    Update-CompactUI 98 ".\nfl-stat.bat --version"
-    & (Join-Path $ProjectRoot "nfl-stat.bat") --version >>$LogFile 2>&1
+    Update-CompactUI 98 ".\pro-football-slm.bat --version"
+    & (Join-Path $ProjectRoot "pro-football-slm.bat") --version >>$LogFile 2>&1
     $VerifyCode = $LASTEXITCODE
     if ($VerifyCode -eq 0) {
-        Update-CompactUI 100 "Done! Run: .\nfl-stat  (or .\install.ps1 -v for verbose)"
+        Update-CompactUI 100 "Done! Run: .\pro-football-slm  (or .\install.ps1 -v for verbose)"
         Write-Host ""
     } else {
         Update-CompactUI 100 "ERROR: Verification failed (log: $LogFile)."
@@ -324,13 +325,13 @@ if (-not $SkipLivePackages) {
         $LiveOk = ($LASTEXITCODE -eq 0)
     }
     if (-not $LiveOk) {
-        Stop-Install "Installation finished but no live data loader can be imported, so nfl-stat would silently fall back to SAMPLE data. $LiveHint"
+        Stop-Install "Installation finished but no live data loader can be imported, so pro-football-slm would silently fall back to SAMPLE data. $LiveHint"
     }
 }
 Write-InstallWarnings
 
 if ($VerifyCode -eq 0 -and [Environment]::UserInteractive) {
-    $ans = Read-Host "? Add 'nfl-stat' to your PATH so you can run it from anywhere? [y/N]"
+    $ans = Read-Host "? Add 'pro-football-slm' to your PATH so you can run it from anywhere? [y/N]"
     if ($ans -match "^[yY]") {
         $CurrentUserPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
         $PathParts = ($CurrentUserPath -split ";") | Where-Object { $_ -ne "" }
@@ -339,10 +340,10 @@ if ($VerifyCode -eq 0 -and [Environment]::UserInteractive) {
             [System.Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
         }
         if (($env:Path -split ";") -notcontains $ProjectRoot) {
-            $env:Path = "$ProjectRoot;$env:Path"
+            $env:Path = "$env:Path;$ProjectRoot"
         }
-        Write-Host "[OK] Added '$ProjectRoot' to your PATH! You can now run 'nfl-stat' from anywhere." -ForegroundColor Green
+        Write-Host "[OK] Added '$ProjectRoot' to your PATH! You can now run 'pro-football-slm' from anywhere." -ForegroundColor Green
     } else {
-        Write-Host "Skipped adding to global PATH. You can run '.\nfl-stat' in this folder anytime." -ForegroundColor DarkGray
+        Write-Host "Skipped adding to global PATH. You can run '.\pro-football-slm' in this folder anytime." -ForegroundColor DarkGray
     }
 }

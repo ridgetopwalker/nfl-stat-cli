@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Block until a new nfl-stat /error report appears, print it, then exit.
+"""Block until a new pro-football-slm /error report appears, print it, then exit.
 
 Run as a background task; the agent is notified when it exits.
 

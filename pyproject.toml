@@ -70,6 +70,7 @@ Issues = "https://github.com/ridgetopwalker/nfl-stat-cli/issues"
 Changelog = "https://github.com/ridgetopwalker/nfl-stat-cli/releases"
 
 [project.scripts]
+pfslm = "pro_football_slm:main"
 nfl-stat = "pro_football_slm:main"
 pro-football-slm = "pro_football_slm:main"
 

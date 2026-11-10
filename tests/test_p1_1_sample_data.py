@@ -104,7 +104,7 @@ def test_tui_warns_at_startup_in_prompt_and_in_nl_footer(tmp_path):
     )
     assert res.returncode == 0, res.stderr
     out = cli.strip_ansi(res.stdout)
-    assert "nfl-stat [SAMPLE DATA] >" in out
+    assert "pro-football-slm [SAMPLE DATA] >" in out
     assert out.count("NOT real season statistics") >= 2  # startup warning + NL footer
 
 

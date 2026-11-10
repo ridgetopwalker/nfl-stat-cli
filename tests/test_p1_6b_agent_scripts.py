@@ -40,7 +40,7 @@ def _make_report(tmp_path, query="Zorblax passing yards"):
             os.environ["PFSLM_IPC_DIR"] = old
 
 
-def test_watcher_reads_nfl_stat_ipc_dir_and_new_ids(tmp_path):
+def test_watcher_reads_pfslm_ipc_dir_and_new_ids(tmp_path):
     rep = _make_report(tmp_path)
     res = _run("watch_errors.py", ["--timeout", "5", "--interval", "0.1"], _env(tmp_path), tmp_path)
     assert res.returncode == 0, res.stderr
@@ -79,7 +79,7 @@ def test_watcher_extra_dirs_and_default_dir(tmp_path):
     assert res.returncode == 0 and rid2 in res.stdout
 
 
-def test_resolve_writes_into_nfl_stat_ipc_dir_and_session_can_read_it(tmp_path):
+def test_resolve_writes_into_pfslm_ipc_dir_and_session_can_read_it(tmp_path):
     rep = _make_report(tmp_path)
     summary = "fixed; it's \"quoted\" and has 'quotes' \\ and ; rm -rf x"
     res = _run("resolve.py", ["local", rep["id"], "abc1234", summary], _env(tmp_path), tmp_path)

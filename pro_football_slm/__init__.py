@@ -47,7 +47,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from .legacy_compat import default_data_dir, env_get, env_truthy
+from .legacy_compat import OLD_ENV_PREFIX, default_data_dir, env_get, env_truthy
 
 from .fantasy import (
     calculate_player_fantasy_points,
@@ -305,8 +305,8 @@ EXPORT_ALLOWED_SUFFIXES: Tuple[str, ...] = (".csv", ".json")
 
 def get_export_dir() -> Path:
     """Directory that user-requested exports are confined to (override with PFSLM_EXPORT_DIR)."""
-    override = os.environ.get("PFSLM_EXPORT_DIR", "").strip()
-    return Path(override).expanduser() if override else Path.home() / ".pro_football_slm" / "exports"
+    override = env_get("PFSLM_EXPORT_DIR", "").strip()
+    return Path(override).expanduser() if override else default_data_dir() / "exports"
 
 
 def resolve_export_path(
@@ -400,20 +400,20 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
                 headers = LAST_RENDERED_TABLE["headers"]
                 records = [dict(zip(headers, row)) for row in LAST_RENDERED_TABLE["rows"]]
                 payload = {
-                    "title": LAST_RENDERED_TABLE.get("title", "NFL Stat Query Result"),
+                    "title": LAST_RENDERED_TABLE.get("title", "Pro Football SLM Query Result"),
                     "count": len(records),
                     "headers": headers,
                     "records": records,
                 }
             elif LAST_RESULT_RECORDS:
                 payload = {
-                    "title": "NFL Stat Query Result",
+                    "title": "Pro Football SLM Query Result",
                     "count": len(LAST_RESULT_RECORDS),
                     "records": LAST_RESULT_RECORDS,
                 }
             else:
                 payload = {
-                    "title": "NFL Stat Query Result",
+                    "title": "Pro Football SLM Query Result",
                     "text": LAST_RAW_OUTPUT,
                 }
             payload["license"] = attribution.json_license_block()
@@ -1790,7 +1790,7 @@ def _game_id_parts(game_id: str) -> Tuple[int, int]:
 
 def _r_timeout_seconds() -> int:
     """Rscript timeout in seconds; override with PFSLM_R_TIMEOUT (invalid or non-positive values are ignored)."""
-    raw = os.environ.get(R_TIMEOUT_ENV, "").strip()
+    raw = env_get(R_TIMEOUT_ENV, "").strip()
     try:
         value = int(raw)
     except ValueError:
@@ -1863,7 +1863,7 @@ class LiveDataUnavailableError(RuntimeError):
 
 
 def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+    return env_get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _one_line(text: Any, limit: int = 200) -> str:
@@ -1887,7 +1887,7 @@ class NFLDataBridge:
     """
 
     def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto", require_live: Optional[bool] = None) -> None:
-        self._cache_dir = cache_dir or (Path.home() / ".pro_football_slm" / "cache")
+        self._cache_dir = cache_dir or (default_data_dir() / "cache")
         self._cache_dir_ready = False
         self.engine = engine.lower()
         self.require_live = _env_flag("PFSLM_REQUIRE_LIVE") if require_live is None else bool(require_live)
@@ -3455,7 +3455,7 @@ class StatEngine:
 
     def __init__(self, storage_dir: Optional[Path] = None) -> None:
         # The state directory is created on the first save (_atomic_write_json), not when the engine is built.
-        self.storage_dir = storage_dir or (Path.home() / ".pro_football_slm")
+        self.storage_dir = storage_dir or default_data_dir()
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
         self.stats: Dict[str, StatDefinition] = dict(DEFAULT_STATS)
@@ -5584,7 +5584,7 @@ MAX_QUERY_CHARS = 300
 
 def get_max_query_chars() -> int:
     try:
-        val = int(os.environ.get("PFSLM_MAX_QUERY_CHARS", "") or MAX_QUERY_CHARS)
+        val = int(env_get("PFSLM_MAX_QUERY_CHARS", "") or MAX_QUERY_CHARS)
     except ValueError:
         return MAX_QUERY_CHARS
     if val < 1:
@@ -5851,7 +5851,7 @@ class NaturalLanguageStatAssistant:
     @staticmethod
     def ollama_base_url() -> Optional[str]:
         """PFSLM_OLLAMA_URL (default: local Ollama), limited to http/https; None when the setting is not a usable URL."""
-        raw = os.environ.get("PFSLM_OLLAMA_URL", "").strip() or "http://127.0.0.1:11434"
+        raw = env_get("PFSLM_OLLAMA_URL", "").strip() or "http://127.0.0.1:11434"
         try:
             parts = urllib.parse.urlsplit(raw)
             port_ok = parts.port is None or 0 < parts.port < 65536
@@ -5986,7 +5986,7 @@ class NaturalLanguageStatAssistant:
             return None
         available_stats = list(engine.stats.keys())
         system_prompt = (
-            "You are the NFL-Stat-CLI Local Small Language Model parser. "
+            "You are the Pro Football SLM Local Small Language Model parser. "
             "Respond ONLY with a valid JSON object matching one of these intents:\n"
             "1. 'stat_query': when the user asks for a season average, leaderboard, ranking, or aggregate stat across the year. "
             "Set 'show_field': false.\n"
@@ -7488,7 +7488,7 @@ def render_custom_stat_example_walkthrough(
         f"     2. {C.BOLD}Natural Language:{C.RESET} Type directly in plain English:",
         f"        {C.DIM}\"create stat called clutch_win with formula ifelse(epa_per_play > 0.15 and team_win == 1, 1, 0) by qb\"{C.RESET}",
         f"     3. {C.BOLD}CLI Command:{C.RESET}",
-        f"        {C.DIM}nfl-stat create-stat --name qb_meaningful_win --scope game --agg sum --formula \"ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)\" --title \"Meaningful Win\" --description \"...\" --explained \"...\"{C.RESET}",
+        f"        {C.DIM}pro-football-slm create-stat --name qb_meaningful_win --scope game --agg sum --formula \"ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)\" --title \"Meaningful Win\" --description \"...\" --explained \"...\"{C.RESET}",
         f"\n{C.BOLD}{C.GREEN}3. Live Example Demonstration ({display_season} Leaderboard):{C.RESET}\n",
         report_table,
     ]
@@ -7783,7 +7783,7 @@ def nl_mutations_allowed(explicit: Optional[bool] = None) -> bool:
     """False when a caller passed allow_mutations=False or PFSLM_DISABLE_NL_MUTATIONS is set (e.g. for a web front end)."""
     if explicit is not None:
         return bool(explicit)
-    return os.environ.get(NL_MUTATIONS_DISABLE_ENV, "").strip().lower() not in ("1", "true", "yes", "on")
+    return env_get(NL_MUTATIONS_DISABLE_ENV, "").strip().lower() not in ("1", "true", "yes", "on")
 
 
 _NL_NON_NAME_WORDS = frozenset("""
@@ -10761,10 +10761,10 @@ _IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
 _IPC_REPORT_FILE_RE = re.compile(r"^err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.json$", re.ASCII)
 IPC_MAX_FILE_BYTES = 65536
 IPC_MAX_RESPONSE_CHARS = 8000
-ERROR_RETENTION_DAYS_ENV = "PFSLM_ERROR_RETENTION_DAYS"  # preferred; falls back to PFSLM_ name
-ERROR_RETENTION_DAYS_ENV_LEGACY = "PFSLM_ERROR_RETENTION_DAYS"
+ERROR_RETENTION_DAYS_ENV = "PFSLM_ERROR_RETENTION_DAYS"  # preferred; falls back to the legacy name
+ERROR_RETENTION_DAYS_ENV_LEGACY = OLD_ENV_PREFIX + "ERROR_RETENTION_DAYS"
 ERROR_RETENTION_MAX_ENV = "PFSLM_ERROR_RETENTION_MAX"
-ERROR_RETENTION_MAX_ENV_LEGACY = "PFSLM_ERROR_RETENTION_MAX"
+ERROR_RETENTION_MAX_ENV_LEGACY = OLD_ENV_PREFIX + "ERROR_RETENTION_MAX"
 ERROR_RETENTION_DEFAULT_DAYS = 30
 ERROR_RETENTION_DEFAULT_MAX = 500
 ERROR_RETENTION_MIN_INTERVAL_SECONDS = 86400  # cheap check: at most once per day unless forced
@@ -10773,7 +10773,7 @@ ERROR_RETENTION_SUBDIRS = ("resolved", "history")  # never touch pending/
 
 
 def _truthy_env(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+    return env_get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def error_ipc_enabled() -> bool:
@@ -10785,7 +10785,7 @@ def error_ipc_enabled() -> bool:
     """
     if _truthy_env(ERROR_IPC_DISABLE_ENV):
         return False
-    raw = os.environ.get(ERROR_IPC_ENV, "").strip().lower()
+    raw = env_get(ERROR_IPC_ENV, "").strip().lower()
     return raw not in ("0", "false", "no", "off", "none", "disable", "disabled")
 
 
@@ -10810,8 +10810,8 @@ def get_ipc_dir(create: bool = True) -> Path:
     (used by read-only callers) nothing is created, and directories that already exist are still checked.
     Lives in the user's private state dir; override with PFSLM_IPC_DIR.
     """
-    override = os.environ.get("PFSLM_IPC_DIR", "").strip()
-    ipc_path = Path(override) if override else Path.home() / ".pro_football_slm" / "error_ipc"
+    override = env_get("PFSLM_IPC_DIR", "").strip()
+    ipc_path = Path(override) if override else default_data_dir() / "error_ipc"
     for sub in ("", "pending", "resolved", "history"):
         d = ipc_path / sub if sub else ipc_path
         if create:
@@ -10846,7 +10846,7 @@ def _env_int_with_fallback(
     valid, ``default`` is returned.
     """
     for name in (preferred, legacy):
-        raw = os.environ.get(name)
+        raw = env_get(name, legacy_only=(name == legacy))
         if raw is None:
             continue
         raw = raw.strip()
@@ -10863,7 +10863,7 @@ def _env_int_with_fallback(
 
 
 def error_retention_days() -> int:
-    """Days to keep resolved/history error reports. Default 30. PFSLM_* wins over PFSLM_*."""
+    """Days to keep resolved/history error reports. Default 30. The preferred prefix wins over the legacy prefix."""
     return _env_int_with_fallback(
         ERROR_RETENTION_DAYS_ENV,
         ERROR_RETENTION_DAYS_ENV_LEGACY,
@@ -10874,7 +10874,7 @@ def error_retention_days() -> int:
 
 
 def error_retention_max() -> int:
-    """Max resolved+history report files to keep. Default 500. PFSLM_* wins over PFSLM_*."""
+    """Max resolved+history report files to keep. Default 500. The preferred prefix wins over the legacy prefix."""
     return _env_int_with_fallback(
         ERROR_RETENTION_MAX_ENV,
         ERROR_RETENTION_MAX_ENV_LEGACY,
@@ -11009,9 +11009,9 @@ def cleanup_error_reports(
     Prune old resolved/ and history/ error reports. Never touches pending/.
 
     Deletes matching ``err_YYYYMMDD_HHMMSS_xxxxxxxx.json`` files older than the retention
-    window (default 30 days; ``PFSLM_ERROR_RETENTION_DAYS`` / ``PFSLM_ERROR_RETENTION_DAYS``),
-    then enforces a total cap (default 500; ``PFSLM_ERROR_RETENTION_MAX`` /
-    ``PFSLM_ERROR_RETENTION_MAX``) by removing oldest first. A stamp file limits work to
+    window (default 30 days; ``PFSLM_ERROR_RETENTION_DAYS`` with legacy fallback),
+    then enforces a total cap (default 500; ``PFSLM_ERROR_RETENTION_MAX`` with legacy
+    fallback) by removing oldest first. A stamp file limits work to
     about once per day unless ``force=True``. Errors are swallowed and logged; this never
     raises into the CLI.
     """
@@ -11533,8 +11533,8 @@ def interactive_tui(
     print(AsciiArtRenderer.banner())
     if error_ipc_enabled():
         try:
-            override = os.environ.get("PFSLM_IPC_DIR", "").strip()
-            existing = Path(override) if override else Path.home() / ".pro_football_slm" / "error_ipc"
+            override = env_get("PFSLM_IPC_DIR", "").strip()
+            existing = Path(override) if override else default_data_dir() / "error_ipc"
             st = os.lstat(existing)
             if (not stat.S_ISLNK(st.st_mode)) and stat.S_ISDIR(st.st_mode):
                 cleanup_error_reports(existing)  # once-daily prune; never raises
@@ -11574,7 +11574,7 @@ def interactive_tui(
             if _GLOBAL_COMPLETER:
                 _GLOBAL_COMPLETER.set_context(None)
             _sample_tag = f"{C.BOLD}{C.RED}[SAMPLE DATA]{C.RESET} " if any(p.get("is_sample") for p in plays) else ""
-            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat {_sample_tag}{C.BOLD}{C.GOLD}> {C.RESET}").lstrip("\ufeff").strip()
+            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}pro-football-slm {_sample_tag}{C.BOLD}{C.GOLD}> {C.RESET}").lstrip("\ufeff").strip()
         except (EOFError, KeyboardInterrupt):
             print(f"\nExiting {PRODUCT_NAME}.")
             break
@@ -12055,7 +12055,7 @@ def interactive_tui(
                     os.system("cls" if os.name == "nt" else "clear")
                     print(AsciiArtRenderer.banner())
                 elif cmd_token in ("/about", "/license", "/credits", "/notice"):
-                    print(attribution.about_text())
+                    print(f"{PRODUCT_NAME}\n{PRODUCT_TAGLINE}\n{AFFILIATION_DISCLAIMER}\n\n{attribution.about_text()}")
                 else:
                     print(f"  {C.YELLOW}Unknown command `{cmd_token}`. Type `/help` to see all available slash commands.{C.RESET}")
                     continue
@@ -12122,8 +12122,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         parents=[common],
         description="Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, multi-angle play diagrammer, & composable custom stat CLI.",
     )
-    parser.add_argument("--about", action="store_true", help="Show product name, tagline, and attribution")
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
+    parser.epilog = "Short form: pfslm. Legacy alias: nfl-stat"
     parser.add_argument("--about", action="store_true", default=False, help="Show data attribution, licenses and credits (NOTICE) and exit")
     parser.set_defaults(
         engine="auto",
@@ -12224,23 +12224,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     if getattr(args, "about", False):
-        print(PRODUCT_NAME)
-        print(PRODUCT_TAGLINE)
-        print(AFFILIATION_DISCLAIMER)
-        notice_text = None
-        for candidate in (
-            Path(__file__).resolve().parent / "NOTICE.txt",
-            Path(__file__).resolve().parent.parent / "NOTICE",
-        ):
-            if candidate.is_file():
-                try:
-                    notice_text = candidate.read_text(encoding="utf-8").rstrip()
-                    break
-                except OSError:
-                    continue
-        if notice_text:
-            print()
-            print(notice_text)
+        print(f"{PRODUCT_NAME}\n{PRODUCT_TAGLINE}\n{AFFILIATION_DISCLAIMER}\n\n{attribution.about_text()}")
         return 0
 
     colour_snapshot = C.snapshot()
@@ -12255,7 +12239,7 @@ def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         C.disable()
 
     if getattr(args, "about", False) or args.command == "about":
-        print(attribution.about_text())
+        print(f"{PRODUCT_NAME}\n{PRODUCT_TAGLINE}\n{AFFILIATION_DISCLAIMER}\n\n{attribution.about_text()}")
         return 0
 
     bridge = NFLDataBridge(engine=args.engine, require_live=True if getattr(args, "require_live", False) else None)

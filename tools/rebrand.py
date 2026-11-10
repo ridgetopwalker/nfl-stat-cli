@@ -63,8 +63,6 @@ PATH_MOVES: List[Tuple[str, str]] = [
     (".agents/skills/nfl-stat-error-triage", ".agents/skills/pro-football-slm-error-triage"),
     ("nfl_stat_cli", "pro_football_slm"),
     ("nfl_stat_cli.py", "pro_football_slm.py"),
-    ("nfl-stat", "pro-football-slm"),
-    ("nfl-stat.bat", "pro-football-slm.bat"),
     ("nfl-stat-cli.bat", "pro-football-slm-cli.bat"),  # keep a Windows alias name
 ]
 
@@ -80,7 +78,6 @@ CONTENT_SUBS: List[Tuple[str, str]] = [
     ("nfl_stat_cli", "pro_football_slm"),
     ("NFL-STAT-CLI", "Pro Football SLM"),  # old banner / loading brand string
     ("nfl-stat-cli", "pro-football-slm"),
-    ("NFL_STAT_", "PFSLM_"),
     (".nfl_stat_cli", ".pro_football_slm"),
     # Launcher / prompt leftovers (hyphenated short name without -cli)
     # Only rewrite standalone "nfl-stat" tokens, not github repo (already protected)
@@ -95,7 +92,6 @@ CHECK_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
     ("package dir nfl_stat_cli/", re.compile(r"")),  # special-cased
     ("import/module nfl_stat_cli", re.compile(r"\bnfl_stat_cli\b")),
     ("dist name nfl-stat-cli", re.compile(r"nfl-stat-cli")),
-    ("env prefix NFL_STAT_", re.compile(r"\bNFL_STAT_")),
     ("data dir .nfl_stat_cli", re.compile(r"\.nfl_stat_cli\b")),
     ("skill nfl-stat-error-triage", re.compile(r"nfl-stat-error-triage")),
 ]
@@ -194,8 +190,8 @@ def transform_text(text: str) -> str:
     out = protect_github(text)
     for old, new in CONTENT_SUBS:
         out = out.replace(old, new)
-    # Intentionally do NOT rewrite bare "nfl-stat" tokens: the deprecated one-release
-    # console-script shim and docs that mention the old command must survive a re-run.
+    # Intentionally do NOT rewrite bare "nfl-stat" tokens: the permanent
+    # console-script alias and docs that mention the old command must survive a re-run.
     out = restore_github(out)
     return out
 

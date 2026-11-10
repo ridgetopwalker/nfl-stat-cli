@@ -55,7 +55,8 @@ def test_notice_file_matches_generated_text_and_required_credit():
     assert "https://creativecommons.org/licenses/by/4.0/" in text
     assert "CC BY 4.0" in text
     assert "Changes:" in text and "derived statistics" in text
-    assert "not affiliated with or endorsed by" in text
+    assert "This project is not affiliated with or endorsed by nflverse, FTN, the NFL, or any team.\n" in text
+    assert text.startswith("This software is MIT-licensed")
     assert "MIT" in text and "code only" in text
     # FTN paragraph only appears when FTN data is loaded
     assert "CC BY-SA 4.0" not in text
@@ -517,3 +518,7 @@ def test_constructing_a_bridge_does_not_overwrite_the_active_source(tmp_path):
 
 def test_unidentified_python_backend_is_not_credited_as_nflverse():
     assert attr.classify_source(attr.LABEL_PYTHON_UNIDENTIFIED) == "sample"
+
+
+def test_packaged_notice_matches_generated_notice():
+    assert (ROOT / "pro_football_slm" / "NOTICE.txt").read_text(encoding="utf-8") == attr.render_notice()

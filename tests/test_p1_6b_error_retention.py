@@ -33,9 +33,9 @@ def _ipc(tmp_path: Path) -> Path:
 
 def test_age_pruning_deletes_old_resolved_and_history_only(tmp_path, monkeypatch):
     monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
-    monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("PFSLM_ERROR_RETENTION_MAX", raising=False)
-    monkeypatch.delenv("PFSLM_ERROR_RETENTION_MAX", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_MAX", raising=False)
     ipc = _ipc(tmp_path)
     now = time.time()
     old = now - (40 * 86400)
@@ -103,14 +103,14 @@ def test_pending_reports_are_never_deleted_even_when_old_and_over_cap(tmp_path):
 
 def test_env_var_precedence_pfslm_wins_and_invalid_falls_back(monkeypatch):
     monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
-    monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("PFSLM_ERROR_RETENTION_MAX", raising=False)
-    monkeypatch.delenv("PFSLM_ERROR_RETENTION_MAX", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_MAX", raising=False)
 
     assert cli.error_retention_days() == 30
     assert cli.error_retention_max() == 500
 
-    monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "14")
+    monkeypatch.setenv("NFL_STAT_ERROR_RETENTION_DAYS", "14")
     assert cli.error_retention_days() == 14
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "7")
     assert cli.error_retention_days() == 7  # PFSLM wins
@@ -128,16 +128,16 @@ def test_env_var_precedence_pfslm_wins_and_invalid_falls_back(monkeypatch):
     assert cli.error_retention_days() == 14
 
     # both invalid -> default
-    monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "nope")
+    monkeypatch.setenv("NFL_STAT_ERROR_RETENTION_DAYS", "nope")
     assert cli.error_retention_days() == 30
 
-    monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "100")
+    monkeypatch.setenv("NFL_STAT_ERROR_RETENTION_MAX", "100")
     assert cli.error_retention_max() == 100
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "50")
     assert cli.error_retention_max() == 50
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "abc")
     assert cli.error_retention_max() == 100  # falls through to legacy
-    monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "xyz")
+    monkeypatch.setenv("NFL_STAT_ERROR_RETENTION_MAX", "xyz")
     assert cli.error_retention_max() == 500
 
 
@@ -209,7 +209,7 @@ def test_cleanup_never_raises_on_bad_ipc_dir(tmp_path):
 def test_create_error_report_triggers_cleanup_without_touching_pending(tmp_path, monkeypatch):
     monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
-    monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_DAYS", raising=False)
     ipc = cli.get_ipc_dir()
     now = time.time()
     old = now - (60 * 86400)
@@ -297,8 +297,8 @@ def test_write_resolution_refreshes_history_mtime_before_cleanup(tmp_path, monke
 def test_cleanup_uses_env_defaults_when_overrides_omitted(tmp_path, monkeypatch):
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_DAYS", "10")
     monkeypatch.setenv("PFSLM_ERROR_RETENTION_MAX", "2")
-    monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
-    monkeypatch.delenv("PFSLM_ERROR_RETENTION_MAX", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_MAX", raising=False)
     ipc = _ipc(tmp_path)
     now = time.time()
     old = now - (20 * 86400)  # older than 10 days

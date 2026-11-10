@@ -12,7 +12,7 @@ A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and in
   - **Compact Progress UI (Default)**: Displays the colorized `Pro Football SLM` ASCII art banner, a full-width progress bar matched to the banner width, and a single overwriting status line showing the current installer command.
   - **Verbose Mode (`-v` / `--verbose`)**: Pass `-v` (`./install.sh -v` or `.\install.ps1 -v`) to view full step-by-step `pip` and environment logs.
   - **Zero-Prerequisite Setup**: Automatically detects or installs **Python 3** (`>=3.10`), bootstraps **`pip`**, creates/updates `.venv`, installs required Python packages (`pandas`, `pyarrow`, `polars`, `nfl_data_py`), and installs R's `nflreadr` if `Rscript` is present.
-  - **`nfl-stat` Command & Post-Install `PATH` Prompt**: Generates the `nfl-stat` launcher in the project folder (`./nfl-stat` on `*nix`/WSL and `.\nfl-stat` on Windows) and, once installation verification succeeds, asks if you want to add `nfl-stat` to your global `PATH` so you can run `nfl-stat` from any directory.
+  - **`pro-football-slm` Command & Post-Install `PATH` Prompt**: Generates the `pro-football-slm` launcher in the project folder (`./pro-football-slm` on `*nix`/WSL and `.\pro-football-slm` on Windows) and, once installation verification succeeds, asks if you want to add `pro-football-slm` to your global `PATH` so you can run `pro-football-slm` from any directory.
 - **General-Purpose Multi-Scope Composable Custom Stat Engine**:
   - Build custom stats across three evaluation scopes:
     1. **`season` scope**: Evaluate formulas across a player's, team's, or play concept's aggregated season metrics.
@@ -22,13 +22,13 @@ A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and in
   - Chain custom stats inside new custom stats with automatic AST dependency resolution.
 - **Context-Aware Output (No Unnecessary ASCII Fields on Yearly Averages)**:
   - Queries for **season averages, leaderboards, or stat rankings across the year** output clean **tables and stat explanations only**—never cluttering the terminal with an ASCII football field.
-  - Queries for a **specific play** (`nfl-stat play ...` or asking to see/diagram a specific play) render the **colorized ASCII football field and play trajectory**.
+  - Queries for a **specific play** (`pro-football-slm play ...` or asking to see/diagram a specific play) render the **colorized ASCII football field and play trajectory**.
 - **Multi-Angle ASCII Play Visualizer (`behind-offense`, `behind-defense`, `sideline`)**:
   - **`--camera behind-offense`**: All-22 view behind the QB/Offense looking **upfield (`▲`)** toward the Defense (`DE`, `DT`, `LB`, `CB`, `FS`, `SS`) and Opponent End Zone.
   - **`--camera behind-defense`**: All-22 view behind the Defensive Secondary looking at the Offense driving **downward (`▼`)** toward the viewer, with laterally mirrored perspective (`DEF LEFT / OFF RIGHT` on the left, `DEF RIGHT / OFF LEFT` on the right).
   - **`--camera sideline`**: Classic 100-yard left-to-right broadcast view.
 - **Natural-Language-First Interactive Interface + `/command` System**:
-  - Launching `./nfl-stat` (or `nfl-stat`) drops directly into a natural-language prompt (`nfl-stat > `) with full multi-line GNU `readline` line-wrap and backspace support.
+  - Launching `./pro-football-slm` (or `pro-football-slm`) drops directly into a natural-language prompt (`pro-football-slm > `) with full multi-line GNU `readline` line-wrap and backspace support.
   - Type any NFL stat question, play diagram request, or custom stat definition in plain English, or use `/commands` (`/help` lists all commands; `/quit`, `quit`, `/close`, or `close` exits).
   - Automatically connects to a local Ollama SLM (`qwen2.5:1.5b`, `qwen2.5-coder:1.5b`, `llama3.2:1b`, `phi3:mini`, etc.) if running, or falls back to the zero-latency built-in AST/rule parser.
 
@@ -53,12 +53,14 @@ install.bat -v
 ```
 *(In PowerShell: `.\install.ps1` or `.\install.ps1 -v` — add `-WithSLM` to also install/pull a lightweight local Ollama SLM `qwen2.5:1.5b`)*
 
-Once the installer finishes verifying `nfl-stat`, it will prompt:
+Short form: `pfslm`. Legacy alias: nfl-stat
+
+Once the installer finishes verifying `pro-football-slm`, it will prompt:
 ```text
-? Add nfl-stat to your PATH so you can run it from anywhere? [y/N]:
+? Add pro-football-slm to your PATH so you can run it from anywhere? [y/N]:
 ```
-- Choose **`y`** to run `nfl-stat` from any directory.
-- Choose **`N`** to run `./nfl-stat` (`*nix`/WSL) or `.\nfl-stat` (Windows) directly inside the installed folder.
+- Choose **`y`** to run `pro-football-slm` from any directory.
+- Choose **`N`** to run `./pro-football-slm` (`*nix`/WSL) or `.\pro-football-slm` (Windows) directly inside the installed folder.
 
 ### Live data vs. sample data
 
@@ -68,29 +70,29 @@ The installers install the live NFL data packages listed in [`requirements-live.
 
 ```bash
 # 1. Launch the interactive Natural Language + /command interface
-./nfl-stat
-# (Or simply `nfl-stat` if added to your PATH)
-# Inside `nfl-stat > `, ask anything in plain English or run `/help` to view all slash commands:
-#   nfl-stat > What is the average yards after catch on screen passes in 2025?
-#   nfl-stat > Show Lamar Jackson longest play from behind the defense
-#   nfl-stat > /help
-#   nfl-stat > /stat qb_impact_score
-#   nfl-stat > /create
-#   nfl-stat > /play mahomes behind-offense
-#   nfl-stat > close   (or /quit, quit, /close)
+./pro-football-slm
+# (Or simply `pro-football-slm` if added to your PATH)
+# Inside `pro-football-slm > `, ask anything in plain English or run `/help` to view all slash commands:
+#   pro-football-slm > What is the average yards after catch on screen passes in 2025?
+#   pro-football-slm > Show Lamar Jackson longest play from behind the defense
+#   pro-football-slm > /help
+#   pro-football-slm > /stat qb_impact_score
+#   pro-football-slm > /create
+#   pro-football-slm > /play mahomes behind-offense
+#   pro-football-slm > close   (or /quit, quit, /close)
 
 # 2. Evaluate any stat leaderboard across the season (outputs Table only — no ASCII field)
-./nfl-stat stat screen_yards_after_catch --season 2025
-./nfl-stat stat yards_per_play --conf AFC --group-by play_concept
-./nfl-stat qb-wins --season 2025
+./pro-football-slm stat screen_yards_after_catch --season 2025
+./pro-football-slm stat yards_per_play --conf AFC --group-by play_concept
+./pro-football-slm qb-wins --season 2025
 
 # 3. Diagram a specific play in Behind-the-Offense, Behind-the-Defense, or Sideline view
-./nfl-stat play --qb Mahomes --camera behind-offense
-./nfl-stat play --qb Goff --concept screen --camera behind-defense
-./nfl-stat play --conf AFC --sort-by yards_gained --camera sideline
+./pro-football-slm play --qb Mahomes --camera behind-offense
+./pro-football-slm play --qb Goff --concept screen --camera behind-defense
+./pro-football-slm play --conf AFC --sort-by yards_gained --camera sideline
 
 # 4. Create a new game-scoped or filtered custom stat (like the example use cases)
-./nfl-stat create-stat \
+./pro-football-slm create-stat \
   --name "qb_quality_start" \
   --title "QB Quality Start (QS)" \
   --group-by qb \
@@ -102,8 +104,8 @@ The installers install the live NFL data packages listed in [`requirements-live.
   --unit "QS"
 
 # 5. Ask natural language questions (Table for yearly averages; ASCII Field for specific plays)
-./nfl-stat ask "What is the average yards after catch on screen passes in 2025?"
-./nfl-stat ask "Show Lamar Jackson longest play from behind the defense"
+./pro-football-slm ask "What is the average yards after catch on screen passes in 2025?"
+./pro-football-slm ask "Show Lamar Jackson longest play from behind the defense"
 ```
 
 ## Building & Publishing to PyPI
@@ -131,7 +133,7 @@ pip install pro-football-slm
 # Or with live data dependencies included:
 pip install "pro-football-slm[live]"
 ```
-*(Installing via `pip` registers both the `nfl-stat` and `pro-football-slm` commands).*
+*(Installing via `pip` registers the `pro-football-slm` and `pfslm` commands, plus the permanent legacy alias).*
 
 ## License
 

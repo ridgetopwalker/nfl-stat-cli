@@ -35,7 +35,7 @@ jobs:
         run: python -m pytest -q
       - name: "Run tests with coverage report (hermetic - temp HOME/IPC, no network, no Ollama)"
         if: matrix.python-version == '3.13'
-        run: python -m pytest -q --cov=nfl_stat_cli --cov-report=term-missing
+        run: python -m pytest -q --cov=pro_football_slm --cov-report=term-missing
 
   build:
     name: build wheel and sdist
@@ -57,7 +57,8 @@ jobs:
           import glob, zipfile
           wheel = glob.glob("dist/*.whl")[0]
           names = zipfile.ZipFile(wheel).namelist()
-          assert "nfl_stat_cli/nflverse_bridge.R" in names, names
+          assert "pro_football_slm/nflverse_bridge.R" in names, names
+          assert "pro_football_slm/NOTICE.txt" in names, names
           assert not [n for n in names if n.endswith(".zip")], names
           print("wheel ok:", wheel)
           PY
@@ -66,5 +67,7 @@ jobs:
           python -m venv /tmp/wheel-venv
           /tmp/wheel-venv/bin/python -m pip install dist/*.whl
           cd "$(mktemp -d)"
+          /tmp/wheel-venv/bin/pro-football-slm --version
+          /tmp/wheel-venv/bin/pfslm --version
           /tmp/wheel-venv/bin/nfl-stat --version
-          /tmp/wheel-venv/bin/python -c "import importlib.resources as r, nfl_stat_cli; assert r.files(nfl_stat_cli).joinpath('nflverse_bridge.R').is_file()"
+          /tmp/wheel-venv/bin/python -c "import importlib.resources as r, pro_football_slm; assert r.files(pro_football_slm).joinpath('nflverse_bridge.R').is_file()"

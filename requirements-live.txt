@@ -1,5 +1,5 @@
 # Live nflverse data packages used by install.sh / install.ps1.
-# Without these nfl-stat falls back to the small built-in SAMPLE dataset.
+# Without these pro-football-slm falls back to the small built-in SAMPLE dataset.
 # Lower bounds match the `live` extra in pyproject.toml; upper bounds stop a new major
 # release from silently changing behaviour -- raise them deliberately after testing.
 # nflreadpy is the maintained nflverse loader (Python 3.10+, which is our floor).

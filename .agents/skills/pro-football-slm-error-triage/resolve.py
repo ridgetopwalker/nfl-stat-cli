@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Signal that an nfl-stat error report is fixed, so the waiting nfl-stat session can pick it up.
+"""Signal that a pro-football-slm error report is fixed, so the waiting pro-football-slm session can pick it up.
 
 Usage: python3 resolve.py <local|wsl> <report_id> <commit> [--pull] -- "<summary>"
        (put `--` before the summary if it can start with a dash)
@@ -9,7 +9,7 @@ Usage: python3 resolve.py <local|wsl> <report_id> <commit> [--pull] -- "<summary
   wsl    do the same inside WSL: needs $PFSLM_WSL_REPO (absolute checkout path inside WSL), optionally
          $PFSLM_WSL_PYTHON (default: python3) and $PFSLM_WSL_IPC_DIR (exported as PFSLM_IPC_DIR there).
   --pull (wsl only) first run `git pull --ff-only` in that WSL checkout. Off by default; this is an agent-side
-         step, nfl-stat itself never runs git on /reload.
+         step, pro-football-slm itself never runs git on /reload.
 
 <report_id> must look like err_YYYYMMDD_HHMMSS_xxxxxxxx (the id format written by `/error`).
 The waiting session then shows the summary and, only if the user agrees, reloads the code in place.
