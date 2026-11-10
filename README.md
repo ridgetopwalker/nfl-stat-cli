@@ -56,6 +56,10 @@ Once the installer finishes verifying `nfl-stat`, it will prompt:
 - Choose **`y`** to run `nfl-stat` from any directory.
 - Choose **`N`** to run `./nfl-stat` (`*nix`/WSL) or `.\nfl-stat` (Windows) directly inside the installed folder.
 
+### Live data vs. sample data
+
+The installers install the live NFL data packages listed in [`requirements-live.txt`](requirements-live.txt) (`pandas`, `pyarrow`, `polars`, `nflreadpy`; `nflreadpy` needs Python 3.10+). If that step fails, the installer **stops with an error** instead of leaving you on the small built-in sample dataset. To use the sample dataset on purpose, pass `--sample-only` (`./install.sh --sample-only`) or `-SkipLivePackages` (`.\install.ps1 -SkipLivePackages`). The deprecated `nfl_data_py` loader is no longer installed by default; add `--with-legacy-nfl-data-py` / `-WithLegacyNflDataPy` if you need the opt-in fallback. Steps that need administrator rights (`sudo` to install Python on Linux) ask first; pass `--yes` to allow them when running non-interactively.
+
 ## Quickstart Examples
 
 ```bash
