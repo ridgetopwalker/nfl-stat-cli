@@ -68,18 +68,13 @@ def test_custom_division_note(engine, tmp_path, formula, warns):
     assert imported.stats["test_ratio"].calculation_explained == stat.calculation_explained
 
 
-def test_package_and_legacy_launcher():
+def test_package_entry_points():
     assert resources.files(cli).joinpath("nflverse_bridge.R").is_file()
     root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("legacy_cli", root / "nfl_stat_cli.py")
-    legacy = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(legacy)
-    assert legacy.StatEngine is cli.StatEngine
-    assert legacy._safe_div is cli._safe_div
-    for args in ([str(root / "nfl_stat_cli.py"), "--help"], ["-m", "nfl_stat_cli", "--help"]):
-        result = subprocess.run([sys.executable] + args, capture_output=True, text=True)
-        assert result.returncode == 0, result.stderr
-        assert "usage:" in result.stdout
+    assert not (root / "nfl_stat_cli.py").exists(), "no top-level shim next to the package"
+    result = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "--help"], capture_output=True, text=True, cwd=root)
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout
 
 
 def test_custom_stat_example_walkthrough(engine):
@@ -174,11 +169,11 @@ def test_play_phase_filtering():
 
 def test_cli_subcommands():
     root = Path(__file__).resolve().parents[1]
-    res_team = subprocess.run([sys.executable, str(root / "nfl_stat_cli.py"), "team", "KC", "--season", "2025"], capture_output=True, text=True)
+    res_team = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "team", "KC", "--season", "2025"], capture_output=True, text=True, cwd=root)
     assert res_team.returncode == 0, res_team.stderr
     assert "TEAM DRILL-DOWN : KANSAS CITY CHIEFS" in res_team.stdout
 
-    res_player = subprocess.run([sys.executable, str(root / "nfl_stat_cli.py"), "player", "Mahomes", "--season", "2025"], capture_output=True, text=True)
+    res_player = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "player", "Mahomes", "--season", "2025"], capture_output=True, text=True, cwd=root)
     assert res_player.returncode == 0, res_player.stderr
     assert "PLAYER DRILL-DOWN : P.MAHOMES" in res_player.stdout
     assert "auto-selected" in res_player.stdout
@@ -340,9 +335,10 @@ def test_multi_position_player_recognition_and_no_qb_key(engine, query, expected
 def test_cli_play_subcommand_player_flag():
     root = Path(__file__).resolve().parents[1]
     res_player = subprocess.run(
-        [sys.executable, str(root / "nfl_stat_cli.py"), "play", "--player", "Worthy", "--season", "2025"],
+        [sys.executable, "-m", "nfl_stat_cli", "play", "--player", "Worthy", "--season", "2025"],
         capture_output=True,
         text=True,
+        cwd=root,
     )
     assert res_player.returncode == 0, res_player.stderr
     assert "SPECIFIC PLAY DIAGRAM" in res_player.stdout
@@ -350,9 +346,10 @@ def test_cli_play_subcommand_player_flag():
 
     # Test backward compatibility with --qb flag
     res_qb = subprocess.run(
-        [sys.executable, str(root / "nfl_stat_cli.py"), "play", "--qb", "Mahomes", "--season", "2025"],
+        [sys.executable, "-m", "nfl_stat_cli", "play", "--qb", "Mahomes", "--season", "2025"],
         capture_output=True,
         text=True,
+        cwd=root,
     )
     assert res_qb.returncode == 0, res_qb.stderr
     assert "SPECIFIC PLAY DIAGRAM" in res_qb.stdout
@@ -1390,12 +1387,12 @@ def test_fantasy_scoring_calculations_and_leaderboards():
             "play_type": "run", "rushing_yards": 30, "rush_touchdown": 1, "fumble_lost": 0,
             "epa": 1.2, "wpa": 0.04, "down": 2, "ydstogo": 4,
         },
-        # Receiver play for Rashee Rice: 6 catches, 80 yards, 1 TD
+        # Receiver play for Rashee Rice: 1 catch ("reception" is a 0/1 flag), 80 yards, 1 TD
         {
             "season": 2024, "week": 1, "game_id": "2024_01_KC_BAL",
             "posteam": "KC", "defteam": "BAL", "home_team": "BAL", "away_team": "KC",
             "receiver_player_name": "R.Rice", "player_name": "Rashee Rice",
-            "play_type": "pass", "receiving_yards": 80, "reception": 6, "touchdown": 1,
+            "play_type": "pass", "receiving_yards": 80, "reception": 1, "touchdown": 1,
             "epa": 1.5, "wpa": 0.05, "down": 3, "ydstogo": 7,
         },
     ]
@@ -2084,20 +2081,9 @@ def test_generic_player_disambiguation(monkeypatch, engine):
     assert "PLAYER DRILL-DOWN" in out
     assert "SF" in out
 
-    # Non-interactive defaults cleanly to top candidate
+    # Non-interactive no longer silently picks the first candidate (follow-up to #6): it lists the
+    # candidates and asks for a full name instead.
     out_non_int = cli.strip_ansi(cli.render_player_drilldown_view(engine, multi_player_plays, season=2026, player_name="McCaffrey", interactive=False))
-    assert "PLAYER DRILL-DOWN" in out_non_int
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    assert "PLAYER DRILL-DOWN" not in out_non_int
+    assert "can't answer" in out_non_int
+    assert "Christian McCaffrey" in out_non_int and "Luke McCaffrey" in out_non_int
