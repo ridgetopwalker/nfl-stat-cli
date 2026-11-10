@@ -1,6 +1,6 @@
 """
 NFL-Stat-CLI Player & Coach Contract Analytics Engine.
-Provides comprehensive, publicly sourced contract data from OverTheCap & Spotrac:
+Provides contract data compiled from public reports (approximate):
 - Player contracts across all positions (Quarterbacks, Skill Positions, Linemen, Defense).
 - Head Coach contracts, salaries, and contract expiration horizons.
 - Team payroll distributions, cap hits, guaranteed allocations, and free agency classes.
@@ -33,7 +33,9 @@ class ContractRecord:
     notes: str = ""
 
 
-# Publicly compiled NFL contracts (OverTheCap & Spotrac verified filings):
+# Contract figures compiled from public reports (approximate). Embedded contract rows. No upstream source, retrieval
+# date or as-of date is recorded for them, so they are catalogued below as one unverified snapshot
+# (see CONTRACT_SEASONS) rather than as "current" data.
 NFL_CONTRACTS: List[ContractRecord] = [
     # ------------------ QUARTERBACKS ------------------
     ContractRecord("Patrick Mahomes", "KC", "QB", "player", 450.0, 45.0, 141.5, 10, 2020, 2032, 37.0, "10-yr extension, rolling guarantees & roster bonus restructuring"),
@@ -146,10 +148,57 @@ NFL_CONTRACTS: List[ContractRecord] = [
 ]
 
 
-def find_contract_by_name(query_name: str) -> Optional[ContractRecord]:
-    """Find a contract record by full or partial player/coach name, supporting initial abbreviations."""
+# Season catalog. The rows carry no source and no as-of date, only each deal's signed and free-agent years, so the
+# catalog is keyed by season from those terms (earliest signing year through latest free-agent year) and every
+# season in it is flagged "unverified". A season outside it is NOT cataloged and is never answered from the table;
+# inside it, a deal is only shown for seasons its own signed..free-agent term covers. The cap-hit column is the
+# table's single "current" figure, not a per-season one.
+CONTRACT_SEASONS: Dict[int, Dict[str, Any]] = {
+    season: {
+        "status": "unverified",
+        "source": "none recorded; season derived from each row's signed/free-agent years",
+    }
+    for season in range(min(c.signed_year for c in NFL_CONTRACTS), max(c.free_agent_year for c in NFL_CONTRACTS) + 1)
+}
+
+
+def contract_in_effect(c: "ContractRecord", season: Optional[int]) -> bool:
+    """True when ``season`` is None or inside the deal's own signed..free-agent term."""
+    return season is None or c.signed_year <= as_season(season) <= c.free_agent_year
+
+
+def as_season(value: Any) -> int:
+    """A season as an int; anything missing, NaN or non-numeric is 0 (= unknown, never cataloged)."""
+    try:
+        return int(float(value)) if value else 0
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def contract_season_cataloged(season: Optional[int]) -> bool:
+    """True when contract rows exist for ``season``; None means "the latest cataloged season"."""
+    return True if season is None else as_season(season) in CONTRACT_SEASONS
+
+
+def contract_catalog_note(season: Optional[int] = None) -> str:
+    """One-line statement of what the contract data can and cannot say for ``season``."""
+    cataloged = sorted(CONTRACT_SEASONS)
+    span = f"{cataloged[0]}-{cataloged[-1]}"
+    if contract_season_cataloged(season):
+        return (f"Contract data is an unverified static snapshot (seasons {span} from each deal's own term); "
+                f"no source or as-of date is recorded.")
+    return (f"Contract data is not cataloged for season {as_season(season)} "
+            f"(cataloged: {span}, unverified); nothing is shown for it.")
+
+
+def find_contract_by_name(query_name: str, season: Optional[int] = None) -> Optional[ContractRecord]:
+    """
+    Find a contract record by full or partial player/coach name, supporting initial abbreviations.
+    With ``season`` given, a season that is not cataloged finds nothing instead of reusing the snapshot.
+    (A deal's own term is checked by the caller that renders it, see ``contract_in_effect``.)
+    """
     q = query_name.strip().lower()
-    if not q:
+    if not q or not contract_season_cataloged(season):
         return None
 
     # 1. Exact match (prefer player if both exist)
@@ -475,7 +524,7 @@ def render_contracts_leaderboard_view(
         rows,
         alignments=["right", "left", "center", "center", "right", "right", "right", "center", "right", "center"],
     )
-    footer = f"\n  {C.DIM}Contract Source: Verified public OverTheCap & Spotrac NFL contract filings.{C.RESET}"
+    footer = f"\n  {C.DIM}Contract figures: compiled from public reports; approximate and may be out of date. Not affiliated with Over The Cap or Spotrac.{C.RESET}"
     return f"\n{tbl}{footer}"
 
 
@@ -485,11 +534,17 @@ def render_player_contract_view(
     season: Optional[int] = None,
 ) -> str:
     """Render a detailed contract dossier card for a specific player or coach."""
-    from . import C
+    from . import C, CURRENT_SEASON
 
+    ref_season = as_season(season) or CURRENT_SEASON
+    if season and not contract_season_cataloged(season):
+        return f"\n{C.YELLOW}⚠ {contract_catalog_note(season)}{C.RESET}"
     c = find_contract_by_name(name)
     if not c:
         return f"\n{C.YELLOW}⚠ No contract record found for '{name}'. Try searching by last name (e.g. Mahomes, Jefferson, Reid).{C.RESET}"
+    if not contract_in_effect(c, season):
+        return (f"\n{C.YELLOW}⚠ {c.name} has no cataloged contract in effect for season {as_season(season)} "
+                f"(signed {c.signed_year}, expires {c.free_agent_year}).{C.RESET}")
 
     lines = [
         f"\n{C.BOLD}{C.GOLD}╔══════════════════════════════════════════════════════════════════════════╗{C.RESET}",
@@ -505,11 +560,12 @@ def render_player_contract_view(
         "",
         f"  {C.CYAN}⏳ DURATION & FREE AGENCY HORIZON:{C.RESET}",
         f"     • Contract Length:          {c.years} Years (Signed: {c.signed_year})",
-        f"     • Contract Expiration / FA: {C.BOLD}{c.free_agent_year}{C.RESET} ({max(0, c.free_agent_year - 2026)} season(s) remaining)",
+        f"     • Contract Expiration / FA: {C.BOLD}{c.free_agent_year}{C.RESET} ({max(0, c.free_agent_year - ref_season)} season(s) remaining after {ref_season})",
     ]
 
     if c.notes:
         lines.append(f"     • Structure Notes:          {C.DIM}{c.notes}{C.RESET}")
+    lines.append(f"     • Data status:              {C.DIM}{contract_catalog_note(season)}{C.RESET}")
 
     if plays and season:
         eff = calculate_contract_performance_efficiency(c, plays, season)
@@ -542,8 +598,39 @@ def render_player_contract_view(
     return "\n".join(lines)
 
 
+def _split_contracts(rows: List[ContractRecord]) -> Tuple[List[ContractRecord], List[ContractRecord], List[ContractRecord]]:
+    """Partition contracts into (players, coaches, other); only players count toward cap totals."""
+    players = [c for c in rows if str(c.contract_type).strip().lower() == "player"]
+    coaches = [c for c in rows if str(c.contract_type).strip().lower() == "coach"]
+    other = [c for c in rows if c not in players and c not in coaches]
+    return players, coaches, other
+
+
+def compute_team_payroll_totals(team_abbr: str, contracts: Optional[List[ContractRecord]] = None) -> Dict[str, Any]:
+    """
+    Sum cataloged contract money for one team, keeping player cap and coach pay apart.
+
+    Only contracts of type "player" are summed into the player totals. Head-coach salaries are not
+    salary-cap charges, and any other contract type is listed but also excluded from the totals.
+    The catalog is partial (a curated list, not every roster contract), so the totals describe only
+    cataloged players.
+    """
+    t = team_abbr.strip().upper()
+    rows = get_contracts_by_team(t) if contracts is None else contracts
+    players, coaches, other = _split_contracts(rows)
+    return {
+        "team": t,
+        "player_count": len(players),
+        "coach_count": len(coaches),
+        "other_count": len(other),
+        "player_apy_m": sum(c.apy_m for c in players),
+        "player_cap_hit_m": sum(c.cap_hit_current_m for c in players),
+        "coach_apy_m": sum(c.apy_m for c in coaches),
+    }
+
+
 def render_team_payroll_view(team_abbr: str) -> str:
-    """Render a breakdown of a team's top contracts and committed salary cap."""
+    """Render a breakdown of a team's cataloged contracts: player subtotal, coach pay listed separately."""
     from . import C, AsciiArtRenderer
 
     t = team_abbr.strip().upper()
@@ -551,40 +638,57 @@ def render_team_payroll_view(team_abbr: str) -> str:
     if not team_contracts:
         return f"\n{C.YELLOW}⚠ No contracts cataloged for team '{team_abbr}'.{C.RESET}"
 
-    team_contracts.sort(key=lambda x: x.apy_m, reverse=True)
+    totals = compute_team_payroll_totals(t, team_contracts)
+    players, coaches, other = _split_contracts(team_contracts)
+    players = sorted(players, key=lambda x: x.apy_m, reverse=True)
+    coaches = sorted(coaches, key=lambda x: x.apy_m, reverse=True)
+    other = sorted(other, key=lambda x: x.apy_m, reverse=True)
 
     title_str = f"🏛️ Team Contract Payroll & Cap Allocation: {t}"
     headers = ["Name", "Pos", "Type", "APY ($M)", "Total ($M)", "Guaranteed ($M)", "Yrs", "Cap Hit ($M)", "FA"]
     rows = []
 
-    tot_apy = 0.0
-    tot_cap = 0.0
-    for c in team_contracts:
-        tot_apy += c.apy_m
-        tot_cap += c.cap_hit_current_m
-        rows.append([
+    def _contract_row(c: ContractRecord, show_cap_hit: bool) -> List[str]:
+        return [
             f"{C.BOLD}{c.name}{C.RESET}",
             c.position,
-            c.contract_type.upper(),
+            str(c.contract_type).upper(),
             f"${c.apy_m:.2f}M",
             f"${c.total_value_m:.1f}M",
             f"${c.guaranteed_m:.1f}M",
             f"{c.years}y",
-            f"${c.cap_hit_current_m:.1f}M",
+            f"${c.cap_hit_current_m:.1f}M" if show_cap_hit else "-",
             str(c.free_agent_year),
+        ]
+
+    def _label_row(text: str) -> List[str]:
+        return [f"{C.DIM}{text}{C.RESET}"] + ["-"] * (len(headers) - 1)
+
+    for c in players:
+        rows.append(_contract_row(c, show_cap_hit=True))
+
+    if players:
+        rows.append([
+            f"{C.BOLD}CATALOGED PLAYERS SUBTOTAL ({len(players)}){C.RESET}",
+            "-",
+            "-",
+            f"{C.BOLD}{C.GREEN}${totals['player_apy_m']:.2f}M{C.RESET}",
+            "-",
+            "-",
+            "-",
+            f"{C.BOLD}${totals['player_cap_hit_m']:.2f}M{C.RESET}",
+            "-",
         ])
 
-    rows.append([
-        f"{C.BOLD}TOTAL COMMITTED{C.RESET}",
-        "-",
-        "-",
-        f"{C.BOLD}{C.GREEN}${tot_apy:.2f}M{C.RESET}",
-        "-",
-        "-",
-        "-",
-        f"{C.BOLD}${tot_cap:.2f}M{C.RESET}",
-        "-",
-    ])
+    # Coach pay is listed for reference only: it is not a salary-cap charge and is excluded from the subtotal.
+    if coaches:
+        rows.append(_label_row("COACH PAY (not in subtotal)"))
+        for c in coaches:
+            rows.append(_contract_row(c, show_cap_hit=False))
+    if other:
+        rows.append(_label_row("OTHER CONTRACTS (not in subtotal)"))
+        for c in other:
+            rows.append(_contract_row(c, show_cap_hit=False))
 
     tbl = AsciiArtRenderer.render_table(
         title_str,
@@ -592,7 +696,12 @@ def render_team_payroll_view(team_abbr: str) -> str:
         rows,
         alignments=["left", "center", "center", "right", "right", "right", "center", "right", "center"],
     )
-    return f"\n{tbl}"
+    notes = []
+    if players:
+        notes.append(f"  {C.DIM}Subtotal covers only the {len(players)} cataloged player contract(s); the catalog is partial, so this is not the team's full cap commitment.{C.RESET}")
+    if coaches or other:
+        notes.append(f"  {C.DIM}Coach pay and other contract types are listed separately and are not included in the subtotal.{C.RESET}")
+    return f"\n{tbl}\n" + "\n".join(notes)
 
 
 def interactive_contracts_browser(
