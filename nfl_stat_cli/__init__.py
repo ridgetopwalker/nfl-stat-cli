@@ -9931,6 +9931,19 @@ def _json_safe(value: Any) -> Any:
         return {"unserializable_parse": repr(value)[:2000]}
 
 
+def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
+    """Read a small regular JSON file from the IPC dir; never follows symlinks or blocks on special files."""
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > IPC_MAX_FILE_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def create_error_report(
     query_raw: str,
     parsed_nl: Dict[str, Any],
