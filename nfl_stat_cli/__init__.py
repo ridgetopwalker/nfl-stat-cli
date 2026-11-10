@@ -3322,7 +3322,55 @@ class StatEngine:
                 pass
         return filtered
 
-    def _compute_base_metrics(self, plays: List[Dict[str, Any]]) -> Dict[str, float]:
+    @staticmethod
+    def _play_passer(p: Dict[str, Any]) -> str:
+        """The passer on a play; the single source of truth for both grouping and scoring."""
+        return str(p.get("qb_name") or p.get("passer_player_name") or "").strip()
+
+    @staticmethod
+    def _role_fantasy_components(plays: List[Dict[str, Any]], entity: str) -> Dict[str, float]:
+        """
+        Attribute fantasy-relevant production to ``entity`` by the role they played on each play:
+        passing yards/TDs/INTs only to the passer, receiving yards/TDs/receptions only to the receiver,
+        rushing yards/TDs only to the rusher. A lost fumble is charged to the primary ball carrier.
+        """
+        e = entity.strip().lower()
+        out = {"pass_yds": 0.0, "pass_td": 0.0, "ints": 0.0, "rec_yds": 0.0, "rec_td": 0.0,
+               "receptions": 0.0, "rush_yds": 0.0, "rush_td": 0.0, "fum_lost": 0.0}
+
+        def _nm(v: Any) -> str:
+            return str(v or "").strip().lower()
+
+        for p in plays:
+            is_pass = int(p.get("pass_attempt", 0)) == 1
+            is_sack = int(p.get("sack", 0)) == 1
+            is_rush = int(p.get("rush_attempt", 0)) == 1
+            passer = _nm(StatEngine._play_passer(p))
+            receiver = _nm(p.get("receiver_player_name"))
+            rusher = _nm(p.get("rusher_player_name"))
+            yds = float(p.get("yards_gained", 0.0))
+            complete = int(p.get("complete_pass", 0)) == 1
+            if is_pass and not is_sack:
+                # A touchdown on an intercepted pass is the defense's score, not a passing TD
+                ptd = 0 if int(p.get("interception", 0)) == 1 else int(p.get("pass_touchdown", p.get("touchdown", 0)))
+                if passer == e:
+                    out["pass_yds"] += yds
+                    out["pass_td"] += ptd
+                    out["ints"] += int(p.get("interception", 0))
+                if receiver == e and complete:
+                    out["rec_yds"] += yds
+                    out["rec_td"] += ptd
+                    out["receptions"] += 1
+            if is_rush and rusher == e:
+                out["rush_yds"] += yds
+                out["rush_td"] += 0 if int(p.get("fumble_lost", 0)) == 1 else int(p.get("rush_touchdown", p.get("touchdown", 0)))
+            if int(p.get("fumble_lost", 0)) == 1:
+                carrier = rusher if is_rush else (receiver if (is_pass and complete) else passer)
+                if carrier == e:
+                    out["fum_lost"] += 1
+        return out
+
+    def _compute_base_metrics(self, plays: List[Dict[str, Any]], entity: Optional[str] = None) -> Dict[str, float]:
         n = max(1, len(plays))
         total_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays)
         passing_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays if int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0)
@@ -3385,26 +3433,23 @@ class StatEngine:
         # Official NFL Passer Rating calculation (uses passing_yards and pass_touchdowns)
         nfl_passer_rating = calculate_passer_rating(pass_attempts, completions, passing_yards, pass_touchdowns, interceptions)
 
-        # Look up player contract if plays belong to a specific player/rusher/receiver/QB
-        p_name = ""
-        for p in plays:
-            cand = (
-                p.get("player_name")
-                or p.get("receiver_player_name")
-                or p.get("rusher_player_name")
-                or p.get("qb_name")
-                or p.get("kicker_player_name")
-                or p.get("punter_player_name")
-            )
-            if cand and str(cand).strip():
-                p_name = str(cand).strip()
-                break
-
-        c_rec = find_contract_by_name(p_name) if p_name else None
+        # Contracts and fantasy scoring are only attributable to a named entity (never to an aggregate
+        # group such as a team): look the contract up by that entity's name, not by whichever player
+        # happens to appear on the first play (which is the receiver on pass plays).
+        c_rec = find_contract_by_name(entity) if entity else None
         cap_val = float(c_rec.cap_hit_current_m) if c_rec else 0.0
         apy_val = float(c_rec.apy_m) if c_rec else 0.0
         tot_val = float(c_rec.total_value_m) if c_rec else 0.0
         gtd_val = float(c_rec.guaranteed_m) if c_rec else 0.0
+
+        if entity:
+            rf = self._role_fantasy_components(plays, entity)
+            f_std = (rf["pass_yds"] * 0.04) + (rf["pass_td"] * 4.0) - (rf["ints"] * 2.0) \
+                + ((rf["rec_yds"] + rf["rush_yds"]) * 0.10) + ((rf["rec_td"] + rf["rush_td"]) * 6.0) - (rf["fum_lost"] * 2.0)
+            f_recs = rf["receptions"]
+        else:
+            f_std = (passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0)
+            f_recs = float(completions)
 
         base: Dict[str, float] = {
             "plays": float(len(plays)),
@@ -3475,13 +3520,13 @@ class StatEngine:
             "timeouts": float(timeouts),
             "timeouts_used": float(timeouts),
             "timeouts_called": float(timeouts),
-            "fantasy_points": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0), 2),
-            "fantasy_points_std": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0), 2),
-            "fantasy_points_ppr": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions), 2),
-            "fantasy_points_half_ppr": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + (float(completions) * 0.5), 2),
-            "fantasy_ppg": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
-            "fantasy_ppg_ppr": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
-            "fantasy_ppg_std": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0)) / float(games_played), 2),
+            "fantasy_points": round(f_std, 2),
+            "fantasy_points_std": round(f_std, 2),
+            "fantasy_points_ppr": round(f_std + f_recs, 2),
+            "fantasy_points_half_ppr": round(f_std + (f_recs * 0.5), 2),
+            "fantasy_ppg": round((f_std + f_recs) / float(games_played), 2),
+            "fantasy_ppg_ppr": round((f_std + f_recs) / float(games_played), 2),
+            "fantasy_ppg_std": round(f_std / float(games_played), 2),
             "yards_per_game": round(total_yards / float(games_played), 2),
             "passing_yards_per_game": round(passing_yards / float(games_played), 2),
             "rushing_yards_per_game": round(rushing_yards / float(games_played), 2),
@@ -3522,6 +3567,7 @@ class StatEngine:
         ctx: Dict[str, float],
         stat_defs: List[StatDefinition],
         plays: Optional[List[Dict[str, Any]]] = None,
+        entity: Optional[str] = None,
     ) -> None:
         filtered_ctx_cache: Dict[str, Dict[str, float]] = {}
         for _ in range(len(stat_defs) + 2):
@@ -3534,7 +3580,7 @@ class StatEngine:
                             f_key = sdef.filter_expr.strip()
                             if f_key not in filtered_ctx_cache:
                                 f_plays = self.apply_filter(plays, f_key)
-                                filtered_ctx_cache[f_key] = self._compute_base_metrics(f_plays) if f_plays else {k: 0.0 for k in BASE_METRIC_KEYS}
+                                filtered_ctx_cache[f_key] = self._compute_base_metrics(f_plays, entity=entity) if f_plays else {k: 0.0 for k in BASE_METRIC_KEYS}
                             # Merge already-resolved stats with filtered base metrics
                             eval_ctx = dict(ctx)
                             eval_ctx.update(filtered_ctx_cache[f_key])
@@ -3547,14 +3593,14 @@ class StatEngine:
             if not progressed:
                 break
 
-    def evaluate_all_metrics_for_group(self, plays: List[Dict[str, Any]]) -> Dict[str, float]:
+    def evaluate_all_metrics_for_group(self, plays: List[Dict[str, Any]], entity: Optional[str] = None) -> Dict[str, float]:
         """
         Compute base traditional metrics AND resolve all composable custom stats across:
         1. Play-scoped custom stats (evaluated per play, aggregated via sdef.agg)
         2. Game-scoped custom stats (evaluated per game with full game-level custom stat context, aggregated via sdef.agg)
         3. Season-scoped custom stats (evaluated on the entity's season context in dependency order, honoring each stat's filter_expr)
         """
-        ctx = self._compute_base_metrics(plays)
+        ctx = self._compute_base_metrics(plays, entity=entity)
         all_defs = list(self.stats.values())
 
         # 1. Play-scoped custom stats
@@ -3570,7 +3616,7 @@ class StatEngine:
             ctx[sdef.name] = self._aggregate_values(p_vals, sdef.agg)
 
         # 2. First-pass season formulas so game-scoped stats or season stats have baseline values
-        self._resolve_season_formulas(ctx, all_defs, plays=plays)
+        self._resolve_season_formulas(ctx, all_defs, plays=plays, entity=entity)
 
         # 3. Game-scoped custom stats (evaluated per (game_id, posteam))
         game_defs = [s for s in all_defs if s.scope == "game"]
@@ -3583,7 +3629,7 @@ class StatEngine:
 
             game_contexts: List[Dict[str, float]] = []
             for gplays in games_map.values():
-                g_ctx = self._compute_base_metrics(gplays)
+                g_ctx = self._compute_base_metrics(gplays, entity=entity)
                 for sdef in play_defs:
                     gp_sub = self.apply_filter(gplays, sdef.filter_expr) if sdef.filter_expr else gplays
                     gp_vals = []
@@ -3593,7 +3639,7 @@ class StatEngine:
                         except Exception:
                             pass
                     g_ctx[sdef.name] = self._aggregate_values(gp_vals, sdef.agg)
-                self._resolve_season_formulas(g_ctx, all_defs, plays=gplays)
+                self._resolve_season_formulas(g_ctx, all_defs, plays=gplays, entity=entity)
                 # Resolve game-scoped stats inside each game context in dependency order
                 for _ in range(len(game_defs) + 2):
                     for gdef in game_defs:
@@ -3602,7 +3648,7 @@ class StatEngine:
                             if gdef.filter_expr:
                                 gf_plays = self.apply_filter(gplays, gdef.filter_expr)
                                 eval_g_ctx = dict(g_ctx)
-                                eval_g_ctx.update(self._compute_base_metrics(gf_plays) if gf_plays else {k: 0.0 for k in BASE_METRIC_KEYS})
+                                eval_g_ctx.update(self._compute_base_metrics(gf_plays, entity=entity) if gf_plays else {k: 0.0 for k in BASE_METRIC_KEYS})
                             g_ctx[gdef.name] = safe_eval_formula(gdef.formula, eval_g_ctx)
                         except Exception:
                             pass
@@ -3613,8 +3659,55 @@ class StatEngine:
                 ctx[gdef.name] = self._aggregate_values(g_vals, gdef.agg)
 
         # 4. Final pass for season-scoped custom stats that depend on game-scoped or play-scoped custom stats
-        self._resolve_season_formulas(ctx, all_defs, plays=plays)
+        self._resolve_season_formulas(ctx, all_defs, plays=plays, entity=entity)
         return ctx
+
+    _ROLE_ATTRIBUTED_NAMES: frozenset = frozenset({
+        "fantasy_points", "fantasy_points_std", "fantasy_points_ppr", "fantasy_points_half_ppr",
+        "fantasy_ppg", "fantasy_ppg_ppr", "fantasy_ppg_std",
+        "cap_hit", "cap_hit_current_m", "yearly_salary_against_cap", "salary_against_cap",
+        "apy", "apy_m", "salary", "guaranteed_m", "contract_value_m",
+    })
+
+    def _stat_needs_role_attribution(self, sdef: "StatDefinition", _seen: Optional[Set[str]] = None) -> bool:
+        """True when the stat (or a stat/formula it depends on) is a fantasy or contract metric."""
+        seen = _seen if _seen is not None else set()
+        if sdef.name in seen:
+            return False
+        seen.add(sdef.name)
+        if sdef.name in self._ROLE_ATTRIBUTED_NAMES:
+            return True
+        idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", f"{sdef.formula} {' '.join(sdef.dependencies or [])}"))
+        if idents & self._ROLE_ATTRIBUTED_NAMES:
+            return True
+        return any(
+            self._stat_needs_role_attribution(self.stats[d], seen)
+            for d in idents if d in self.stats
+        )
+
+    @staticmethod
+    def _group_plays_by_player_role(plays: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Group plays under each player involved by role: passer, receiver and rusher."""
+        bad = ("unknown qb", "unknown player", "unknown coach", "none", "")
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for p in plays:
+            names: List[str] = []
+            if int(p.get("pass_attempt", 0)) == 1:
+                names.append(StatEngine._play_passer(p))
+                names.append(str(p.get("receiver_player_name") or "").strip())
+            if int(p.get("rush_attempt", 0)) == 1:
+                names.append(str(p.get("rusher_player_name") or "").strip())
+            names = [n for n in dict.fromkeys(names) if n and n.lower() not in bad]
+            if not names:
+                fallback = str(
+                    p.get("player_name") or p.get("receiver_player_name") or p.get("rusher_player_name")
+                    or p.get("qb_name") or p.get("kicker_player_name") or p.get("punter_player_name") or ""
+                ).strip()
+                if fallback and fallback.lower() not in bad:
+                    names = [fallback]
+            for n in names:
+                groups.setdefault(n, []).append(p)
+        return groups
 
     def evaluate_stat_leaderboard(
         self,
@@ -3665,6 +3758,12 @@ class StatEngine:
             key_field = GROUP_BY_COLUMN_MAP.get(group_col, "posteam")
 
         groups: Dict[str, List[Dict[str, Any]]] = {}
+        role_aware_players = key_field == "player_name" and self._stat_needs_role_attribution(sdef)
+        if role_aware_players:
+            # Every involved player (passer, receiver, rusher) gets the plays they took part in, so
+            # quarterbacks are not dropped from per-player fantasy/contract boards.
+            groups = self._group_plays_by_player_role(filtered)
+            filtered = []
         for p in filtered:
             gval = str(p.get(key_field) or "").strip()
             if not gval and key_field == "player_name":
@@ -3679,6 +3778,8 @@ class StatEngine:
             or key_field in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name", "penalty_player_name")
         )
 
+        entity_group = key_field in ("player_name", "qb_name", "receiver_player_name", "rusher_player_name")
+
         rows: List[Dict[str, Any]] = []
         for gval, gplays in groups.items():
             ent_pos = get_player_position(gval, gplays) or ""
@@ -3686,7 +3787,7 @@ class StatEngine:
                 if ent_pos and ent_pos != pos_target:
                     continue
 
-            metrics = self.evaluate_all_metrics_for_group(gplays)
+            metrics = self.evaluate_all_metrics_for_group(gplays, entity=gval if entity_group else None)
             sample_play = max(gplays, key=lambda x: float(x.get("yards_gained", 0.0)))
             mw = int(round(metrics.get("qb_meaningful_win", 0.0)))
             ml = int(round(metrics.get("qb_meaningful_loss", 0.0)))
