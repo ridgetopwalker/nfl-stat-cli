@@ -35,6 +35,10 @@ def compute_team_power_ratings(plays: List[Dict[str, Any]], season: int) -> Dict
     - Scoring differential per game
     - Success rate
     """
+    from . import plays_for_season
+
+    # Honor the requested season: callers (e.g. the TUI) may hold several loaded seasons.
+    plays = plays_for_season(plays, season)
     teams = sorted({str(p.get("posteam", "")).strip() for p in plays if p.get("posteam")})
 
     raw_stats: Dict[str, Dict[str, Any]] = {}

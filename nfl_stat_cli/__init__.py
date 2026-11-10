@@ -15,20 +15,24 @@ import datetime as dt
 import difflib
 import functools
 import glob
+import hashlib
 import json
 import math
 import operator
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unicodedata
+import uuid
 import urllib.error
 import urllib.request
 from contextlib import nullcontext
@@ -321,10 +325,34 @@ class CLICompleter:
     stat metric IDs, NFL teams, player names, and filenames, following
     the standard command-line autocompletion behavior when matching files in a folder.
     """
-    def __init__(self, engine: Optional[Any] = None):
+    def __init__(self, engine: Optional[Any] = None, plays: Optional[List[Dict[str, Any]]] = None):
         self.engine = engine
         self._context_override: Optional[str] = None
         self._matches: List[str] = []
+        self._plays: Optional[List[Dict[str, Any]]] = plays
+        self._play_names_src: Optional[List[Dict[str, Any]]] = None
+        self._play_names_len = -1
+        self._play_names: Set[str] = set()
+
+    def set_plays(self, plays: Optional[List[Dict[str, Any]]]) -> None:
+        """Bind player-name completion to the active dataset (live or sample)."""
+        self._plays = plays
+        self._play_names_src = None
+
+    def _names_from_active_plays(self) -> Set[str]:
+        plays = self._plays
+        if not plays:
+            return set()
+        if self._play_names_src is not plays or self._play_names_len != len(plays):
+            raw: Set[str] = set()
+            for p in plays:
+                for k in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name"):
+                    val = p.get(k)
+                    if val:
+                        raw.add(str(val))
+            self._play_names = {v.strip() for v in raw if v.strip()}
+            self._play_names_src, self._play_names_len = plays, len(plays)
+        return self._play_names
 
     def set_context(self, ctx: Optional[str]) -> None:
         self._context_override = ctx
@@ -362,12 +390,7 @@ class CLICompleter:
         except Exception:
             pass
         try:
-            sample_plays = globals().get("SAMPLE_PBP_PLAYS", [])
-            for p in sample_plays:
-                for k in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name"):
-                    val = p.get(k)
-                    if val and str(val).strip():
-                        names.add(str(val).strip())
+            names |= self._names_from_active_plays()
         except Exception:
             pass
         return sorted(list(names))
@@ -807,7 +830,7 @@ NFL_COACHING_STAFFS: Dict[str, Dict[str, Any]] = {
 def get_team_coaching_staff(team_abbr: str, season: Optional[int] = None) -> Dict[str, Any]:
     """Retrieve full coaching staff dictionary (HC, OC, DC, position coaches) for a given team."""
     resolved = resolve_team_abbr(team_abbr) or team_abbr.upper()
-    return NFL_COACHING_STAFFS.get(resolved, NFL_COACHING_STAFFS.get("KC", {}))
+    return NFL_COACHING_STAFFS.get(resolved, {})
 
 
 def get_team_head_coach(team_abbr: str, season: Optional[int] = None) -> str:
@@ -1456,6 +1479,84 @@ def require_season_plays(plays: List[Dict[str, Any]], season: int) -> List[Dict[
     )
 
 
+R_CACHE_FORMAT = "v2"
+R_TIMEOUT_DEFAULT_SECONDS = 300
+R_TIMEOUT_ENV = "NFL_STAT_R_TIMEOUT"
+# Columns that every valid bridge CSV must carry
+_R_CSV_REQUIRED_COLUMNS = ("season", "posteam", "play_type", "pass_attempt", "rush_attempt")
+
+
+def _pbp_row_is_playable(r: Dict[str, Any]) -> bool:
+    """
+    Single play-inclusion predicate shared by every data backend (Python dataframes and the R bridge CSV),
+    so the same season yields the same row set whichever backend loaded it.
+    Keeps rows with a possession team that are pass/rush attempts, typed pass/run, or penalty/timeout plays.
+    """
+    if _is_missing(r.get("posteam")):
+        return False
+    pa = _safe_int(r.get("pass_attempt"), 0)
+    ra = _safe_int(r.get("rush_attempt"), 0)
+    pt = _safe_str(r.get("play_type"), "").lower()
+    pen = _safe_opt_flag(r.get("penalty")) or 0
+    to = _safe_opt_flag(r.get("timeout")) or 0
+    desc = _safe_str(r.get("desc"), "").lower()
+    if pa == 0 and ra == 0 and pt not in ("pass", "run") and not pen and not to and "penalty" not in desc and "timeout" not in desc:
+        return False
+    return True
+
+
+def _r_timeout_seconds() -> int:
+    """Rscript timeout in seconds; override with NFL_STAT_R_TIMEOUT (invalid or non-positive values are ignored)."""
+    raw = os.environ.get(R_TIMEOUT_ENV, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return R_TIMEOUT_DEFAULT_SECONDS
+    return value if value > 0 else R_TIMEOUT_DEFAULT_SECONDS
+
+
+def _normalize_seasons(seasons: Any) -> Tuple[int, ...]:
+    """Sorted, de-duplicated tuple of int seasons, so [2025, 2024] and (2024, 2025) share one cache entry."""
+    if isinstance(seasons, (str, bytes)):
+        raise TypeError("seasons must be an iterable of ints, not a string")
+    out = set()
+    for s in seasons:
+        if isinstance(s, float) and not s.is_integer():
+            raise ValueError(f"season {s!r} is not an integer year")
+        out.add(int(s))
+    return tuple(sorted(out))
+
+
+def _validate_r_csv(path: Path, seasons: Tuple[int, ...]) -> Optional[str]:
+    """Return None when the bridge CSV looks complete, else a short reason (truncated, wrong seasons, empty)."""
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return "empty file"
+            missing = [c for c in _R_CSV_REQUIRED_COLUMNS if c not in header]
+            if missing:
+                return "missing column(s): " + ", ".join(missing)
+            season_idx = header.index("season")
+            wanted = set(seasons)
+            n_rows = 0
+            for row in reader:
+                if len(row) != len(header):
+                    return f"row {n_rows + 2} has {len(row)} fields, expected {len(header)} (truncated or corrupt)"
+                try:
+                    if int(float(row[season_idx])) not in wanted:
+                        return f"row {n_rows + 2} has a season outside the requested set"
+                except (ValueError, OverflowError):
+                    return f"row {n_rows + 2} has a non-numeric season"
+                n_rows += 1
+            if n_rows == 0:
+                return "no data rows"
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        return f"unreadable ({exc})"
+    return None
+
+
 def _downcast_dataframe_floats(df: Any) -> Any:
     """Downcast float64 columns to float32 to reduce memory consumption and speed up processing."""
     try:
@@ -1476,11 +1577,30 @@ class NFLDataBridge:
     """
 
     def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto") -> None:
-        self.cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
+        self._cache_dir_ready = False
         self.engine = engine.lower()
         self.last_source_used = "built-in-nflverse-sample"
         self.last_error: Optional[str] = None
+
+    @property
+    def cache_dir(self) -> Path:
+        """
+        Cache directory, created the first time it is read (callers read it to write a cache file; use
+        ``_cache_dir`` to peek at the path without creating it). A mkdir failure is left for the write to report.
+        """
+        if not self._cache_dir_ready:
+            try:
+                self._cache_dir.mkdir(parents=True, exist_ok=True)
+                self._cache_dir_ready = True
+            except OSError:
+                pass
+        return self._cache_dir
+
+    @cache_dir.setter
+    def cache_dir(self, value: Path) -> None:
+        self._cache_dir = Path(value)
+        self._cache_dir_ready = False
 
     def load_pbp(self, seasons: List[int], spinner: Optional[Any] = None) -> List[Dict[str, Any]]:
         """Load play-by-play rows for the requested seasons using the selected engine."""
@@ -1558,46 +1678,87 @@ class NFLDataBridge:
         if not rscript_bin:
             return None
         try:
+            season_key = _normalize_seasons(seasons)
+        except (TypeError, ValueError) as exc:
+            self.last_error = f"Rscript error: invalid seasons ({exc})"
+            return None
+        try:
             # Python 3.9+ resource lookup; retain the path fallback for Python 3.8.
             bridge_resource = resources.files(__package__).joinpath("nflverse_bridge.R")
         except (AttributeError, TypeError):  # Python 3.8 or direct module loading
             bridge_resource = Path(__file__).parent / "nflverse_bridge.R"
         bridge_script = bridge_resource
-        out_csv = self.cache_dir / f"nflverse_pbp_{'_'.join(map(str, seasons))}.csv"
-        seasons_arg = ",".join(map(str, seasons))
+        out_csv = self.cache_dir / f"nflverse_pbp_{R_CACHE_FORMAT}_{'_'.join(map(str, season_key))}.csv"
+        seasons_arg = ",".join(map(str, season_key))
+        tmp_csv = out_csv.with_name(f".{out_csv.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        # Remove temp files left behind by an earlier process that was killed mid-write
         try:
-            # Reuse cached CSV if younger than 12 hours
+            for stale in self.cache_dir.glob(".nflverse_pbp_*.tmp"):
+                if dt.datetime.now().timestamp() - stale.stat().st_mtime > 86400:
+                    stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            # Reuse a cached CSV only if it is younger than 12 hours AND passes the structural check
             use_cached = False
             if out_csv.exists():
                 age_sec = dt.datetime.now().timestamp() - out_csv.stat().st_mtime
                 if age_sec < 43200 and out_csv.stat().st_size > 256:
-                    use_cached = True
+                    reason = _validate_r_csv(out_csv, season_key)
+                    if reason is None:
+                        use_cached = True
+                    else:
+                        out_csv.unlink(missing_ok=True)  # corrupt or truncated: drop it and refetch
             if not use_cached:
-                if bridge_script.is_file():
-                    with (nullcontext(bridge_script) if isinstance(bridge_script, Path)
-                          else resources.as_file(bridge_script)) as bridge_path:
-                        cmd = [rscript_bin, str(bridge_path), "--seasons", seasons_arg, "--output", str(out_csv)]
-                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-                else:
-                    # Pass arguments via commandArgs(trailingOnly=TRUE) — never interpolate paths into R source
-                    r_code = (
-                        "args <- commandArgs(trailingOnly=TRUE); "
-                        "seasons <- as.integer(unlist(strsplit(args[1], ','))); "
-                        "out_csv <- args[2]; "
-                        "suppressPackageStartupMessages(library(nflreadr)); "
-                        "pbp <- load_pbp(seasons=seasons); "
-                        "pbp <- pbp[!is.na(pbp$posteam) & ((!is.na(pbp$pass_attempt) & pbp$pass_attempt == 1) | (!is.na(pbp$rush_attempt) & pbp$rush_attempt == 1)), ]; "
-                        "write.csv(pbp, file=out_csv, row.names=FALSE, na='')"
-                    )
-                    cmd = [rscript_bin, "-e", r_code, seasons_arg, str(out_csv)]
-                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-                if res.returncode != 0:
-                    self.last_error = f"Rscript exit {res.returncode}: {res.stderr.strip()[:160]}"
+                timeout_s = _r_timeout_seconds()
+                try:
+                    # R writes to a temp file; the cache path only ever sees a complete, validated file
+                    if bridge_script.is_file():
+                        with (nullcontext(bridge_script) if isinstance(bridge_script, Path)
+                              else resources.as_file(bridge_script)) as bridge_path:
+                            cmd = [rscript_bin, str(bridge_path), "--seasons", seasons_arg, "--output", str(tmp_csv)]
+                            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+                    else:
+                        # Pass arguments via commandArgs(trailingOnly=TRUE) — never interpolate paths into R source
+                        r_code = (
+                            "args <- commandArgs(trailingOnly=TRUE); "
+                            "seasons <- as.integer(unlist(strsplit(args[1], ','))); "
+                            "out_csv <- args[2]; "
+                            "suppressPackageStartupMessages(library(nflreadr)); "
+                            "pbp <- load_pbp(seasons=seasons); "
+                            "pbp <- pbp[!is.na(pbp$posteam), ]; "
+                            "write.csv(pbp, file=out_csv, row.names=FALSE, na='')"
+                        )
+                        cmd = [rscript_bin, "-e", r_code, seasons_arg, str(tmp_csv)]
+                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+                    if res.returncode != 0:
+                        self.last_error = f"Rscript exit {res.returncode}: {res.stderr.strip()[:160]}"
+                        return None
+                    if not tmp_csv.exists():
+                        self.last_error = "Rscript produced no output file"
+                        return None
+                    reason = _validate_r_csv(tmp_csv, season_key)
+                    if reason is not None:
+                        self.last_error = f"Rscript output rejected: {reason}"
+                        return None
+                    os.replace(tmp_csv, out_csv)
+                except subprocess.TimeoutExpired:
+                    self.last_error = f"Rscript timed out after {timeout_s}s (raise {R_TIMEOUT_ENV} to allow longer)"
                     return None
+                finally:
+                    try:
+                        tmp_csv.unlink()
+                    except FileNotFoundError:
+                        pass
             if out_csv.exists():
                 with open(out_csv, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
-                    rows = [self._normalize_row(r, idx) for idx, r in enumerate(reader, 1) if not _is_missing(r.get("posteam"))]
+                    # idx is only a fallback for rows with no play_id (real nflverse data always has one)
+                    rows = [
+                        self._normalize_row(r, idx)
+                        for idx, r in enumerate(reader, 1)
+                        if _pbp_row_is_playable(r)
+                    ]
                     if rows:
                         return rows
         except Exception as exc:
@@ -1610,15 +1771,7 @@ class NFLDataBridge:
         records = df.to_dict(orient="records")
         out: List[Dict[str, Any]] = []
         for idx, r in enumerate(records, 1):
-            if _is_missing(r.get("posteam")):
-                continue
-            pa = _safe_int(r.get("pass_attempt"), 0)
-            ra = _safe_int(r.get("rush_attempt"), 0)
-            pt = _safe_str(r.get("play_type"), "").lower()
-            pen = _safe_opt_flag(r.get("penalty")) or 0
-            to = _safe_opt_flag(r.get("timeout")) or 0
-            desc = _safe_str(r.get("desc"), "").lower()
-            if pa == 0 and ra == 0 and pt not in ("pass", "run") and not pen and not to and "penalty" not in desc and "timeout" not in desc:
+            if not _pbp_row_is_playable(r):
                 continue
             out.append(self._normalize_row(r, idx))
         return out
@@ -2913,8 +3066,8 @@ class StatEngine:
     """Manages custom stats, evaluates multi-scope composable formulas, and tracks the user's Stat Page."""
 
     def __init__(self, storage_dir: Optional[Path] = None) -> None:
+        # The state directory is created on the first save (_atomic_write_json), not when the engine is built.
         self.storage_dir = storage_dir or (Path.home() / ".nfl_stat_cli")
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
         self.stats: Dict[str, StatDefinition] = dict(DEFAULT_STATS)
@@ -3281,7 +3434,55 @@ class StatEngine:
                 pass
         return filtered
 
-    def _compute_base_metrics(self, plays: List[Dict[str, Any]]) -> Dict[str, float]:
+    @staticmethod
+    def _play_passer(p: Dict[str, Any]) -> str:
+        """The passer on a play; the single source of truth for both grouping and scoring."""
+        return str(p.get("qb_name") or p.get("passer_player_name") or "").strip()
+
+    @staticmethod
+    def _role_fantasy_components(plays: List[Dict[str, Any]], entity: str) -> Dict[str, float]:
+        """
+        Attribute fantasy-relevant production to ``entity`` by the role they played on each play:
+        passing yards/TDs/INTs only to the passer, receiving yards/TDs/receptions only to the receiver,
+        rushing yards/TDs only to the rusher. A lost fumble is charged to the primary ball carrier.
+        """
+        e = entity.strip().lower()
+        out = {"pass_yds": 0.0, "pass_td": 0.0, "ints": 0.0, "rec_yds": 0.0, "rec_td": 0.0,
+               "receptions": 0.0, "rush_yds": 0.0, "rush_td": 0.0, "fum_lost": 0.0}
+
+        def _nm(v: Any) -> str:
+            return str(v or "").strip().lower()
+
+        for p in plays:
+            is_pass = int(p.get("pass_attempt", 0)) == 1
+            is_sack = int(p.get("sack", 0)) == 1
+            is_rush = int(p.get("rush_attempt", 0)) == 1
+            passer = _nm(StatEngine._play_passer(p))
+            receiver = _nm(p.get("receiver_player_name"))
+            rusher = _nm(p.get("rusher_player_name"))
+            yds = float(p.get("yards_gained", 0.0))
+            complete = int(p.get("complete_pass", 0)) == 1
+            if is_pass and not is_sack:
+                # A touchdown on an intercepted pass is the defense's score, not a passing TD
+                ptd = 0 if int(p.get("interception", 0)) == 1 else int(p.get("pass_touchdown", p.get("touchdown", 0)))
+                if passer == e:
+                    out["pass_yds"] += yds
+                    out["pass_td"] += ptd
+                    out["ints"] += int(p.get("interception", 0))
+                if receiver == e and complete:
+                    out["rec_yds"] += yds
+                    out["rec_td"] += ptd
+                    out["receptions"] += 1
+            if is_rush and rusher == e:
+                out["rush_yds"] += yds
+                out["rush_td"] += 0 if int(p.get("fumble_lost", 0)) == 1 else int(p.get("rush_touchdown", p.get("touchdown", 0)))
+            if int(p.get("fumble_lost", 0)) == 1:
+                carrier = rusher if is_rush else (receiver if (is_pass and complete) else passer)
+                if carrier == e:
+                    out["fum_lost"] += 1
+        return out
+
+    def _compute_base_metrics(self, plays: List[Dict[str, Any]], entity: Optional[str] = None) -> Dict[str, float]:
         n = max(1, len(plays))
         total_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays)
         passing_yards = sum(float(p.get("yards_gained", 0.0)) for p in plays if int(p.get("pass_attempt", 0)) == 1 and int(p.get("sack", 0)) == 0)
@@ -3344,26 +3545,23 @@ class StatEngine:
         # Official NFL Passer Rating calculation (uses passing_yards and pass_touchdowns)
         nfl_passer_rating = calculate_passer_rating(pass_attempts, completions, passing_yards, pass_touchdowns, interceptions)
 
-        # Look up player contract if plays belong to a specific player/rusher/receiver/QB
-        p_name = ""
-        for p in plays:
-            cand = (
-                p.get("player_name")
-                or p.get("receiver_player_name")
-                or p.get("rusher_player_name")
-                or p.get("qb_name")
-                or p.get("kicker_player_name")
-                or p.get("punter_player_name")
-            )
-            if cand and str(cand).strip():
-                p_name = str(cand).strip()
-                break
-
-        c_rec = find_contract_by_name(p_name) if p_name else None
+        # Contracts and fantasy scoring are only attributable to a named entity (never to an aggregate
+        # group such as a team): look the contract up by that entity's name, not by whichever player
+        # happens to appear on the first play (which is the receiver on pass plays).
+        c_rec = find_contract_by_name(entity) if entity else None
         cap_val = float(c_rec.cap_hit_current_m) if c_rec else 0.0
         apy_val = float(c_rec.apy_m) if c_rec else 0.0
         tot_val = float(c_rec.total_value_m) if c_rec else 0.0
         gtd_val = float(c_rec.guaranteed_m) if c_rec else 0.0
+
+        if entity:
+            rf = self._role_fantasy_components(plays, entity)
+            f_std = (rf["pass_yds"] * 0.04) + (rf["pass_td"] * 4.0) - (rf["ints"] * 2.0) \
+                + ((rf["rec_yds"] + rf["rush_yds"]) * 0.10) + ((rf["rec_td"] + rf["rush_td"]) * 6.0) - (rf["fum_lost"] * 2.0)
+            f_recs = rf["receptions"]
+        else:
+            f_std = (passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0)
+            f_recs = float(completions)
 
         base: Dict[str, float] = {
             "plays": float(len(plays)),
@@ -3434,13 +3632,13 @@ class StatEngine:
             "timeouts": float(timeouts),
             "timeouts_used": float(timeouts),
             "timeouts_called": float(timeouts),
-            "fantasy_points": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0), 2),
-            "fantasy_points_std": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0), 2),
-            "fantasy_points_ppr": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions), 2),
-            "fantasy_points_half_ppr": round((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + (float(completions) * 0.5), 2),
-            "fantasy_ppg": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
-            "fantasy_ppg_ppr": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0) + float(completions)) / float(games_played), 2),
-            "fantasy_ppg_std": round(((passing_yards * 0.04) + (pass_touchdowns * 4.0) - (interceptions * 2.0) + (rushing_yards * 0.10) + (rush_touchdowns * 6.0) - (fumbles_lost * 2.0)) / float(games_played), 2),
+            "fantasy_points": round(f_std, 2),
+            "fantasy_points_std": round(f_std, 2),
+            "fantasy_points_ppr": round(f_std + f_recs, 2),
+            "fantasy_points_half_ppr": round(f_std + (f_recs * 0.5), 2),
+            "fantasy_ppg": round((f_std + f_recs) / float(games_played), 2),
+            "fantasy_ppg_ppr": round((f_std + f_recs) / float(games_played), 2),
+            "fantasy_ppg_std": round(f_std / float(games_played), 2),
             "yards_per_game": round(total_yards / float(games_played), 2),
             "passing_yards_per_game": round(passing_yards / float(games_played), 2),
             "rushing_yards_per_game": round(rushing_yards / float(games_played), 2),
@@ -3481,6 +3679,7 @@ class StatEngine:
         ctx: Dict[str, float],
         stat_defs: List[StatDefinition],
         plays: Optional[List[Dict[str, Any]]] = None,
+        entity: Optional[str] = None,
     ) -> None:
         filtered_ctx_cache: Dict[str, Dict[str, float]] = {}
         for _ in range(len(stat_defs) + 2):
@@ -3493,7 +3692,7 @@ class StatEngine:
                             f_key = sdef.filter_expr.strip()
                             if f_key not in filtered_ctx_cache:
                                 f_plays = self.apply_filter(plays, f_key)
-                                filtered_ctx_cache[f_key] = self._compute_base_metrics(f_plays) if f_plays else {k: 0.0 for k in BASE_METRIC_KEYS}
+                                filtered_ctx_cache[f_key] = self._compute_base_metrics(f_plays, entity=entity) if f_plays else {k: 0.0 for k in BASE_METRIC_KEYS}
                             # Merge already-resolved stats with filtered base metrics
                             eval_ctx = dict(ctx)
                             eval_ctx.update(filtered_ctx_cache[f_key])
@@ -3506,14 +3705,14 @@ class StatEngine:
             if not progressed:
                 break
 
-    def evaluate_all_metrics_for_group(self, plays: List[Dict[str, Any]]) -> Dict[str, float]:
+    def evaluate_all_metrics_for_group(self, plays: List[Dict[str, Any]], entity: Optional[str] = None) -> Dict[str, float]:
         """
         Compute base traditional metrics AND resolve all composable custom stats across:
         1. Play-scoped custom stats (evaluated per play, aggregated via sdef.agg)
         2. Game-scoped custom stats (evaluated per game with full game-level custom stat context, aggregated via sdef.agg)
         3. Season-scoped custom stats (evaluated on the entity's season context in dependency order, honoring each stat's filter_expr)
         """
-        ctx = self._compute_base_metrics(plays)
+        ctx = self._compute_base_metrics(plays, entity=entity)
         all_defs = list(self.stats.values())
 
         # 1. Play-scoped custom stats
@@ -3529,7 +3728,7 @@ class StatEngine:
             ctx[sdef.name] = self._aggregate_values(p_vals, sdef.agg)
 
         # 2. First-pass season formulas so game-scoped stats or season stats have baseline values
-        self._resolve_season_formulas(ctx, all_defs, plays=plays)
+        self._resolve_season_formulas(ctx, all_defs, plays=plays, entity=entity)
 
         # 3. Game-scoped custom stats (evaluated per (game_id, posteam))
         game_defs = [s for s in all_defs if s.scope == "game"]
@@ -3542,7 +3741,7 @@ class StatEngine:
 
             game_contexts: List[Dict[str, float]] = []
             for gplays in games_map.values():
-                g_ctx = self._compute_base_metrics(gplays)
+                g_ctx = self._compute_base_metrics(gplays, entity=entity)
                 for sdef in play_defs:
                     gp_sub = self.apply_filter(gplays, sdef.filter_expr) if sdef.filter_expr else gplays
                     gp_vals = []
@@ -3552,7 +3751,7 @@ class StatEngine:
                         except Exception:
                             pass
                     g_ctx[sdef.name] = self._aggregate_values(gp_vals, sdef.agg)
-                self._resolve_season_formulas(g_ctx, all_defs, plays=gplays)
+                self._resolve_season_formulas(g_ctx, all_defs, plays=gplays, entity=entity)
                 # Resolve game-scoped stats inside each game context in dependency order
                 for _ in range(len(game_defs) + 2):
                     for gdef in game_defs:
@@ -3561,7 +3760,7 @@ class StatEngine:
                             if gdef.filter_expr:
                                 gf_plays = self.apply_filter(gplays, gdef.filter_expr)
                                 eval_g_ctx = dict(g_ctx)
-                                eval_g_ctx.update(self._compute_base_metrics(gf_plays) if gf_plays else {k: 0.0 for k in BASE_METRIC_KEYS})
+                                eval_g_ctx.update(self._compute_base_metrics(gf_plays, entity=entity) if gf_plays else {k: 0.0 for k in BASE_METRIC_KEYS})
                             g_ctx[gdef.name] = safe_eval_formula(gdef.formula, eval_g_ctx)
                         except Exception:
                             pass
@@ -3572,8 +3771,55 @@ class StatEngine:
                 ctx[gdef.name] = self._aggregate_values(g_vals, gdef.agg)
 
         # 4. Final pass for season-scoped custom stats that depend on game-scoped or play-scoped custom stats
-        self._resolve_season_formulas(ctx, all_defs, plays=plays)
+        self._resolve_season_formulas(ctx, all_defs, plays=plays, entity=entity)
         return ctx
+
+    _ROLE_ATTRIBUTED_NAMES: frozenset = frozenset({
+        "fantasy_points", "fantasy_points_std", "fantasy_points_ppr", "fantasy_points_half_ppr",
+        "fantasy_ppg", "fantasy_ppg_ppr", "fantasy_ppg_std",
+        "cap_hit", "cap_hit_current_m", "yearly_salary_against_cap", "salary_against_cap",
+        "apy", "apy_m", "salary", "guaranteed_m", "contract_value_m",
+    })
+
+    def _stat_needs_role_attribution(self, sdef: "StatDefinition", _seen: Optional[Set[str]] = None) -> bool:
+        """True when the stat (or a stat/formula it depends on) is a fantasy or contract metric."""
+        seen = _seen if _seen is not None else set()
+        if sdef.name in seen:
+            return False
+        seen.add(sdef.name)
+        if sdef.name in self._ROLE_ATTRIBUTED_NAMES:
+            return True
+        idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", f"{sdef.formula} {' '.join(sdef.dependencies or [])}"))
+        if idents & self._ROLE_ATTRIBUTED_NAMES:
+            return True
+        return any(
+            self._stat_needs_role_attribution(self.stats[d], seen)
+            for d in idents if d in self.stats
+        )
+
+    @staticmethod
+    def _group_plays_by_player_role(plays: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Group plays under each player involved by role: passer, receiver and rusher."""
+        bad = ("unknown qb", "unknown player", "unknown coach", "none", "")
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for p in plays:
+            names: List[str] = []
+            if int(p.get("pass_attempt", 0)) == 1:
+                names.append(StatEngine._play_passer(p))
+                names.append(str(p.get("receiver_player_name") or "").strip())
+            if int(p.get("rush_attempt", 0)) == 1:
+                names.append(str(p.get("rusher_player_name") or "").strip())
+            names = [n for n in dict.fromkeys(names) if n and n.lower() not in bad]
+            if not names:
+                fallback = str(
+                    p.get("player_name") or p.get("receiver_player_name") or p.get("rusher_player_name")
+                    or p.get("qb_name") or p.get("kicker_player_name") or p.get("punter_player_name") or ""
+                ).strip()
+                if fallback and fallback.lower() not in bad:
+                    names = [fallback]
+            for n in names:
+                groups.setdefault(n, []).append(p)
+        return groups
 
     def evaluate_stat_leaderboard(
         self,
@@ -3624,6 +3870,12 @@ class StatEngine:
             key_field = GROUP_BY_COLUMN_MAP.get(group_col, "posteam")
 
         groups: Dict[str, List[Dict[str, Any]]] = {}
+        role_aware_players = key_field == "player_name" and self._stat_needs_role_attribution(sdef)
+        if role_aware_players:
+            # Every involved player (passer, receiver, rusher) gets the plays they took part in, so
+            # quarterbacks are not dropped from per-player fantasy/contract boards.
+            groups = self._group_plays_by_player_role(filtered)
+            filtered = []
         for p in filtered:
             gval = str(p.get(key_field) or "").strip()
             if not gval and key_field == "player_name":
@@ -3638,6 +3890,8 @@ class StatEngine:
             or key_field in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name", "penalty_player_name")
         )
 
+        entity_group = key_field in ("player_name", "qb_name", "receiver_player_name", "rusher_player_name")
+
         rows: List[Dict[str, Any]] = []
         for gval, gplays in groups.items():
             ent_pos = get_player_position(gval, gplays) or ""
@@ -3645,7 +3899,7 @@ class StatEngine:
                 if ent_pos and ent_pos != pos_target:
                     continue
 
-            metrics = self.evaluate_all_metrics_for_group(gplays)
+            metrics = self.evaluate_all_metrics_for_group(gplays, entity=gval if entity_group else None)
             sample_play = max(gplays, key=lambda x: float(x.get("yards_gained", 0.0)))
             mw = int(round(metrics.get("qb_meaningful_win", 0.0)))
             ml = int(round(metrics.get("qb_meaningful_loss", 0.0)))
@@ -4771,6 +5025,72 @@ class AsciiArtRenderer:
 # Hybrid Local Small Language Model (SLM) + Deterministic NL-to-Stat Engine
 # ---------------------------------------------------------------------------
 
+# Hard cap on natural-language query length, enforced before any parsing/regex work so crafted
+# long inputs cannot reach backtracking-prone patterns (override with NFL_STAT_MAX_QUERY_CHARS).
+MAX_QUERY_CHARS = 300
+
+
+def get_max_query_chars() -> int:
+    try:
+        val = int(os.environ.get("NFL_STAT_MAX_QUERY_CHARS", "") or MAX_QUERY_CHARS)
+    except ValueError:
+        return MAX_QUERY_CHARS
+    if val < 1:
+        return MAX_QUERY_CHARS  # a zero/negative override is a mistake, not a request to reject everything
+    return min(val, MAX_QUERY_CHARS)
+
+
+# Questions we can detect as asking for data this engine does not have; these must produce an explicit
+# "can't answer" instead of being mapped onto a loosely related stat.
+UNSUPPORTED_STAT_TERMS: Tuple[Tuple[str, str], ...] = (
+    (r"\byards\s+after\s+contact\b", "yards after contact"),
+    (r"\b(?:targets?|target\s+share)\b", "targets"),
+    (r"\breceptions\b", "receptions"),
+    (r"\breceiving\s+(?:yards?|yds?|touchdowns?|tds?)\b", "receiving yards/touchdowns"),
+    (r"\btackles\b", "tackles"),
+    (r"\bcomebacks\b", "comebacks"),
+    (r"\bstandings\b", "standings"),
+)
+SPORTSBOOK_OR_COACH_RE = re.compile(
+    r"\b(?:spread|odds|moneyline|bets?|betting|favou?rites?|underdogs?|handicap|coach|coaches|hc|oc|dc)\b"
+)
+
+
+def _one_line_text(text: Any, limit: int = 400) -> str:
+    """Printable single-line text (no ANSI/control characters) for echoing user-derived strings."""
+    return "".join(ch if ch.isprintable() else " " for ch in strip_ansi(str(text)))[:limit]
+
+
+def build_unanswered_query(
+    query: str,
+    reason: str,
+    season: int,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Structured 'can't answer' parse result (rendered by the `ambiguous` intent)."""
+    res: Dict[str, Any] = {
+        "intent": "ambiguous",
+        "status": "unanswered",
+        "reason": reason,
+        "query": query,
+        "stat_name": None,
+        "group_by": None,
+        "season": season,
+        "week": None,
+        "qtr": None,
+        "division": None,
+        "conf": None,
+        "team": None,
+        "player": None,
+        "position": None,
+        "filter_expr": "",
+        "show_field": False,
+        "explanation": f"Can't answer: {reason}",
+    }
+    res.update(extra)
+    return res
+
+
 class NaturalLanguageStatAssistant:
     """
     Translates natural-language user questions or custom-stat requests into structured
@@ -5095,6 +5415,32 @@ class NaturalLanguageStatAssistant:
         or the deterministic rule/AST parser.
         Never forces an ASCII field when the user is asking for an average or leaderboard across the year!
         """
+        # Reject over-long input before any regex, SLM call or other parsing work
+        max_chars = get_max_query_chars()
+        if query is not None and len(str(query)) > max_chars:
+            preview = "".join(ch if ch.isprintable() else " " for ch in strip_ansi(str(query)[:60])) + "..."
+            return {
+                "intent": "query_too_long",
+                "status": "rejected",
+                "reason": f"queries are limited to {max_chars} characters (received {len(str(query))}).",
+                "query": preview,
+                "query_length": len(str(query)),
+                "max_chars": max_chars,
+                "stat_name": None,
+                "group_by": None,
+                "season": default_season,
+                "week": None,
+                "qtr": None,
+                "division": None,
+                "conf": None,
+                "team": None,
+                "player": None,
+                "position": None,
+                "filter_expr": "",
+                "show_field": False,
+                "explanation": f"Query rejected: longer than {max_chars} characters.",
+            }
+
         effective_mode = (slm_model or "auto").strip().lower()
         if engine is not None and effective_mode not in ("none", "off", "disable", "disabled"):
             detected = pre_detected_model or cls.detect_ollama_model(slm_model)
@@ -5269,6 +5615,15 @@ class NaturalLanguageStatAssistant:
                     "penalty", "penalties", "flags", "timeout", "timeouts", "favor", "benefited", "benefitted", "drawn", "called", "used",
                 } | set(cls.TEAM_NICKNAME_MAP.keys()) | {t.lower() for t in AFC_TEAMS | NFC_TEAMS}
                 cand_words = set(cand_low.split())
+                _cw = cand.split()
+                if (
+                    len(_cw) == 2 and _cw[0][:1].isupper() and _cw[0].lower() not in ignore_words and _cw[1].lower() in ignore_words
+                    and not resolve_team_abbr(_cw[0]) and not resolve_team_matches(_cw[0])
+                ):
+                    # "show Zorblax touchdown play": keep the unknown name so it cannot be silently dropped
+                    cand = _cw[0]
+                    cand_low = cand.lower()
+                    cand_words = {cand_low}
                 if not cand_words.intersection(ignore_words) and not any(cand_low == t.lower() for t in cls.TEAM_NICKNAME_MAP):
                     player_filter = cand
 
@@ -5291,6 +5646,19 @@ class NaturalLanguageStatAssistant:
             )
         )
 
+        # Comparing two players is not supported; do not let the coach table or a stat default answer it.
+        _compare_m = re.search(r"\b(?:compare|comparison|versus|vs\.?)\b", ql)
+        if _compare_m and not SPORTSBOOK_OR_COACH_RE.search(ql):
+            _named = [k for k in cls.KNOWN_PLAYERS if re.search(rf"\b{re.escape(k)}\b", ql_no_apostrophe)]
+            if len(_named) >= 2:
+                return build_unanswered_query(
+                    query, "side-by-side player comparisons are not supported yet; ask about one player or stat at a time.", season, week=week,
+                )
+
+        # A bare surname only counts as a coach when the question is about coaching and the name is
+        # not also a known player (e.g. "Allen" the QB vs the NO head coach, "Jefferson" the WR).
+        _has_coach_word = bool(re.search(r"\b(?:coach|coaches|coaching|hc|oc|dc|coordinator|staff)\b", ql))
+        _player_surnames = {k.lower() for k in cls.KNOWN_PLAYERS}
         c_found_team: Optional[str] = team_filter
         c_found_role: Optional[str] = None
         if not c_found_team:
@@ -5302,15 +5670,21 @@ class NaturalLanguageStatAssistant:
                     c_found_team = c_info[0]
                     c_found_role = c_info[2]
                     break
-            if not c_found_team:
+            if not c_found_team and _has_coach_word:
                 for word in words:
+                    if word in _player_surnames:
+                        if find_coach_team(word):
+                            return build_unanswered_query(
+                                query, f"'{word.title()}' is both a player and a coach name; use the full name or name the team.", season,
+                            )
+                        continue
                     c_info = find_coach_team(word)
                     if c_info:
                         c_found_team = c_info[0]
                         c_found_role = c_info[2]
                         break
 
-        if not c_found_team and player_filter:
+        if not c_found_team and player_filter and _has_coach_word and player_filter.lower() not in _player_surnames:
             c_info = find_coach_team(player_filter)
             if c_info:
                 c_found_team = c_info[0]
@@ -5330,7 +5704,9 @@ class NaturalLanguageStatAssistant:
             elif "ol coach" in ql or "offensive line coach" in ql:
                 role_req = "ol"
 
-            target_team = c_found_team or "KC"
+            if not c_found_team:
+                return build_unanswered_query(query, "no team was given for the coaching question; name a team (e.g. 'head coach of the Chiefs').", season)
+            target_team = c_found_team
             role_label = role_req.upper() if role_req else "coaching staff"
             return {
                 "intent": "coaching_staff",
@@ -5883,6 +6259,15 @@ class NaturalLanguageStatAssistant:
                 "explanation": f"Top {limit_val or 1} matching plays for {player_filter or 'season'} (sorted by {sort_by}{', latest game' if is_latest_game else ''}).",
             }
 
+        # Stats the engine does not compute must not be answered with a loosely related stat
+        # (e.g. "yards after contact" or "receiving yards" must not fall into the generic "yards" rule).
+        for _u_pat, _u_label in UNSUPPORTED_STAT_TERMS:
+            if re.search(_u_pat, ql):
+                return build_unanswered_query(
+                    query, f"`{_u_label}` is not a stat this engine tracks. Type /stats to see supported stats.", season,
+                    week=week, qtr=qtr, division=division, conf=conf, team=team_filter, player=player_filter, position=position,
+                )
+
         # Match stat using canonical STAT_SYNONYM_MAP first
         matched_stat: Optional[str] = None
         matched_group: Optional[str] = None
@@ -5969,6 +6354,8 @@ class NaturalLanguageStatAssistant:
                     "position": position,
                     "filter_expr": " and ".join(filter_parts),
                     "show_field": False,
+                    "status": "unanswered",
+                    "reason": "the question did not match any supported stat, play, or action.",
                     "explanation": f"Could not determine a specific stat or play from query: '{query}'.",
                 }
 
@@ -6729,6 +7116,84 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
+_NL_NON_NAME_WORDS = frozenset("""
+a about above across after against all also am an and any are as at average avg be been before behind below best better between both but by
+can compare compared comparison could coverage did diagram do does down draw each early either epa every exactly explain fewer field first
+for found four from game games get give goff good greatest had has have he her here highest him his how however if in into is it its just
+last late latest least less like list lists longest lowest make many me more most much my need next no not now of off on one only or other our
+out over per play plays please pro rank ranked ranking rankings rate rating ratings recent rush rushing same say season second see
+several short shortest show shows since so some stat stats still table tell than that the their them then there these they third this those
+three through to top total totals touchdown touchdowns two under until up us use using vs versus was we week weeks well were what when where
+which while who whom whose why will with without worst would year years yes you your yards yard passing passer passers receiving receiver
+receivers rusher rushers kicker kickers punter punters offense defense offensive defensive special teams team conference division
+afc nfc nfl east west north south regular postseason playoffs playoff quarter quarters half halftime overtime red zone third fourth
+fifth screen deep sack sacks interception interceptions fumble fumbles penalty penalties blitz pressure pressures completion completions
+attempt attempts catch catches reception receptions target targets win wins loss losses lead leads leader leaders leaderboard
+quarterback quarterbacks running back backs wide receivers tight end ends line linebacker linebackers safety safeties cornerback cornerbacks
+january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday
+export save load reload help delete create custom example page coaches coach head coordinator staff contract contracts salary payroll
+spread odds line lines bets betting favorite favorites underdog underdogs power
+find display sort count calculate name names give pull fetch lookup look search compute render print output explain describe summarize
+summary analyze analysis report reports data information info details breakdown versus super bowl pro bowl monday night football sunday
+fantasy points point score scores scoring scored game's thanksgiving christmas mvp rookie rookies veteran veterans 
+overall combined average averages percent percentage ratio rate rates number numbers amount index metric
+metrics measure ranking position positions player players quarterbacks coaching starter starters backup backups""".split())
+
+
+def _unknown_name_tokens(query: str, all_plays: List[Dict[str, Any]], engine: "StatEngine") -> List[str]:
+    """
+    Capitalised words in the user's text that look like a person's name but match nothing we know
+    (no team, known player, stat term, or player in the loaded play data). Used so a leaderboard-style
+    question about an unknown player gets an explicit can't-answer instead of an unrelated answer.
+    Lower-case input is never treated as a name (we cannot tell it from an ordinary word).
+    """
+    known_players = {k.lower() for k in NaturalLanguageStatAssistant.KNOWN_PLAYERS}
+    team_words = {w.lower() for name in TEAM_FULL_NAMES.values() for w in re.split(r"\W+", name) if w}
+
+    def _is_ordinary(low: str, tok: str) -> bool:
+        if low in _NL_NON_NAME_WORDS or low.rstrip("s") in _NL_NON_NAME_WORDS or low in team_words:
+            return True
+        if low in TEAM_NICKNAMES_TO_ABBR or low in STATE_AND_REGION_TEAMS or tok.upper() in TEAM_DIVISIONS:
+            return True
+        if any(low in str(sid).lower().split("_") for sid in engine.stats):
+            return True
+        if any(low in re.split(r"\W+", str(getattr(sd, "title", "")).lower()) for sd in engine.stats.values()):
+            return True
+        return any(re.search(pat, low) for pat, _n, _g in NaturalLanguageStatAssistant.STAT_SYNONYM_MAP)
+
+    # Group consecutive name-like words ("Josh Allen") so a full name is checked as a full name.
+    runs: List[List[str]] = []
+    cur: List[str] = []
+    for tok in re.findall(r"[A-Za-z][A-Za-z'\u2019.-]*", str(query or "")):
+        core = re.sub(r"(?:'|\u2019)s$", "", tok.strip(".'-\u2019"), flags=re.IGNORECASE)
+        low = core.lower().replace("\u2019", "'")
+        if len(core) >= 3 and core[0].isupper() and core[1:2].islower() and not _is_ordinary(low, core):
+            cur.append(core)
+        else:
+            if cur:
+                runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+
+    out: List[str] = []
+    for run in runs:
+        if run[-1].lower() in known_players:  # "Josh Allen", "Allen", even if not in the loaded plays
+            continue
+        if find_player_plays(all_plays, " ".join(run)):
+            continue
+        out.append(" ".join(run).lower())
+    return out
+
+
+def _render_unanswered(parsed: Dict[str, Any], reason: str, engine: StatEngine) -> str:
+    """Render the explicit can't-answer response for a parsed query that cannot be completed safely."""
+    p = dict(parsed)
+    p["intent"] = "ambiguous"
+    p["reason"] = reason
+    return handle_nl_query_result(p, engine, [])
+
+
 def handle_nl_query_result(
     parsed: Dict[str, Any],
     engine: StatEngine,
@@ -6741,11 +7206,18 @@ def handle_nl_query_result(
     if intent == "ambiguous":
         stat_list = ", ".join(list(engine.stats.keys())[:8]) + "..."
         return (
-            f"\n{C.BOLD}{C.RED}\u2716 Unsupported or ambiguous query:{C.RESET} \"{parsed.get('query', '')}\"\n"
-            f"  {C.YELLOW}\U0001f4a1 Could not match your question to a recognized stat, play diagram, or custom stat action.{C.RESET}\n"
+            f"\n{C.BOLD}{C.RED}\u2716 Unsupported or ambiguous query:{C.RESET} \"{strip_ansi(parsed.get('query', ''))}\"\n"
+            f"  {C.BOLD}I can't answer that:{C.RESET} {_one_line_text(parsed.get('reason') or 'the question did not match any supported stat, play, or action.', 400)}\n"
+            + ("" if parsed.get("reason") else f"  {C.YELLOW}\U0001f4a1 Could not match your question to a recognized stat, play diagram, or custom stat action.{C.RESET}\n") +
             f"  \u2022 {C.BOLD}To evaluate a stat:{C.RESET} try 'epa per play', 'passer rating', 'yards after catch', or 'qb impact score'.\n"
             f"  \u2022 {C.BOLD}To diagram a play:{C.RESET} try 'show Mahomes touchdown play' or 'diagram Goff screen play'.\n"
             f"  \u2022 {C.BOLD}Available stats:{C.RESET} {stat_list} (type {C.CYAN}/stats{C.RESET} for full catalog, or {C.CYAN}/help{C.RESET} for guidance)."
+        )
+
+    if intent == "query_too_long":
+        return (
+            f"\n{C.BOLD}{C.RED}\u2716 Query too long:{C.RESET} {parsed.get('reason', 'query exceeds the maximum length.')}\n"
+            f"  {C.DIM}Please shorten your question and try again.{C.RESET}"
         )
 
     slm_tag = f" [SLM: {parsed['slm_model_used']}]" if parsed.get("slm_model_used") else " [Local Rule/AST Parser]"
@@ -6854,15 +7326,30 @@ def handle_nl_query_result(
             return header + f"\n  {C.RED}✖ {err}{C.RESET}"
 
     if intent == "coaching_staff":
-        resolved_t = resolve_team_abbr(team) or team or "KC"
+        resolved_t = resolve_team_abbr(team) or team
+        if not resolved_t:
+            return _render_unanswered(parsed, "no team was given for the coaching question.", engine)
         return header + "\n" + render_coaching_staff_view(resolved_t, role_filter=parsed.get("role"))
 
     if intent == "team_drilldown":
-        resolved_t = team or "KC"
+        resolved_t = team
+        if not resolved_t:
+            return _render_unanswered(parsed, "no team was given for the team question.", engine)
+        if not interactive:
+            _tm = resolve_team_matches(resolved_t)
+            if len(_tm) > 1:
+                return _render_unanswered(parsed, f"'{resolved_t}' matches several teams ({', '.join(_tm)}); use the team abbreviation.", engine)
         return header + "\n" + render_team_drilldown_view(engine, s_plays, season, resolved_t, interactive=interactive)
 
     if intent == "player_drilldown":
-        target_player = player or "Mahomes"
+        target_player = player
+        if not target_player:
+            return _render_unanswered(parsed, "no player was given for the player question.", engine)
+        if not interactive:
+            _cands = find_matching_player_candidates(s_plays, target_player, season=season)
+            if len(_cands) > 1:
+                _opts = "; ".join(f"{c['name']} ({c['team']})" if c.get("team") else str(c["name"]) for c in _cands[:6])
+                return _render_unanswered(parsed, f"'{target_player}' matches several players ({_opts}); use the full name.", engine)
         return header + "\n" + render_player_drilldown_view(engine, s_plays, season, target_player, team=team, interactive=interactive)
 
     if intent == "fantasy_report":
@@ -6896,8 +7383,10 @@ def handle_nl_query_result(
             lim = parsed.get("limit", 5)
             return header + "\n" + render_underdog_leaderboard_view(s_plays, season=season, team_filter=team or parsed.get("team"), limit=lim)
         if subq == "matchup":
-            home_t = parsed.get("home_team") or team or "KC"
-            away_t = parsed.get("away_team") or "BUF"
+            home_t = parsed.get("home_team") or team
+            away_t = parsed.get("away_team")
+            if not home_t or not away_t:
+                return _render_unanswered(parsed, "a matchup needs two teams (e.g. 'spread for chiefs vs bills').", engine)
             w_val = parsed.get("week")
             return header + "\n" + render_game_handicap_dossier_view(home_t, away_t, s_plays, season=season, week=w_val)
         w_filter = parsed.get("week")
@@ -6909,7 +7398,9 @@ def handle_nl_query_result(
         if subq == "player" and target_p:
             return header + "\n" + render_player_contract_view(target_p, plays=s_plays, season=season)
         if subq == "team":
-            target_t = resolve_team_abbr(team) or team or "KC"
+            target_t = resolve_team_abbr(team) or team
+            if not target_t:
+                return _render_unanswered(parsed, "no team was given for the payroll question.", engine)
             return header + "\n" + render_team_payroll_view(target_t)
         if subq == "coaches":
             return header + "\n" + render_contracts_leaderboard_view(contract_type="coach", limit=parsed.get("limit", 15))
@@ -6980,6 +7471,9 @@ def handle_nl_query_result(
             game_id=parsed.get("game_id"),
         )
 
+    _unknown_names = _unknown_name_tokens(str(parsed.get("query", "")), all_plays, engine)
+    if _unknown_names:
+        return _render_unanswered(parsed, f"I don't know a player or team named '{_unknown_names[0].title()}' in the loaded data; check the spelling or use the full name.", engine)
     if player:
         p_low = str(player).lower()
         player_filtered = [
@@ -6992,15 +7486,21 @@ def handle_nl_query_result(
             or p_low in str(p.get("punter_player_name", "")).lower()
             or p_low in str(p.get("desc", "")).lower()
         ]
+        if not player_filtered:
+            player_filtered = find_player_plays(s_plays, str(player))
         if player_filtered:
             s_plays = player_filtered
+        elif all(w in _NL_NON_NAME_WORDS or w.rstrip("s") in _NL_NON_NAME_WORDS for w in str(player).strip().lower().split()) or resolve_team_abbr(str(player)):
+            pass  # a position/team word the parser mislabeled as a player: keep the unfiltered stat
+        else:
+            return _render_unanswered(parsed, f"no plays were found for '{_one_line_text(player, 60)}' in the {season} data, so I won't answer from other players' numbers.", engine)
 
     if intent == "qb_wins_report":
         return header + "\n" + render_qb_meaningful_wins_view(engine, s_plays, season, conf, view_mode=view_override, camera=camera, team=team)
 
-    stat_name = parsed.get("stat_name") or "yards_per_play"
-    if stat_name not in engine.stats:
-        stat_name = "yards_per_play"
+    stat_name = parsed.get("stat_name")
+    if not stat_name or stat_name not in engine.stats:
+        return _render_unanswered(parsed, f"`{stat_name or 'that stat'}` is not a registered stat. Type /stats to see supported stats.", engine)
     return header + "\n" + render_general_stat_view(
         engine,
         s_plays,
@@ -7624,23 +8124,30 @@ def render_player_drilldown_view(
     # If the user queried a name that matches multiple distinct players (e.g. /player McCaffrey -> Christian vs Luke)
     candidates = find_matching_player_candidates(s_plays, player_name, season=season)
     if len(candidates) > 1:
+        def _cand_label(cand: Dict[str, Any]) -> str:
+            pos = cand.get("position")
+            bits = ", ".join(str(x) for x in (cand.get("team"), pos, f"{cand['play_count']} plays") if x)
+            return f"{_one_line_text(cand['name'], 60)} ({bits})"
+
+        selected_cand = None
         if interactive and sys.stdin.isatty():
-            print(f"\n  {C.BOLD}{C.CYAN}Multiple players matched '{player_name}':{C.RESET}")
+            print(f"\n  {C.BOLD}{C.CYAN}Multiple players matched '{_one_line_text(player_name, 60)}':{C.RESET}")
             for idx, cand in enumerate(candidates, 1):
-                pos = cand.get("position") or "Unknown"
-                pos_str = f" - {pos}" if pos else ""
-                t_str = f" ({cand['team']}{pos_str}, {cand['play_count']} plays)" if cand.get("team") else f" ({cand['play_count']} plays)"
-                print(f"    [{idx}] {cand['name']}{t_str}")
+                print(f"    [{idx}] {_cand_label(cand)}")
             try:
-                sel = prompt_input(f"  Select player [1-{len(candidates)}] (default: 1): ").strip()
+                sel = prompt_input(f"  Select player [1-{len(candidates)}]: ").strip()
                 if sel.isdigit() and 1 <= int(sel) <= len(candidates):
                     selected_cand = candidates[int(sel) - 1]
-                else:
-                    selected_cand = candidates[0]
             except (EOFError, KeyboardInterrupt):
-                selected_cand = candidates[0]
-        else:
-            selected_cand = candidates[0]
+                selected_cand = None
+        if selected_cand is None:
+            # Never silently pick the first match: list the candidates and ask for a specific one.
+            opts = "\n".join(f"    - {_cand_label(c)}" for c in candidates[:10])
+            return (
+                f"\n{C.BOLD}{C.RED}\u2716 I can't answer that:{C.RESET} '{_one_line_text(player_name, 60)}' matches several players.\n"
+                f"{opts}\n"
+                f"  {C.DIM}Ask again with the full name (for example `{_one_line_text(candidates[0]['name'], 60)}`).{C.RESET}"
+            )
         player_name = selected_cand["search_name"]
 
     matching_plays = find_player_plays(s_plays, player_name, season=season)
@@ -7652,7 +8159,7 @@ def render_player_drilldown_view(
                 f"\n{C.YELLOW}⚠ No plays found for player '{player_name}' in the {season} season.{C.RESET}\n"
                 f"  💡 That player has data in season(s): {', '.join(map(str, seasons_found))}. Try `/season {seasons_found[-1]}`."
             )
-        return f"\n{C.RED}✖ No plays found for player '{player_name}'.{C.RESET}"
+        return f"\n{C.RED}✖ I can't answer that: no player matching '{_one_line_text(player_name, 60)}' was found in the loaded data.{C.RESET}"
 
     # SMART TEAM DETECTION:
     # "If the user picks a player be smart enough to list the teams they played for
@@ -7992,16 +8499,20 @@ def render_team_drilldown_view(
             for idx, t in enumerate(team_matches, 1):
                 full_n = TEAM_FULL_NAMES.get(t, t)
                 print(f"    [{idx}] {full_n} ({t})")
+            team_abbr = None
             try:
-                sel = prompt_input(f"  Select team [1-{len(team_matches)}] (default: 1): ").strip()
+                sel = prompt_input(f"  Select team [1-{len(team_matches)}]: ").strip()
                 if sel.isdigit() and 1 <= int(sel) <= len(team_matches):
                     team_abbr = team_matches[int(sel) - 1]
-                else:
-                    team_abbr = team_matches[0]
             except (EOFError, KeyboardInterrupt):
-                team_abbr = team_matches[0]
+                team_abbr = None
         else:
-            team_abbr = team_matches[0]
+            team_abbr = None
+        if team_abbr is None:
+            return (
+                f"\n{C.BOLD}{C.RED}\u2716 I can't answer that:{C.RESET} '{_one_line_text(team, 60)}' matches several teams "
+                f"({', '.join(team_matches)}). Ask again with the team abbreviation or full name."
+            )
     elif len(team_matches) == 1:
         team_abbr = team_matches[0]
     else:
@@ -9385,21 +9896,449 @@ def render_stats_catalog(engine: StatEngine) -> str:
 # IPC Error Reporting & Self-Healing Agent Signaling
 # ==============================================================================
 
-def get_ipc_dir() -> Path:
-    """Returns the .error_ipc directory path, creating pending/resolved/history subfolders."""
-    try:
-        pkg_root = Path(__file__).resolve().parent.parent
-        if (pkg_root / ".git").exists() or (pkg_root / "pyproject.toml").exists():
-            ipc_path = pkg_root / ".error_ipc"
-        else:
-            ipc_path = Path.cwd() / ".error_ipc"
-    except Exception:
-        ipc_path = Path.cwd() / ".error_ipc"
-    ipc_path.mkdir(parents=True, exist_ok=True)
-    (ipc_path / "pending").mkdir(parents=True, exist_ok=True)
-    (ipc_path / "resolved").mkdir(parents=True, exist_ok=True)
-    (ipc_path / "history").mkdir(parents=True, exist_ok=True)
+ERROR_IPC_ENV = "NFL_STAT_ENABLE_ERROR_IPC"  # set to 0/false to turn local /error capture off
+ERROR_IPC_DISABLE_ENV = "NFL_STAT_DISABLE_ERROR_IPC"  # set to 1 to turn local /error capture off
+GIT_UPDATE_ENV = "NFL_STAT_ALLOW_GIT_UPDATE"
+IPC_WAIT_TIMEOUT_SECONDS = 600.0
+_IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
+_IPC_REPORT_FILE_RE = re.compile(r"^err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.json$", re.ASCII)
+IPC_MAX_FILE_BYTES = 65536
+IPC_MAX_RESPONSE_CHARS = 8000
+ERROR_RETENTION_DAYS_ENV = "PFSLM_ERROR_RETENTION_DAYS"  # preferred; falls back to NFL_STAT_ name
+ERROR_RETENTION_DAYS_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_DAYS"
+ERROR_RETENTION_MAX_ENV = "PFSLM_ERROR_RETENTION_MAX"
+ERROR_RETENTION_MAX_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_MAX"
+ERROR_RETENTION_DEFAULT_DAYS = 30
+ERROR_RETENTION_DEFAULT_MAX = 500
+ERROR_RETENTION_MIN_INTERVAL_SECONDS = 86400  # cheap check: at most once per day unless forced
+ERROR_RETENTION_STAMP_NAME = ".retention_cleanup_stamp"
+ERROR_RETENTION_SUBDIRS = ("resolved", "history")  # never touch pending/
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def error_ipc_enabled() -> bool:
+    """
+    Local `/error` report capture is ON by default: nothing is written unless the user types `/error`,
+    reports go only to a private per-user folder, and nothing is sent anywhere. Opt out with
+    NFL_STAT_DISABLE_ERROR_IPC=1 or NFL_STAT_ENABLE_ERROR_IPC=0. Force-reload and git updates are
+    separate and are never enabled by this. Any value not listed as "off" leaves capture on.
+    """
+    if _truthy_env(ERROR_IPC_DISABLE_ENV):
+        return False
+    raw = os.environ.get(ERROR_IPC_ENV, "").strip().lower()
+    return raw not in ("0", "false", "no", "off", "none", "disable", "disabled")
+
+
+def validate_report_id(report_id: str) -> str:
+    """Return the id unchanged if it is a well-formed report id, otherwise raise ValueError."""
+    if not isinstance(report_id, str) or not _IPC_REPORT_ID_RE.fullmatch(report_id):
+        raise ValueError(f"Invalid error report id: {str(report_id)[:40]!r}")
+    return report_id
+
+
+def sanitize_ipc_text(value: Any, limit: int = 500) -> str:
+    """Make text read from the IPC directory safe to print: strip ANSI/control characters and cap length."""
+    text = strip_ansi(str(value if value is not None else ""))
+    text = "".join(ch if (ch.isprintable() or ch == " ") else " " for ch in text)
+    return text[:limit]
+
+
+def get_ipc_dir(create: bool = True) -> Path:
+    """
+    Returns the error-report IPC directory (pending/resolved/history). With ``create=True`` (the default,
+    used before writing) it creates the directories with owner-only permissions; with ``create=False``
+    (used by read-only callers) nothing is created, and directories that already exist are still checked.
+    Lives in the user's private state dir; override with NFL_STAT_IPC_DIR.
+    """
+    override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
+    ipc_path = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
+    for sub in ("", "pending", "resolved", "history"):
+        d = ipc_path / sub if sub else ipc_path
+        if create:
+            d.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            try:
+                st = os.lstat(d)
+            except FileNotFoundError:
+                if create:
+                    raise
+                continue
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+                raise PermissionError(f"Refusing to use IPC directory not owned by the current user or reached through a symlink: {d.name}")
+            try:
+                os.chmod(d, 0o700)
+            except OSError:
+                pass
     return ipc_path
+
+
+def _env_int_with_fallback(
+    preferred: str,
+    legacy: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 10_000_000,
+) -> int:
+    """
+    Read an int env var; preferred name wins over legacy when it is a plain ASCII integer in range.
+    An invalid preferred value is skipped so a valid legacy value can still apply; if neither is
+    valid, ``default`` is returned.
+    """
+    for name in (preferred, legacy):
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        raw = raw.strip()
+        if not raw or not re.fullmatch(r"[0-9]+", raw, re.ASCII):
+            continue
+        try:
+            value = int(raw, 10)
+        except ValueError:
+            continue
+        if value < minimum or value > maximum:
+            continue
+        return value
+    return default
+
+
+def error_retention_days() -> int:
+    """Days to keep resolved/history error reports. Default 30. PFSLM_* wins over NFL_STAT_*."""
+    return _env_int_with_fallback(
+        ERROR_RETENTION_DAYS_ENV,
+        ERROR_RETENTION_DAYS_ENV_LEGACY,
+        ERROR_RETENTION_DEFAULT_DAYS,
+        minimum=1,
+        maximum=3650,
+    )
+
+
+def error_retention_max() -> int:
+    """Max resolved+history report files to keep. Default 500. PFSLM_* wins over NFL_STAT_*."""
+    return _env_int_with_fallback(
+        ERROR_RETENTION_MAX_ENV,
+        ERROR_RETENTION_MAX_ENV_LEGACY,
+        ERROR_RETENTION_DEFAULT_MAX,
+        minimum=1,
+        maximum=1_000_000,
+    )
+
+
+def _is_error_report_filename(name: str) -> bool:
+    return bool(isinstance(name, str) and _IPC_REPORT_FILE_RE.fullmatch(name))
+
+
+def _log_retention_issue(message: str) -> None:
+    try:
+        sys.stderr.write(f"nfl-stat-cli: error-report retention: {message}\n")
+    except Exception:
+        pass
+
+
+def _iter_retention_candidates(ipc_dir: Path) -> List[Tuple[Path, float]]:
+    """
+    List (path, mtime) for regular report files under resolved/ and history/.
+    Skips pending/, symlinks, non-matching names, and directories that are themselves symlinks.
+    """
+    out: List[Tuple[Path, float]] = []
+    for sub in ERROR_RETENTION_SUBDIRS:
+        d = ipc_dir / sub
+        try:
+            st_dir = os.lstat(d)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st_dir.st_mode) or not stat.S_ISDIR(st_dir.st_mode):
+            continue
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            if not _is_error_report_filename(name):
+                continue
+            p = d / name
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                continue
+            out.append((p, float(st.st_mtime)))
+    return out
+
+
+def _safe_unlink_report(path: Path) -> bool:
+    """Unlink a regular report file without following symlinks. Returns True if removed."""
+    try:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            return False
+        if not _is_error_report_filename(path.name):
+            return False
+        if path.parent.name not in ERROR_RETENTION_SUBDIRS:
+            return False
+        os.unlink(path)
+        return True
+    except FileNotFoundError:
+        return True  # already gone (concurrent cleanup); treat as removed
+    except OSError as exc:
+        _log_retention_issue(f"could not remove {path.name}: {getattr(exc, 'strerror', None) or exc.__class__.__name__}")
+        return False
+
+
+def _retention_stamp_path(ipc_dir: Path) -> Path:
+    return ipc_dir / ERROR_RETENTION_STAMP_NAME
+
+
+def _retention_cheap_check_ok(ipc_dir: Path, *, force: bool = False, now: Optional[float] = None) -> bool:
+    """Return True when cleanup should run. Stamp file throttles to about once per day."""
+    if force:
+        return True
+    stamp = _retention_stamp_path(ipc_dir)
+    try:
+        st = os.lstat(stamp)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            return True
+        age = (time.time() if now is None else now) - float(st.st_mtime)
+        return age >= float(ERROR_RETENTION_MIN_INTERVAL_SECONDS)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return True
+
+
+def _touch_retention_stamp(ipc_dir: Path) -> None:
+    stamp = _retention_stamp_path(ipc_dir)
+    try:
+        # Never follow a symlinked stamp: replace it with a fresh regular file via O_NOFOLLOW when possible.
+        try:
+            st = os.lstat(stamp)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                try:
+                    os.unlink(stamp)
+                except FileNotFoundError:
+                    pass
+        except FileNotFoundError:
+            pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(stamp), flags, 0o600)
+        try:
+            os.write(fd, str(int(time.time())).encode("ascii"))
+        finally:
+            os.close(fd)
+        if os.name != "nt":
+            try:
+                os.chmod(stamp, 0o600)
+            except OSError:
+                pass
+    except OSError as exc:
+        _log_retention_issue(f"could not write stamp: {getattr(exc, 'strerror', None) or exc.__class__.__name__}")
+
+
+def cleanup_error_reports(
+    ipc_dir: Optional[Path] = None,
+    *,
+    force: bool = False,
+    now: Optional[float] = None,
+    retention_days: Optional[int] = None,
+    retention_max: Optional[int] = None,
+) -> Dict[str, int]:
+    """
+    Prune old resolved/ and history/ error reports. Never touches pending/.
+
+    Deletes matching ``err_YYYYMMDD_HHMMSS_xxxxxxxx.json`` files older than the retention
+    window (default 30 days; ``PFSLM_ERROR_RETENTION_DAYS`` / ``NFL_STAT_ERROR_RETENTION_DAYS``),
+    then enforces a total cap (default 500; ``PFSLM_ERROR_RETENTION_MAX`` /
+    ``NFL_STAT_ERROR_RETENTION_MAX``) by removing oldest first. A stamp file limits work to
+    about once per day unless ``force=True``. Errors are swallowed and logged; this never
+    raises into the CLI.
+    """
+    result = {"skipped": 0, "deleted_age": 0, "deleted_cap": 0, "kept": 0, "examined": 0}
+    try:
+        # never create from cleanup: read-only path, consistent with get_ipc_dir(create=False)
+        root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir(create=False)
+        try:
+            root_st = os.lstat(root)
+            if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
+                _log_retention_issue("refusing to clean a non-directory or symlinked IPC root")
+                result["skipped"] = 1
+                return result
+        except FileNotFoundError:
+            result["skipped"] = 1
+            return result
+        if not _retention_cheap_check_ok(root, force=force, now=now):
+            result["skipped"] = 1
+            return result
+        days = int(retention_days) if retention_days is not None else error_retention_days()
+        cap = int(retention_max) if retention_max is not None else error_retention_max()
+        if days < 1:
+            days = ERROR_RETENTION_DEFAULT_DAYS
+        if cap < 1:
+            cap = ERROR_RETENTION_DEFAULT_MAX
+        cutoff = (time.time() if now is None else float(now)) - (days * 86400.0)
+        candidates = _iter_retention_candidates(root)
+        result["examined"] = len(candidates)
+        remaining: List[Tuple[Path, float]] = []
+        for path, mtime in candidates:
+            if mtime < cutoff:
+                if _safe_unlink_report(path):
+                    result["deleted_age"] += 1
+                else:
+                    remaining.append((path, mtime))
+            else:
+                remaining.append((path, mtime))
+        if len(remaining) > cap:
+            remaining.sort(key=lambda item: item[1])  # oldest first
+            overflow = remaining[: len(remaining) - cap]
+            survivors = remaining[len(remaining) - cap :]
+            for path, _mtime in overflow:
+                if _safe_unlink_report(path):
+                    result["deleted_cap"] += 1
+                else:
+                    survivors.append((path, _mtime))
+            remaining = survivors
+        result["kept"] = len(remaining)
+        _touch_retention_stamp(root)
+    except Exception as exc:
+        _log_retention_issue(f"cleanup aborted: {exc}")
+    return result
+
+
+def _read_ipc_json(path: Path) -> Optional[Dict[str, Any]]:
+    """Read a small regular JSON file from the IPC dir; never follows symlinks or blocks on special files."""
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > IPC_MAX_FILE_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _json_safe(value: Any) -> Any:
+    """Round-trip through JSON, stringifying non-JSON values; fall back to a repr for unserializable structures."""
+    def _clean(v: Any, depth: int = 0) -> Any:
+        if depth > 20:
+            return str(v)[:200]
+        if isinstance(v, dict):
+            return {(k if isinstance(k, str) else str(k)): _clean(x, depth + 1) for k, x in v.items()}
+        if isinstance(v, (list, tuple, set, frozenset)):
+            return [_clean(x, depth + 1) for x in v]
+        return v
+
+    try:
+        return json.loads(json.dumps(_clean(value), default=str))
+    except (TypeError, ValueError, RecursionError):
+        return {"unserializable_parse": repr(value)[:2000]}
+
+
+IPC_MAX_REPRO_ROWS = 50
+
+
+def _read_git_sha(start: Optional[Path] = None) -> Optional[str]:
+    """Commit SHA of the checkout this package runs from, read from .git files (no git subprocess); None if not a checkout."""
+    root = (start or Path(__file__).resolve().parent.parent)
+    try:
+        git_dir = root / ".git"
+        if git_dir.is_file():  # worktree / submodule pointer file
+            ref = git_dir.read_text(encoding="utf-8").strip()
+            if ref.startswith("gitdir:"):
+                git_dir = (root / ref.split(":", 1)[1].strip()).resolve()
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", head):
+            return head
+        if head.startswith("ref:"):
+            ref_name = head.split(":", 1)[1].strip()
+            if not ref_name.startswith("refs/") or ".." in re.split(r"[\\/]", ref_name) or "\\" in ref_name:
+                return None
+            ref_file = git_dir / ref_name
+            if ref_file.is_file():
+                sha = ref_file.read_text(encoding="utf-8").strip()
+                return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+            common = git_dir / "commondir"
+            if common.is_file():
+                cdir = (git_dir / common.read_text(encoding="utf-8").strip()).resolve()
+                ref_file = cdir / ref_name
+                if ref_file.is_file():
+                    sha = ref_file.read_text(encoding="utf-8").strip()
+                    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+                git_dir = cdir
+            packed = git_dir / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line.endswith(" " + ref_name) and re.match(r"[0-9a-f]{40} ", line):
+                        return line.split(" ", 1)[0]
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _is_sample_source(source: Optional[str]) -> bool:
+    """True for the built-in sample/offline dataset labels (real backends are labelled by library name)."""
+    low = str(source or "").lower()
+    return "sample" in low or "built-in" in low
+
+
+def data_snapshot_id(plays: List[Dict[str, Any]], season: Optional[int] = None) -> str:
+    """Stable fingerprint of the loaded play set (play ids plus epa/wpa/yards) so a report can be replayed on the same data."""
+    rows = [p for p in plays if season is None or _safe_int(p.get("season"), -1) == int(season)]
+    h = hashlib.sha256()
+    def _num(v: Any) -> str:
+        try:
+            return f"{float(v):.4f}"
+        except (TypeError, ValueError):
+            return ""
+
+    # ids plus a few value columns, because upstream data releases correct EPA/yardage for the same plays
+    for key in sorted(
+        (str(p.get("game_id", "")), str(p.get("play_id", "")), _num(p.get("epa")), _num(p.get("wpa")), _num(p.get("yards_gained")))
+        for p in rows
+    ):
+        h.update("|".join(key).encode("utf-8", "replace") + b"\n")
+    return f"{len(rows)}-{h.hexdigest()[:16]}"
+
+
+def build_repro_context(
+    bridge: Optional[Any],
+    plays: List[Dict[str, Any]],
+    season: int,
+    parsed: Optional[Dict[str, Any]] = None,
+    slm_requested: Optional[str] = None,
+    result_table: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Facts needed to replay an answer: code version, data source and snapshot, parser model, and the table the
+    answer showed (``result_table`` = {"title", "headers", "rows"} captured for that query; None if it rendered none).
+    """
+    source = getattr(bridge, "last_source_used", None) if bridge is not None else None
+    table = result_table or {}
+    rows = list(table.get("rows") or [])
+    return {
+        "git_sha": _read_git_sha(),
+        "version": __version__,
+        "python": platform.python_version(),
+        "platform": platform.system(),
+        "data_source": source,
+        "is_sample": _is_sample_source(source) if source else None,  # None = source unknown
+        "season": season,
+        "seasons_loaded": sorted({_safe_int(p.get("season"), 0) for p in plays if p.get("season") is not None}),
+        "plays_loaded": len(plays),
+        "snapshot_id": data_snapshot_id(plays, season),
+        "slm_model": (parsed or {}).get("slm_model_used") or None,
+        "slm_requested": slm_requested or None,
+        "parser": "slm" if (parsed or {}).get("slm_model_used") else "rule",
+        "result_title": sanitize_ipc_text(table.get("title"), 200) if table else None,
+        "result_headers": [sanitize_ipc_text(h, 60) for h in list(table.get("headers") or [])[:40]] if table else None,
+        "result_row_count": len(rows),
+        "result_rows": [[sanitize_ipc_text(c, 80) for c in list(r)[:40]] for r in rows[:IPC_MAX_REPRO_ROWS] if isinstance(r, (list, tuple))],
+    }
 
 
 def create_error_report(
@@ -9407,25 +10346,32 @@ def create_error_report(
     parsed_nl: Dict[str, Any],
     user_explanation: str = "",
     season: Optional[int] = None,
+    response_text: str = "",
+    repro: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Serializes an error report for a natural-language query and writes it to .error_ipc/pending/."""
+    """
+    Serializes an error report for a natural-language query and writes it to the IPC pending dir.
+    ``response_text`` is what the CLI showed the user (ANSI stripped, capped), so a wrong answer or a
+    can't-answer reason can be reviewed without re-running the query.
+    """
     ipc_dir = get_ipc_dir()
     now_dt = dt.datetime.now()
-    report_id = f"err_{now_dt.strftime('%Y%m%d_%H%M%S')}"
+    report_id = f"err_{now_dt.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
     report_data = {
         "id": report_id,
         "timestamp": now_dt.isoformat(),
         "query": query_raw,
         "user_explanation": user_explanation or "Interpretation mismatch or unexpected query result.",
-        "parsed": parsed_nl,
+        "parsed": _json_safe(parsed_nl),
+        "response": strip_ansi(str(response_text or ""))[:IPC_MAX_RESPONSE_CHARS],
         "season": season or CURRENT_SEASON,
         "version": __version__,
+        "repro": _json_safe(repro) if repro else {"git_sha": _read_git_sha(), "version": __version__},
         "status": "pending",
     }
-    with open(ipc_dir / "pending" / f"{report_id}.json", "w", encoding="utf-8") as f:
-        json.dump(report_data, f, indent=2)
-    with open(ipc_dir / "pending" / "latest.json", "w", encoding="utf-8") as f:
-        json.dump(report_data, f, indent=2)
+    _atomic_write_json(ipc_dir / "pending" / f"{report_id}.json", report_data)
+    _atomic_write_json(ipc_dir / "pending" / "latest.json", report_data)
+    cleanup_error_reports(ipc_dir)  # cheap, at-most-daily prune of resolved/history only
     return report_data
 
 
@@ -9436,6 +10382,7 @@ def write_resolution(
     status: str = "resolved",
 ) -> Dict[str, Any]:
     """Writes a resolution signal file indicating an error report has been addressed."""
+    validate_report_id(report_id)
     ipc_dir = get_ipc_dir()
     res_data = {
         "id": report_id,
@@ -9444,15 +10391,25 @@ def write_resolution(
         "summary": summary,
         "timestamp": dt.datetime.now().isoformat(),
     }
-    with open(ipc_dir / "resolved" / f"{report_id}.json", "w", encoding="utf-8") as f:
-        json.dump(res_data, f, indent=2)
-    with open(ipc_dir / "resolved" / "latest.json", "w", encoding="utf-8") as f:
-        json.dump(res_data, f, indent=2)
+    _atomic_write_json(ipc_dir / "resolved" / f"{report_id}.json", res_data)
+    _atomic_write_json(ipc_dir / "resolved" / "latest.json", res_data)
     pending_file = ipc_dir / "pending" / f"{report_id}.json"
     if pending_file.exists():
         history_file = ipc_dir / "history" / f"{report_id}.json"
         try:
             shutil.move(str(pending_file), str(history_file))
+            # rename keeps the old mtime; refresh so a long-pending report is not age-pruned immediately
+            try:
+                now_ts = time.time()
+                if os.utime in getattr(os, "supports_follow_symlinks", set()):
+                    os.utime(history_file, (now_ts, now_ts), follow_symlinks=False)
+                else:
+                    os.utime(history_file, (now_ts, now_ts))
+            except (OSError, TypeError, ValueError, NotImplementedError):
+                try:
+                    os.utime(history_file, (time.time(), time.time()))
+                except OSError:
+                    pass
         except Exception:
             pass
     pending_latest = ipc_dir / "pending" / "latest.json"
@@ -9464,46 +10421,46 @@ def write_resolution(
                 pending_latest.unlink(missing_ok=True)
         except Exception:
             pass
+    cleanup_error_reports(ipc_dir)  # prune resolved/history after a resolution lands
     return res_data
 
 
 def wait_for_resolution(
     report_id: str,
     poll_interval: float = 1.0,
+    timeout: Optional[float] = IPC_WAIT_TIMEOUT_SECONDS,
 ) -> Optional[Dict[str, Any]]:
-    """Polls .error_ipc/resolved/ until the resolution payload appears or the user interrupts."""
-    ipc_dir = get_ipc_dir()
+    """
+    Polls the IPC resolved dir until a matching resolution payload appears.
+    Returns None when the timeout elapses (never waits forever). Raises ValueError for a malformed id.
+    Returns the payload only; it never reloads code or acts on the payload.
+    """
+    validate_report_id(report_id)
+    ipc_dir = get_ipc_dir(create=False)
     target_res = ipc_dir / "resolved" / f"{report_id}.json"
     latest_res = ipc_dir / "resolved" / "latest.json"
+    deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
 
     while True:
+        get_ipc_dir(create=False)  # re-check ownership/symlinks of directories that appeared after the last poll
         for p in (target_res, latest_res):
-            if p.exists():
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if data.get("id") == report_id and data.get("status") == "resolved":
-                        return data
-                except Exception:
-                    pass
+            data = _read_ipc_json(p)
+            if data is not None and data.get("id") == report_id and data.get("status") == "resolved":
+                return data
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
         time.sleep(poll_interval)
 
 
 def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
     """
     Cleanly reload nfl-stat-cli and all its submodules in-place.
-    Optionally pulls git updates first.
     Purges cached submodules from sys.modules to ensure fresh imports.
+    ``pull_git`` is accepted for backward compatibility but is ignored: reloading never runs git.
+    Use git_update_package() for an explicit, gated update.
     """
     import sys
     import importlib
-
-    if pull_git:
-        try:
-            import subprocess
-            subprocess.run(["git", "pull"], capture_output=True, text=True, timeout=25)
-        except Exception:
-            pass
 
     # Purge cached submodules so fresh code is loaded from disk
     for m in list(sys.modules.keys()):
@@ -9515,6 +10472,31 @@ def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
 
     import nfl_stat_cli as _cur_mod
     return importlib.reload(_cur_mod)
+
+
+def git_update_package() -> Tuple[bool, str]:
+    """
+    Explicit, opt-in self-update: `git pull --ff-only` pinned to this package's own checkout.
+    Requires NFL_STAT_ALLOW_GIT_UPDATE=1, an interactive terminal, and a `.git` directory at the package root.
+    Never invoked by /reload.
+    """
+    if not _truthy_env(GIT_UPDATE_ENV):
+        return False, f"Git update is disabled. Set {GIT_UPDATE_ENV}=1 to allow `/update --git`."
+    if not (hasattr(sys.stdin, "isatty") and sys.stdin.isatty() and hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
+        return False, "Git update requires an interactive terminal."
+    pkg_root = Path(__file__).resolve().parent.parent
+    git_bin = shutil.which("git")
+    if not git_bin or not (pkg_root / ".git").exists():
+        return False, "This install is not a git checkout; update it with your package manager instead."
+    try:
+        res = subprocess.run(
+            [git_bin, "-C", str(pkg_root), "pull", "--ff-only"],
+            cwd=str(pkg_root), capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"git pull failed: {sanitize_ipc_text(exc, 200)}"
+    out = sanitize_ipc_text((res.stdout or "") + " " + (res.stderr or ""), 400).strip()
+    return res.returncode == 0, out or ("Already up to date." if res.returncode == 0 else f"git exited {res.returncode}")
 
 
 
@@ -9553,8 +10535,8 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/export-stats{C.RESET} [file.json]       Export custom stats catalog to JSON
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
-    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Report parsing or interpretation error to Antigravity AI agent
-    {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place with latest patches from Antigravity
+    {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save the last query + answer as a local error report (nothing is sent; old resolved/history pruned after 30d / ~500)
+    {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs NFL_STAT_ALLOW_GIT_UPDATE=1)
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
@@ -9687,6 +10669,15 @@ def interactive_tui(
     seasons_to_load = sorted({active_season - 1, active_season})
     show_startup_loading(is_interactive=is_interactive, seasons=seasons_to_load)
     print(AsciiArtRenderer.banner())
+    if error_ipc_enabled():
+        try:
+            override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
+            existing = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
+            st = os.lstat(existing)
+            if (not stat.S_ISLNK(st.st_mode)) and stat.S_ISDIR(st.st_mode):
+                cleanup_error_reports(existing)  # once-daily prune; never raises
+        except Exception:
+            pass
     if initial_plays is not None:
         plays = initial_plays
     else:
@@ -9707,8 +10698,12 @@ def interactive_tui(
 
     last_parsed_nl: Optional[Dict[str, Any]] = None
     last_query_raw: Optional[str] = None
+    last_response_text: str = ""
+    last_result_table: Optional[Dict[str, Any]] = None  # table rendered by the last query, if any
 
     setup_readline_completer(engine)
+    if _GLOBAL_COMPLETER:
+        _GLOBAL_COMPLETER.set_plays(plays)
 
     while True:
         try:
@@ -9860,13 +10855,23 @@ def interactive_tui(
                         parsed = NaturalLanguageStatAssistant.interpret_query(
                             nl_play_q, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
                         )
-                        parsed["intent"] = "specific_play"
-                        parsed["show_field"] = True
+                        if parsed.get("intent") != "query_too_long":
+                            parsed["intent"] = "specific_play"
+                            parsed["show_field"] = True
                         if not any(k in nl_play_q.lower() for k in ("behind", "offense", "defense", "sideline")):
                             parsed["camera"] = default_camera
-                        last_parsed_nl = parsed
-                        last_query_raw = nl_play_q
-                        print(handle_nl_query_result(parsed, engine, plays, interactive=is_interactive))
+                        _tracked = parsed.get("intent") != "query_too_long"  # an over-long query is not a repro candidate
+                        if _tracked:
+                            last_parsed_nl = parsed
+                            last_query_raw = nl_play_q
+                            last_response_text = ""
+                            last_result_table = None
+                        _table_before = LAST_RENDERED_TABLE
+                        _nl_response = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
+                        if _tracked:
+                            last_response_text = _nl_response
+                            last_result_table = LAST_RENDERED_TABLE if LAST_RENDERED_TABLE is not _table_before else None
+                        print(_nl_response)
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
                 elif cmd_token in ("/games", "/game", "/matchup", "/matchups", "/boxscore", "/pbp"):
@@ -9924,7 +10929,8 @@ def interactive_tui(
                             else:
                                 print(render_sportsbook_board_view(s_plays, season=active_season))
                     else:
-                        interactive_sportsbook_browser(plays, active_season=active_season)
+                        season_plays = plays_for_season(plays, active_season)
+                        interactive_sportsbook_browser(season_plays, active_season=active_season)
                 elif cmd_token in ("/contract", "/contracts", "/contrat", "/payroll", "/salary", "/salaries"):
                     if cmd_args:
                         arg_str = " ".join(cmd_args).strip()
@@ -9981,6 +10987,10 @@ def interactive_tui(
                     else:
                         print(f"  {C.DIM}No natural-language query has been run in this session yet.{C.RESET}")
                 elif cmd_token in ("/error", "/bug", "/report"):
+                    if not error_ipc_enabled():
+                        print(f"  {C.YELLOW}⚠ Error reporting is turned off ({ERROR_IPC_DISABLE_ENV} / {ERROR_IPC_ENV}=0 is set).{C.RESET}")
+                        print(f"  {C.DIM}Unset it to let /error save reports to the private local folder.{C.RESET}")
+                        continue
                     if not last_parsed_nl or not last_query_raw:
                         print(f"  {C.YELLOW}⚠ No natural-language query has been run in this session yet.{C.RESET}")
                         print(f"  {C.DIM}Run a query first (e.g. 'which coach has called the most timeouts in the 4th qrt'), then type `/error`.{C.RESET}")
@@ -9990,73 +11000,112 @@ def interactive_tui(
                     if not user_notes:
                         print(f"\n{C.BOLD}{C.RED}=== 🚨 NATURAL LANGUAGE QUERY ERROR REPORT ==={C.RESET}")
                         print(f"  {C.BOLD}Failed Query:{C.RESET} \"{last_query_raw}\"")
-                        print(f"  {C.BOLD}Current Interpretation:{C.RESET} `{last_parsed_nl.get('stat_name')}` (group: `{last_parsed_nl.get('group_by')}`, filter: `{last_parsed_nl.get('filter_expr') or 'none'}`)")
+                        if last_parsed_nl.get("status") == "unanswered" or last_parsed_nl.get("intent") == "ambiguous":
+                            print(f"  {C.BOLD}I said I can't answer:{C.RESET} {_one_line_text(last_parsed_nl.get('reason') or 'no reason given', 300)}")
+                        else:
+                            print(f"  {C.BOLD}Current Interpretation:{C.RESET} intent `{last_parsed_nl.get('intent')}`, stat `{last_parsed_nl.get('stat_name')}` (group: `{last_parsed_nl.get('group_by')}`, filter: `{last_parsed_nl.get('filter_expr') or 'none'}`)")
                         try:
                             user_notes = prompt_input(f"\n  {C.BOLD}{C.GOLD}What was incorrect or what did you expect?{C.RESET} ").strip()
                         except (EOFError, KeyboardInterrupt):
                             print(f"\n  {C.DIM}Error report cancelled.{C.RESET}")
                             continue
 
-                    rep = create_error_report(
-                        query_raw=last_query_raw,
-                        parsed_nl=last_parsed_nl,
-                        user_explanation=user_notes,
-                        season=active_season,
-                    )
+                    try:
+                        try:
+                            repro_ctx = build_repro_context(bridge, plays, active_season, last_parsed_nl, slm_requested=slm_model, result_table=last_result_table)
+                        except Exception:  # never lose a report because the extra context failed
+                            repro_ctx = {"git_sha": _read_git_sha(), "version": __version__, "repro_error": True}
+                        rep = create_error_report(
+                            query_raw=last_query_raw,
+                            parsed_nl=last_parsed_nl,
+                            user_explanation=user_notes,
+                            season=active_season,
+                            response_text=last_response_text,
+                            repro=repro_ctx,
+                        )
+                    except OSError as save_err:
+                        print(f"  {C.RED}✖ Could not save the error report: {sanitize_ipc_text(save_err, 200)}{C.RESET}")
+                        print(f"  {C.DIM}Set NFL_STAT_IPC_DIR to a writable folder and try again.{C.RESET}")
+                        continue
                     rep_id = rep["id"]
-                    print(f"\n  {C.GREEN}✔ Error report `{rep_id}` created & sent to Antigravity IPC!{C.RESET}")
+                    print(f"\n  {C.GREEN}✔ Error report `{rep_id}` saved to the local error IPC folder.{C.RESET}")
                     print(f"  {C.DIM}Saved to: {get_ipc_dir() / 'pending' / 'latest.json'}{C.RESET}")
-                    print(f"  {C.CYAN}💡 Antigravity agent will inspect the AST parser, patch the code, run tests, and push the commit.{C.RESET}")
+                    print(f"  {C.CYAN}💡 A developer or agent you run locally can inspect the report and write a resolution.{C.RESET}")
 
                     try:
-                        wait_choice = prompt_input(f"\n  {C.BOLD}Wait for Antigravity AI fix and auto-reload now? [Y/n]: {C.RESET}").strip().lower()
+                        wait_choice = prompt_input(f"\n  {C.BOLD}Wait up to {int(IPC_WAIT_TIMEOUT_SECONDS // 60)} min for a resolution signal? [y/N]: {C.RESET}").strip().lower()
                     except (EOFError, KeyboardInterrupt):
                         wait_choice = "n"
 
-                    if wait_choice in ("", "y", "yes"):
-                        print(f"\n  {C.GOLD}⏳ Waiting for Antigravity signal... (Press Ctrl+C to stop waiting and return to prompt){C.RESET}")
+                    if wait_choice in ("y", "yes"):
+                        print(f"\n  {C.GOLD}⏳ Waiting for a resolution signal... (Press Ctrl+C to stop waiting and return to prompt){C.RESET}")
                         try:
                             res = wait_for_resolution(rep_id)
                         except KeyboardInterrupt:
                             print(f"\n  {C.YELLOW}Stopped waiting. Report `{rep_id}` remains pending.{C.RESET}")
-                            print(f"  {C.DIM}Once the fix is committed, type `/reload` to apply the update.{C.RESET}")
+                            print(f"  {C.DIM}Once a fix is deployed, type `/reload` to apply it.{C.RESET}")
                             continue
 
-                        if res:
-                            print(f"\n  {C.GREEN}{C.BOLD}🎉 Issue has been solved by Antigravity!{C.RESET}")
+                        if res is None:
+                            print(f"  {C.YELLOW}⚠ Timed out waiting. Report `{rep_id}` remains pending; type `/reload` after a fix is deployed.{C.RESET}")
+                        else:
+                            print(f"\n  {C.GREEN}{C.BOLD}✔ A resolution signal was received for `{rep_id}`.{C.RESET}")
                             if res.get("commit"):
-                                print(f"  {C.BOLD}Commit:{C.RESET} {res.get('commit')}")
+                                print(f"  {C.BOLD}Commit:{C.RESET} {sanitize_ipc_text(res.get('commit'), 80)}")
                             if res.get("summary"):
-                                print(f"  {C.BOLD}Fix Details:{C.RESET} {res.get('summary')}")
-                            print(f"  {C.CYAN}🔄 Reloading programming and re-evaluating query...{C.RESET}\n")
+                                print(f"  {C.BOLD}Fix Details:{C.RESET} {sanitize_ipc_text(res.get('summary'))}")
+                            print(f"  {C.DIM}The text above came from a local file and is not verified.{C.RESET}")
                             try:
-                                _cur_mod = reload_nfl_stat_cli(pull_git=False)
-                                engine = _cur_mod.StatEngine()
-                                re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
-                                    last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
-                                )
-                                last_parsed_nl = re_parsed
-                                print(_cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive))
-                            except Exception as re_err:
-                                print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
+                                reload_choice = prompt_input(f"\n  {C.BOLD}Reload the code and re-run your query now? [y/N]: {C.RESET}").strip().lower()
+                            except (EOFError, KeyboardInterrupt):
+                                reload_choice = "n"
+                            if reload_choice in ("y", "yes"):
+                                try:
+                                    _cur_mod = reload_nfl_stat_cli()
+                                    engine = _cur_mod.StatEngine()
+                                    re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
+                                        last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
+                                    )
+                                    last_parsed_nl = re_parsed
+                                    last_response_text = _cur_mod.handle_nl_query_result(re_parsed, engine, plays, interactive=is_interactive)
+                                    print(last_response_text)
+                                except Exception as re_err:
+                                    print(f"  {C.RED}✖ Error during hot-reload re-evaluation: {re_err}{C.RESET}")
+                            else:
+                                print(f"  {C.DIM}Not reloading. Type `/reload` whenever you want to apply updated code.{C.RESET}")
                     else:
-                        print(f"  {C.DIM}Report saved. Type `/reload` or `/update` once the fix is deployed to update your programming.{C.RESET}")
+                        print(f"  {C.DIM}Report saved. Type `/reload` once a fix is deployed to update your programming.{C.RESET}")
                 elif cmd_token in ("/reload", "/update", "/refresh"):
-                    print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place...{C.RESET}")
+                    if cmd_token == "/update" and "--git" in cmd_args:
+                        try:
+                            go = prompt_input(f"  {C.BOLD}Run `git pull --ff-only` in the nfl-stat-cli checkout? [y/N]: {C.RESET}").strip().lower() in ("y", "yes") if is_interactive else False
+                        except (EOFError, KeyboardInterrupt):
+                            go = False
+                        if not go:
+                            print(f"  {C.DIM}Git update skipped.{C.RESET}")
+                            continue
+                        ok_git, git_msg = git_update_package()
+                        print(f"  {(C.GREEN if ok_git else C.YELLOW)}{'✔' if ok_git else '⚠'} {git_msg}{C.RESET}")
+                        if not ok_git:
+                            continue
+                        try:
+                            if prompt_input(f"  {C.BOLD}Reload the updated code now? [y/N]: {C.RESET}").strip().lower() not in ("y", "yes"):
+                                print(f"  {C.DIM}Not reloading. Type `/reload` when ready.{C.RESET}")
+                                continue
+                        except (EOFError, KeyboardInterrupt):
+                            continue
+                    print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place (no git pull)...{C.RESET}")
                     try:
-                        _cur_mod = reload_nfl_stat_cli(pull_git=True)
+                        _cur_mod = reload_nfl_stat_cli()
                         engine = _cur_mod.StatEngine()
-                        ipc_dir = get_ipc_dir()
-                        latest_res_p = ipc_dir / "resolved" / "latest.json"
                         res_info = ""
-                        if latest_res_p.exists():
+                        if error_ipc_enabled():
                             try:
-                                with open(latest_res_p, "r", encoding="utf-8") as f:
-                                    r_data = json.load(f)
-                                if r_data.get("summary"):
-                                    res_info = f" (Latest resolution: {r_data.get('summary')})"
+                                r_data = _read_ipc_json(get_ipc_dir(create=False) / "resolved" / "latest.json")
                             except Exception:
-                                pass
+                                r_data = None
+                            if r_data and r_data.get("summary"):
+                                res_info = f" (Latest resolution note: {sanitize_ipc_text(r_data.get('summary'))})"
                         print(f"  {C.GREEN}✔ Programming successfully reloaded!{res_info}{C.RESET}")
                     except Exception as r_err:
                         print(f"  {C.RED}✖ Reload failed: {r_err}{C.RESET}")
@@ -10124,10 +11173,18 @@ def interactive_tui(
             )
             if parsed.get("intent") == "specific_play" and not any(k in low_in for k in ("behind", "offense", "defense", "sideline")):
                 parsed["camera"] = default_camera
-            last_parsed_nl = parsed
-            last_query_raw = raw_in
+            _tracked = parsed.get("intent") != "query_too_long"  # an over-long query is not a repro candidate
+            if _tracked:
+                last_parsed_nl = parsed
+                last_query_raw = raw_in
+                last_response_text = ""
+                last_result_table = None
+            _table_before = LAST_RENDERED_TABLE
             res_str = handle_nl_query_result(parsed, engine, plays, interactive=is_interactive)
             LAST_RAW_OUTPUT = strip_ansi(res_str)
+            if _tracked:
+                last_response_text = res_str
+                last_result_table = LAST_RENDERED_TABLE if LAST_RENDERED_TABLE is not _table_before else None
             print(res_str)
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
@@ -10304,10 +11361,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if cmd == "ask":
             parsed = NaturalLanguageStatAssistant.interpret_query(args.query, engine=engine, slm_model=args.slm_model, default_season=args.season)
-            if parsed.get("intent") == "ambiguous":
+            if parsed.get("intent") in ("ambiguous", "query_too_long"):
                 print(AsciiArtRenderer.banner())
                 print(handle_nl_query_result(parsed, engine, []))
-                return 0
+                return 1 if parsed.get("intent") == "query_too_long" else 0
             target_season = int(parsed.get("season") or args.season)
             all_plays = bridge.load_pbp(sorted({target_season - 1, target_season}))
             print(AsciiArtRenderer.banner())
@@ -10338,8 +11395,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 position=getattr(args, "position", None),
             ))
         elif cmd == "team":
-            resolved_t = resolve_team_abbr(args.team_name) or args.team_name or "KC"
-            print(render_team_drilldown_view(engine, season_plays, season=args.season, team=resolved_t))
+            # Pass the raw name so an ambiguous one ("New York") is listed instead of silently using the first match.
+            print(render_team_drilldown_view(engine, season_plays, season=args.season, team=args.team_name or "KC"))
         elif cmd == "player":
             print(render_player_drilldown_view(engine, season_plays, season=args.season, player_name=args.player_name, team=args.team, interactive=False))
         elif cmd == "play":
