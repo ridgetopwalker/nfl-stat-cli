@@ -1,7 +1,8 @@
 include LICENSE
+include NOTICE
 include README.md
 include pyproject.toml
-include nfl_stat_cli/*.R
+include pro_football_slm/*.R
 include install.sh
 include install.bat
 include install.ps1

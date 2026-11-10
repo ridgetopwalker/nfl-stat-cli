@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import nfl_stat_cli as cli  # noqa: E402
+import pro_football_slm as cli  # noqa: E402
 
 
 def synthetic_plays(groups: int, per_group: int):

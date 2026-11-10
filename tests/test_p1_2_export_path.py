@@ -4,14 +4,14 @@ import sys
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 @pytest.fixture
 def export_env(tmp_path, monkeypatch):
     exports = tmp_path / "exports"
     exports.mkdir()
-    monkeypatch.setenv("NFL_STAT_EXPORT_DIR", str(exports))
+    monkeypatch.setenv("PFSLM_EXPORT_DIR", str(exports))
     monkeypatch.setattr(cli, "LAST_RESULT_RECORDS", [{"player": "A", "yards": 10}])
     monkeypatch.setattr(cli, "LAST_RENDERED_TABLE", None)
     monkeypatch.setattr(cli, "LAST_RAW_OUTPUT", "")
@@ -148,10 +148,10 @@ def test_tui_export_commands_are_confined(tmp_path):
     exports = tmp_path / "exports"
     env = dict(os.environ)
     env.update({"PYTHONPATH": str(Path(cli.__file__).resolve().parent.parent), "HOME": str(tmp_path),
-                "NFL_STAT_EXPORT_DIR": str(exports), "NO_COLOR": "1"})
+                "PFSLM_EXPORT_DIR": str(exports), "NO_COLOR": "1"})
     escape_target = tmp_path / "escaped.csv"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
         input=f"epa per play\n/export ../escaped.csv\n/export {escape_target.as_posix()}\n/export ok.csv\n/export-stats ../x.json\n/export-stats cat.json\nquit\n",
         capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=60,
     )

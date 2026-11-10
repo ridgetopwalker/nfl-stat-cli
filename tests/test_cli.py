@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 import pytest
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 @pytest.fixture
@@ -71,8 +71,8 @@ def test_custom_division_note(engine, tmp_path, formula, warns):
 def test_package_entry_points():
     assert resources.files(cli).joinpath("nflverse_bridge.R").is_file()
     root = Path(__file__).resolve().parents[1]
-    assert not (root / "nfl_stat_cli.py").exists(), "no top-level shim next to the package"
-    result = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "--help"], capture_output=True, text=True, cwd=root)
+    assert not (root / "pro_football_slm.py").exists(), "no top-level shim next to the package"
+    result = subprocess.run([sys.executable, "-m", "pro_football_slm", "--help"], capture_output=True, text=True, cwd=root)
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout
 
@@ -169,11 +169,11 @@ def test_play_phase_filtering():
 
 def test_cli_subcommands():
     root = Path(__file__).resolve().parents[1]
-    res_team = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "team", "KC", "--season", "2025"], capture_output=True, text=True, cwd=root)
+    res_team = subprocess.run([sys.executable, "-m", "pro_football_slm", "team", "KC", "--season", "2025"], capture_output=True, text=True, cwd=root)
     assert res_team.returncode == 0, res_team.stderr
     assert "TEAM DRILL-DOWN : KANSAS CITY CHIEFS" in res_team.stdout
 
-    res_player = subprocess.run([sys.executable, "-m", "nfl_stat_cli", "player", "Mahomes", "--season", "2025"], capture_output=True, text=True, cwd=root)
+    res_player = subprocess.run([sys.executable, "-m", "pro_football_slm", "player", "Mahomes", "--season", "2025"], capture_output=True, text=True, cwd=root)
     assert res_player.returncode == 0, res_player.stderr
     assert "PLAYER DRILL-DOWN : P.MAHOMES" in res_player.stdout
     assert "auto-selected" in res_player.stdout
@@ -198,7 +198,7 @@ def test_interactive_tui_and_play_explorer():
         "quit",
     ]) + "\n"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--season", "2025"],
         input=input_text,
         capture_output=True,
         text=True,
@@ -233,7 +233,7 @@ def test_play_explorer_drilldown_by_team_and_game_crosslink():
         "quit",
     ]) + "\n"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--season", "2025"],
         input=input_text,
         capture_output=True,
         text=True,
@@ -261,7 +261,7 @@ def test_games_command_by_team_and_overtime_navigation():
         "quit",
     ]) + "\n"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--season", "2025"],
         input=input_text,
         capture_output=True,
         text=True,
@@ -278,7 +278,7 @@ def test_games_command_by_team_and_overtime_navigation():
 def test_games_command_by_week_and_cli_subcommand():
     # Test CLI games subcommand with --game-id and --play-id
     res_cli = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "games", "--season", "2025", "--game-id", "2025_01_LA_DET", "--play-id", "120"],
+        [sys.executable, "-m", "pro_football_slm", "games", "--season", "2025", "--game-id", "2025_01_LA_DET", "--play-id", "120"],
         input="X\n",
         capture_output=True,
         text=True,
@@ -296,14 +296,14 @@ def test_why_command_lists_player_not_qb():
         "quit",
     ]) + "\n"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--season", "2025"],
         input=input_text,
         capture_output=True,
         text=True,
     )
     assert res.returncode == 0, res.stderr
     assert "Last Natural Language Query Parsed Intent:" in res.stdout
-    why_block = cli.strip_ansi(res.stdout.split("Last Natural Language Query Parsed Intent:")[1].split("nfl-stat>")[0])
+    why_block = cli.strip_ansi(res.stdout.split("Last Natural Language Query Parsed Intent:")[1].split("pro-football-slm>")[0])
     json_start = why_block.find("{")
     json_end = why_block.rfind("}") + 1
     parsed_json = json.loads(why_block[json_start:json_end])
@@ -335,7 +335,7 @@ def test_multi_position_player_recognition_and_no_qb_key(engine, query, expected
 def test_cli_play_subcommand_player_flag():
     root = Path(__file__).resolve().parents[1]
     res_player = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "play", "--player", "Worthy", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "play", "--player", "Worthy", "--season", "2025"],
         capture_output=True,
         text=True,
         cwd=root,
@@ -346,7 +346,7 @@ def test_cli_play_subcommand_player_flag():
 
     # Test backward compatibility with --qb flag
     res_qb = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "play", "--qb", "Mahomes", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "play", "--qb", "Mahomes", "--season", "2025"],
         capture_output=True,
         text=True,
         cwd=root,
@@ -363,7 +363,7 @@ def test_show_startup_loading(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "Loading..." in out
     assert "100%" in out
-    assert "Ready! Launching NFL-STAT-CLI..." in out
+    assert "Ready! Launching Pro Football SLM..." in out
 
 
 def test_stat_page_loading_and_render(engine, capsys):
@@ -381,7 +381,7 @@ def test_tui_page_command():
         "quit",
     ]) + "\n"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--season", "2025"],
         input=input_text,
         capture_output=True,
         text=True,
@@ -484,7 +484,7 @@ def test_interactive_tui_delete_stat(tmp_path):
         "quit",
     ]) + "\n"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--season", "2025"],
         input=input_text,
         capture_output=True,
         text=True,
@@ -513,7 +513,7 @@ def test_cli_delete_stat_subcommand(tmp_path):
         }
     }), encoding="utf-8")
     res_imp = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "import-stats", "--input", str(export_json)],
+        [sys.executable, "-m", "pro_football_slm", "import-stats", "--input", str(export_json)],
         capture_output=True,
         text=True,
     )
@@ -521,7 +521,7 @@ def test_cli_delete_stat_subcommand(tmp_path):
     assert "Imported 1 custom stats" in res_imp.stdout
 
     res_del = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "delete-stat", "cli_del_stat"],
+        [sys.executable, "-m", "pro_football_slm", "delete-stat", "cli_del_stat"],
         capture_output=True,
         text=True,
     )
@@ -629,7 +629,7 @@ def test_interactive_tui_nl_dataset_and_passing_yards_with_why():
         "quit",
     ]) + "\n"
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--season", "2025"],
         input=input_text,
         capture_output=True,
         text=True,
@@ -694,7 +694,7 @@ def test_show_startup_loading_includes_years_and_downcast(capsys, monkeypatch):
     assert "Loading..." in out
     assert "2024, 2025" in out
     assert "Downcasting floats" in out
-    assert "Ready! Launching NFL-STAT-CLI..." in out
+    assert "Ready! Launching Pro Football SLM..." in out
 
 
 def test_nl_most_yards_queries_and_top_5_limit(engine, sample_plays):
@@ -743,7 +743,7 @@ def test_nl_most_yards_queries_and_top_5_limit(engine, sample_plays):
 
 def test_cli_stat_subcommand_limit_flag():
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "stat", "passing_yards", "--limit", "2", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "stat", "passing_yards", "--limit", "2", "--season", "2025"],
         capture_output=True,
         text=True,
     )
@@ -986,7 +986,7 @@ def test_coach_grouping_and_stat_query():
 def test_coaches_cli_and_subcommand():
     # 1. Full coaching staff
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "coaches", "KC"],
+        [sys.executable, "-m", "pro_football_slm", "coaches", "KC"],
         capture_output=True,
         text=True,
     )
@@ -997,7 +997,7 @@ def test_coaches_cli_and_subcommand():
 
     # 2. Filter by role
     res_oc = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "coaches", "DET", "--role", "oc"],
+        [sys.executable, "-m", "pro_football_slm", "coaches", "DET", "--role", "oc"],
         capture_output=True,
         text=True,
     )
@@ -1360,7 +1360,7 @@ def test_defense_turnovers_and_takeaways_nl_query():
 
 
 def test_fantasy_scoring_calculations_and_leaderboards():
-    from nfl_stat_cli.fantasy import (
+    from pro_football_slm.fantasy import (
         calculate_player_fantasy_points,
         compute_player_fantasy_profile,
         compute_all_fantasy_leaders,
@@ -1441,7 +1441,7 @@ def test_fantasy_scoring_calculations_and_leaderboards():
 
 
 def test_sportsbook_handicapping_and_power_ratings():
-    from nfl_stat_cli.sportsbook import (
+    from pro_football_slm.sportsbook import (
         compute_team_power_ratings,
         handicap_matchup,
         render_sportsbook_board_view,
@@ -1483,7 +1483,7 @@ def test_sportsbook_handicapping_and_power_ratings():
 
 
 def test_contracts_dataset_and_views():
-    from nfl_stat_cli.contracts import (
+    from pro_football_slm.contracts import (
         NFL_CONTRACTS,
         find_contract_by_name,
         get_contracts_by_team,
@@ -1632,7 +1632,7 @@ def test_fantasy_points_this_week_error_regression():
 
 
 def test_fantasy_dst_team_defense_scoring_and_error_regression():
-    from nfl_stat_cli.fantasy import (
+    from pro_football_slm.fantasy import (
         calculate_dst_points_allowed_score,
         compute_team_dst_fantasy_leaders,
         compute_team_dst_fantasy_profile,
@@ -1722,18 +1722,18 @@ def test_fantasy_dst_team_defense_scoring_and_error_regression():
     assert "(No matching records found)" not in out
 
 
-def test_reload_nfl_stat_cli_purges_submodules():
+def test_reload_pro_football_slm_purges_submodules():
     import sys
-    # Verify reload_nfl_stat_cli reloads all submodules cleanly
-    reloaded = cli.reload_nfl_stat_cli(pull_git=False)
+    # Verify reload_pro_football_slm reloads all submodules cleanly
+    reloaded = cli.reload_pro_football_slm(pull_git=False)
     assert hasattr(reloaded, "calculate_dst_points_allowed_score")
     assert hasattr(reloaded, "compute_team_dst_fantasy_leaders")
     assert hasattr(reloaded, "render_team_dst_fantasy_profile_view")
-    assert "nfl_stat_cli.fantasy" in sys.modules
+    assert "pro_football_slm.fantasy" in sys.modules
 
 
 def test_sportsbook_underdog_leaders_and_error_regression():
-    from nfl_stat_cli.sportsbook import (
+    from pro_football_slm.sportsbook import (
         compute_underdog_leaders,
         render_underdog_leaderboard_view,
     )

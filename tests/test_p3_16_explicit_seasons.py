@@ -6,7 +6,7 @@ import argparse
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 @pytest.mark.parametrize("text,expected", [

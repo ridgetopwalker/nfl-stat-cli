@@ -1,5 +1,5 @@
 """
-NFL-Stat-CLI Player & Coach Contract Analytics Engine.
+Pro Football SLM Player & Coach Contract Analytics Engine.
 Provides contract data compiled from public reports (approximate):
 - Player contracts across all positions (Quarterbacks, Skill Positions, Linemen, Defense).
 - Head Coach contracts, salaries, and contract expiration horizons.

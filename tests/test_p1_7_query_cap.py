@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 @pytest.fixture
@@ -82,21 +82,21 @@ def test_rejected_preview_has_no_control_characters(engine):
 
 
 def test_cap_env_override_can_only_lower(monkeypatch):
-    monkeypatch.setenv("NFL_STAT_MAX_QUERY_CHARS", "50")
+    monkeypatch.setenv("PFSLM_MAX_QUERY_CHARS", "50")
     assert cli.get_max_query_chars() == 50
-    monkeypatch.setenv("NFL_STAT_MAX_QUERY_CHARS", "99999")
+    monkeypatch.setenv("PFSLM_MAX_QUERY_CHARS", "99999")
     assert cli.get_max_query_chars() == 300
-    monkeypatch.setenv("NFL_STAT_MAX_QUERY_CHARS", "junk")
+    monkeypatch.setenv("PFSLM_MAX_QUERY_CHARS", "junk")
     assert cli.get_max_query_chars() == 300
     for bad in ("0", "-5"):
-        monkeypatch.setenv("NFL_STAT_MAX_QUERY_CHARS", bad)
+        monkeypatch.setenv("PFSLM_MAX_QUERY_CHARS", bad)
         assert cli.get_max_query_chars() == 300
 
 
 def _env(tmp_path):
     import os
     env = dict(os.environ)
-    env.pop("NFL_STAT_MAX_QUERY_CHARS", None)
+    env.pop("PFSLM_MAX_QUERY_CHARS", None)
     env.update({"PYTHONPATH": str(Path(cli.__file__).resolve().parent.parent), "HOME": str(tmp_path),
                 "USERPROFILE": str(tmp_path), "NO_COLOR": "1"})
     return env
@@ -105,7 +105,7 @@ def _env(tmp_path):
 def test_cli_ask_rejects_long_query(tmp_path):
     env = _env(tmp_path)
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "ask", "most successful " + "least " * 5000, "--slm-model", "off"],
+        [sys.executable, "-m", "pro_football_slm", "ask", "most successful " + "least " * 5000, "--slm-model", "off"],
         capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=30,
     )
     assert res.returncode == 1
@@ -116,7 +116,7 @@ def test_cli_ask_rejects_long_query(tmp_path):
 def test_tui_play_command_does_not_override_rejection(tmp_path):
     env = _env(tmp_path)
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
         input="/play " + "x" * 400 + "\nmost successful " + "least " * 3000 + "\nquit\n",
         capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=60,
     )

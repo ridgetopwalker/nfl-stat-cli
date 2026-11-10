@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# nfl-stat-cli : Run-Once Installer for Linux, WSL & macOS (*nix)
+# pro-football-slm : Run-Once Installer for Linux, WSL & macOS (*nix)
 # Usage:
 #   ./install.sh        Compact UI (ASCII Art + 1 Progress Bar Line + 1 Command Line)
 #   ./install.sh -v     Verbose mode (full command and pip output)
 #
 # Options:
-#   --sample-only                Skip the live NFL data packages. nfl-stat then runs on the
+#   --sample-only                Skip the live NFL data packages. pro-football-slm then runs on the
 #                                small built-in SAMPLE dataset (it says so on every run).
 #   --with-legacy-nfl-data-py    Also install the deprecated nfl_data_py fallback loader
 #                                (opt-in; nflreadpy is preferred on all supported Pythons).
@@ -73,9 +73,9 @@ print_banner() {
 }
 
 create_local_launcher() {
-    cat > "$SCRIPT_DIR/nfl-stat" <<'EOF'
+    cat > "$SCRIPT_DIR/pro-football-slm" <<'EOF'
 #!/usr/bin/env bash
-# Launcher for nfl-stat-cli in the project directory or via PATH symlink
+# Launcher for pro-football-slm in the project directory or via PATH symlink
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
     DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
@@ -87,12 +87,16 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 # Run the package in-place (works without `pip install`, from any directory).
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    exec "$SCRIPT_DIR/.venv/bin/python" -m nfl_stat_cli "$@"
+    exec "$SCRIPT_DIR/.venv/bin/python" -m pro_football_slm "$@"
 else
-    exec python3 -m nfl_stat_cli "$@"
+    exec python3 -m pro_football_slm "$@"
 fi
 EOF
-    chmod +x "$SCRIPT_DIR/nfl-stat"
+    chmod +x "$SCRIPT_DIR/pro-football-slm"
+    for launcher_name in pfslm nfl-stat; do
+        cp "$SCRIPT_DIR/pro-football-slm" "$SCRIPT_DIR/$launcher_name"
+        chmod +x "$SCRIPT_DIR/$launcher_name"
+    done
 }
 
 WARNINGS=()
@@ -149,7 +153,7 @@ install_live_requirements_hint() {
 
 verify_live_data() {
     if [ "$SAMPLE_ONLY" -eq 1 ]; then
-        warn "Sample-only install: nfl-stat will use the built-in SAMPLE dataset, not live NFL data."
+        warn "Sample-only install: pro-football-slm will use the built-in SAMPLE dataset, not live NFL data."
         return 0
     fi
     if "$PYTHON_BIN" -c 'import nflreadpy' >/dev/null 2>&1; then
@@ -158,31 +162,46 @@ verify_live_data() {
     if [ "$WITH_LEGACY" -eq 1 ] && "$PYTHON_BIN" -c 'import nfl_data_py' >/dev/null 2>&1; then
         return 0
     fi
-    die "Installation finished but no live data loader can be imported, so nfl-stat would silently fall back to SAMPLE data. $(install_live_requirements_hint)"
+    die "Installation finished but no live data loader can be imported, so pro-football-slm would silently fall back to SAMPLE data. $(install_live_requirements_hint)"
+}
+
+link_path_command() {
+    local destination="$1"
+    local command_name="$2"
+    local target="$destination/$command_name"
+    if [ ! -e "$target" ] || [ -L "$target" ]; then
+        ln -sfn "$SCRIPT_DIR/$command_name" "$target" || warn "Could not link $target."
+    else
+        printf 'Warning: keeping existing command %s; skipping link.\n' "$target" >&2
+    fi
 }
 
 prompt_add_to_path() {
     if [ ! -t 0 ]; then
         return 0
     fi
-    printf "${BOLD}${CYAN}?${RESET} Add ${BOLD}nfl-stat${RESET} to your PATH so you can run it from anywhere? [y/N]: "
+    printf "${BOLD}${CYAN}?${RESET} Add ${BOLD}pro-football-slm${RESET} to your PATH so you can run it from anywhere? [y/N]: "
     read -r ans || true
     case "$ans" in
         [yY]|[yY][eE][sS])
             mkdir -p "$HOME/.local/bin"
-            ln -sf "$SCRIPT_DIR/nfl-stat" "$HOME/.local/bin/nfl-stat"
+            for command in pro-football-slm pfslm nfl-stat; do
+                link_path_command "$HOME/.local/bin" "$command"
+            done
             for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
                 if [ -f "$rc_file" ] && ! grep -q '\.local/bin' "$rc_file" 2>/dev/null; then
                     printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc_file"
                 fi
             done
             if [ -w "/usr/local/bin" ]; then
-                ln -sf "$SCRIPT_DIR/nfl-stat" "/usr/local/bin/nfl-stat" 2>/dev/null || true
+                for command in pro-football-slm pfslm nfl-stat; do
+                    link_path_command "/usr/local/bin" "$command"
+                done
             fi
-            printf "${GREEN}✔ Added 'nfl-stat' to PATH (~/.local/bin/nfl-stat)! You can now run 'nfl-stat' from anywhere (or './nfl-stat' here).${RESET}\n"
+            printf "${GREEN}✔ Added 'pro-football-slm' to PATH (~/.local/bin/pro-football-slm)! You can now run 'pro-football-slm' from anywhere (or './pro-football-slm' here).${RESET}\n"
             ;;
         *)
-            printf "${DIM}Skipped adding to global PATH. You can run './nfl-stat' in this folder anytime.${RESET}\n"
+            printf "${DIM}Skipped adding to global PATH. You can run './pro-football-slm' in this folder anytime.${RESET}\n"
             ;;
     esac
 }
@@ -203,7 +222,7 @@ bootstrap_pip_safe() {
 # ==============================================================================
 if [ "$VERBOSE" -eq 1 ]; then
     echo "======================================================================"
-    echo "  NFL-STAT-CLI : One-Step Automated Installer (*nix) [VERBOSE MODE]"
+    echo "  Pro Football SLM : One-Step Automated Installer (*nix) [VERBOSE MODE]"
     echo "======================================================================"
 
     if ! command -v python3 >/dev/null 2>&1; then
@@ -261,7 +280,7 @@ if [ "$VERBOSE" -eq 1 ]; then
     echo "[2/5] pip is ready."
 
     if [ "$SAMPLE_ONLY" -eq 1 ]; then
-        echo "[3/5] --sample-only: skipping live NFL data packages (nfl-stat will use the built-in SAMPLE dataset)."
+        echo "[3/5] --sample-only: skipping live NFL data packages (pro-football-slm will use the built-in SAMPLE dataset)."
     else
         echo "[3/5] Installing live NFL data packages from requirements-live.txt (pandas, pyarrow, polars, nflreadpy)..."
         [ -f "$SCRIPT_DIR/requirements-live.txt" ] || die "requirements-live.txt not found next to install.sh."
@@ -272,8 +291,8 @@ if [ "$VERBOSE" -eq 1 ]; then
         fi
     fi
     "$PYTHON_BIN" -m pip install -e . --no-build-isolation || "$PYTHON_BIN" -m pip install -e . \
-        || die "Could not install nfl-stat-cli itself (pip install -e . failed)."
-    echo "[3/5] Python packages & nfl-stat-cli installed."
+        || die "Could not install pro-football-slm itself (pip install -e . failed)."
+    echo "[3/5] Python packages & pro-football-slm installed."
 
     echo "[4/5] Checking optional R (nflreadr)..."
     if command -v Rscript >/dev/null 2>&1; then
@@ -282,17 +301,17 @@ if [ "$VERBOSE" -eq 1 ]; then
     fi
 
     create_local_launcher
-    echo "[5/5] Verifying nfl-stat-cli installation..."
-    "$SCRIPT_DIR/nfl-stat" list-stats || die "nfl-stat failed its verification run."
+    echo "[5/5] Verifying pro-football-slm installation..."
+    "$SCRIPT_DIR/pro-football-slm" list-stats || die "pro-football-slm failed its verification run."
     verify_live_data
     print_warnings
 
     echo ""
     echo "======================================================================"
     echo "  ✔ INSTALLATION COMPLETE!"
-    echo "  Run in this folder:  ./nfl-stat"
-    echo "  Diagram a play:      ./nfl-stat play --qb Mahomes --camera behind-offense"
-    echo "                       ./nfl-stat play --qb Goff --camera behind-defense"
+    echo "  Run in this folder:  ./pro-football-slm"
+    echo "  Diagram a play:      ./pro-football-slm play --qb Mahomes --camera behind-offense"
+    echo "                       ./pro-football-slm play --qb Goff --camera behind-defense"
     echo "======================================================================"
     prompt_add_to_path
     exit 0
@@ -304,7 +323,7 @@ fi
 # 2. Below that: ONE progress bar line (exact width of banner, capped to terminal width so it never wraps)
 # 3. Below that: ONE command line that overwrites itself in-place
 # ==============================================================================
-LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/nfl_stat_cli_install.XXXXXX.log" 2>/dev/null || echo "${TMPDIR:-/tmp}/nfl_stat_cli_install.$$.log")"
+LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/pro_football_slm_install.XXXXXX.log" 2>/dev/null || echo "${TMPDIR:-/tmp}/pro_football_slm_install.$$.log")"
 : > "$LOG_FILE"
 
 TERM_COLS="$(tput cols 2>/dev/null || echo 89)"
@@ -425,7 +444,7 @@ else
 fi
 run_step 90 96 "pip install -e . --no-build-isolation" "$PYTHON_BIN" -m pip install -e . --no-build-isolation \
     || run_step 92 96 "pip install -e ." "$PYTHON_BIN" -m pip install -e . \
-    || die "Could not install nfl-stat-cli itself (pip install -e . failed)."
+    || die "Could not install pro-football-slm itself (pip install -e . failed)."
 
 if command -v Rscript >/dev/null 2>&1; then
     run_step 96 98 "Rscript -e install.packages('nflreadr')" Rscript -e "if (!requireNamespace('nflreadr', quietly=TRUE)) install.packages('nflreadr', repos=c('https://nflverse.r-universe.dev', 'https://cloud.r-project.org'))" \
@@ -433,10 +452,10 @@ if command -v Rscript >/dev/null 2>&1; then
 fi
 
 create_local_launcher
-if run_step 98 100 "./nfl-stat --version" "$SCRIPT_DIR/nfl-stat" --version; then
+if run_step 98 100 "./pro-football-slm --version" "$SCRIPT_DIR/pro-football-slm" --version; then
     verify_live_data
     rm -f "$LOG_FILE"
-    update_ui 100 "Done! Run: ./nfl-stat  (or ./install.sh -v for verbose)"
+    update_ui 100 "Done! Run: ./pro-football-slm  (or ./install.sh -v for verbose)"
     printf "\n"
     print_warnings
     prompt_add_to_path

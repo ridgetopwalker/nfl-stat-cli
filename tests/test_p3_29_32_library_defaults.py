@@ -4,7 +4,7 @@ import urllib.request
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 PLAYS = cli.SAMPLE_PBP_PLAYS  # note: other tests may reload the module, so always reach classes through `cli.` at call time
 
@@ -23,7 +23,7 @@ def no_network(monkeypatch):
         raise AssertionError("the library default must not touch the network")
 
     monkeypatch.setattr(urllib.request, "urlopen", boom)
-    monkeypatch.delenv("NFL_STAT_SLM_MODEL", raising=False)
+    monkeypatch.delenv("PFSLM_SLM_MODEL", raising=False)
     return calls
 
 
@@ -36,7 +36,7 @@ def test_interpret_query_default_does_not_probe_ollama(engine, no_network):
 
 
 def test_interpret_query_default_ignores_the_slm_env_var(engine, no_network, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_SLM_MODEL", "qwen2.5:1.5b")
+    monkeypatch.setenv("PFSLM_SLM_MODEL", "qwen2.5:1.5b")
     cli.NaturalLanguageStatAssistant.interpret_query("epa per play", engine=engine, default_season=2024)
     assert no_network == []
 

@@ -1,8 +1,8 @@
 """Issue #24: sportsbook ratings must be driven only by the requested season (synthetic plays only)."""
 import pytest
 
-import nfl_stat_cli as cli
-from nfl_stat_cli import sportsbook as sb
+import pro_football_slm as cli
+from pro_football_slm import sportsbook as sb
 
 
 def _play(season, week, home, away, posteam, epa, home_score, away_score, play_id):

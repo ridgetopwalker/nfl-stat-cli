@@ -1,7 +1,7 @@
 """Golden tests: unsupported/ambiguous questions get an explicit can't-answer; supported ones still answer (issue #6)."""
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 SEASON = 2025
 

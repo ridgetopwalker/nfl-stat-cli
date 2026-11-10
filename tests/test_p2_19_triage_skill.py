@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
-SKILL = Path(cli.__file__).resolve().parent.parent / ".agents" / "skills" / "nfl-stat-error-triage"
+SKILL = Path(cli.__file__).resolve().parent.parent / ".agents" / "skills" / "pro-football-slm-error-triage"
 
 
 def _git(cwd, *args, check=True):

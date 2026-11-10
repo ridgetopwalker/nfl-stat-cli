@@ -22,66 +22,68 @@ def tracked_files():
 def test_no_stale_zip_or_duplicate_r_bridge():
     assert not [n for n in tracked_files() if n.endswith(".zip")], "release archives must not be tracked"
     assert not (ROOT / "nflverse_bridge.R").exists(), "R bridge lives only inside the package"
-    assert (ROOT / "nfl_stat_cli" / "nflverse_bridge.R").is_file()
+    assert (ROOT / "pro_football_slm" / "nflverse_bridge.R").is_file()
     assert "*.zip" in (ROOT / ".gitignore").read_text().splitlines()
 
 
 def test_manifest_does_not_list_removed_files():
     manifest = (ROOT / "MANIFEST.in").read_text().splitlines()
     assert "include nflverse_bridge.R" not in manifest
-    assert "include nfl_stat_cli/*.R" in manifest
+    assert "include pro_football_slm/*.R" in manifest
 
 
 def test_no_top_level_import_shim_or_launcher_references():
-    assert not (ROOT / "nfl_stat_cli.py").exists(), "top-level shim next to the package makes imports ambiguous"
-    assert "nfl_stat_cli.py" not in (ROOT / "MANIFEST.in").read_text()
-    for name in ("nfl-stat", "nfl-stat.bat", "nfl-stat-cli.bat", "install.sh", "install.ps1"):
+    assert not (ROOT / "pro_football_slm.py").exists(), "top-level shim next to the package makes imports ambiguous"
+    assert "pro_football_slm.py" not in (ROOT / "MANIFEST.in").read_text()
+    for name in ("pro-football-slm", "pfslm", "nfl-stat", "nfl-stat.bat", "pro-football-slm.bat", "pfslm.bat", "pro-football-slm-cli.bat", "install.sh", "install.ps1"):
         text = (ROOT / name).read_text()
-        assert "nfl_stat_cli.py" not in text, name
-        assert "-m nfl_stat_cli" in text, name
+        assert "pro_football_slm.py" not in text, name
+        assert "-m pro_football_slm" in text, name
 
 
-def _launcher_project(tmp_path):
+def _launcher_project(tmp_path, launcher):
     """A copy of the launcher in a directory with no .venv, so the PATH python3 is the one used."""
     project = tmp_path / "proj"
     (project / "bin").mkdir(parents=True)
-    shutil.copy(ROOT / "nfl-stat", project / "nfl-stat")
-    (project / "nfl_stat_cli").symlink_to(ROOT / "nfl_stat_cli", target_is_directory=True)
+    shutil.copy(ROOT / launcher, project / launcher)
+    (project / "pro_football_slm").symlink_to(ROOT / "pro_football_slm", target_is_directory=True)
     env = dict(os.environ, HOME=str(tmp_path / "home"))
     env.pop("PYTHONPATH", None)
     return project, env
 
 
 @pytest.mark.skipif(shutil.which("bash") is None or not hasattr(os, "symlink"), reason="bash/symlinks not available")
-def test_launcher_runs_package_from_any_directory(tmp_path):
-    project, env = _launcher_project(tmp_path)
+@pytest.mark.parametrize("launcher", ["pro-football-slm", "nfl-stat", "pfslm"])
+def test_launcher_runs_package_from_any_directory(tmp_path, launcher):
+    project, env = _launcher_project(tmp_path, launcher)
     (project / "bin" / "python3").symlink_to(sys.executable)
     env["PATH"] = str(project / "bin") + os.pathsep + env.get("PATH", "")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    result = subprocess.run(["bash", str(project / "nfl-stat"), "--help"], cwd=elsewhere, env=env, capture_output=True, text=True)
+    result = subprocess.run(["bash", str(project / launcher), "--help"], cwd=elsewhere, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("bash") is None or not hasattr(os, "symlink"), reason="bash/symlinks not available")
-def test_launcher_puts_project_dir_on_pythonpath(tmp_path):
+@pytest.mark.parametrize("launcher", ["pro-football-slm", "nfl-stat", "pfslm"])
+def test_launcher_puts_project_dir_on_pythonpath(tmp_path, launcher):
     """Independent of whether the package happens to be pip-installed: the launcher itself must set PYTHONPATH."""
-    project, env = _launcher_project(tmp_path)
+    project, env = _launcher_project(tmp_path, launcher)
     stub = project / "bin" / "python3"
     stub.write_text('#!/usr/bin/env bash\necho "PYTHONPATH=$PYTHONPATH"\necho "ARGS=$*"\n')
     stub.chmod(0o755)
     env["PATH"] = str(project / "bin") + os.pathsep + env.get("PATH", "")
-    result = subprocess.run(["bash", str(project / "nfl-stat"), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True)
+    result = subprocess.run(["bash", str(project / launcher), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert f"PYTHONPATH={project.resolve()}" in result.stdout
-    assert "ARGS=-m nfl_stat_cli --help" in result.stdout
+    assert "ARGS=-m pro_football_slm --help" in result.stdout
 
 
 def test_windows_launchers_run_the_package_without_stale_errorlevel():
-    for name in ("nfl-stat.bat", "nfl-stat-cli.bat"):
+    for name in ("nfl-stat.bat", "pro-football-slm.bat", "pfslm.bat", "pro-football-slm-cli.bat"):
         text = (ROOT / name).read_text()
-        assert "-m nfl_stat_cli" in text and "PYTHONPATH" in text
+        assert "-m pro_football_slm" in text and "PYTHONPATH" in text
         assert "if errorlevel 1" in text and "%ERRORLEVEL%" not in text, name
 
 
@@ -105,7 +107,8 @@ def test_metadata_is_honest_and_export_json_not_shipped():
 
 def test_windows_launcher_copies_do_not_drift():
     bat = (ROOT / "nfl-stat.bat").read_text().replace("\r\n", "\n").strip()
-    assert (ROOT / "nfl-stat-cli.bat").read_text().replace("\r\n", "\n").strip() == bat
+    for name in ("pro-football-slm.bat", "pfslm.bat", "pro-football-slm-cli.bat"):
+        assert (ROOT / name).read_text().replace("\r\n", "\n").strip() == bat
     ps1 = (ROOT / "install.ps1").read_text().replace("\r\n", "\n")
     embedded = ps1.split('$LauncherContent = @"\n', 1)[1].split('\n"@', 1)[0].strip()
     assert embedded == bat, "install.ps1 generates a different launcher than the checked-in .bat files"

@@ -1,5 +1,5 @@
 [run]
-source = nfl_stat_cli
+source = pro_football_slm
 branch = True
 
 [report]

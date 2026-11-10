@@ -1,8 +1,8 @@
 """Issue #23: contract ROI must match play-by-play names ("Q.Testarro") to full contract names (synthetic data)."""
 import pytest
 
-import nfl_stat_cli as cli
-from nfl_stat_cli import contracts as ct
+import pro_football_slm as cli
+from pro_football_slm import contracts as ct
 
 
 def _contract(name, team="ZZZ", pos="QB", ctype="player", apy=20.0):
@@ -147,7 +147,7 @@ def test_roi_card_labels_epa_unavailable_when_only_fantasy_points_match(monkeypa
     c = _contract("Quincy Testarro")
     monkeypatch.setattr(ct, "NFL_CONTRACTS", [c])
     monkeypatch.setattr(
-        "nfl_stat_cli.fantasy.compute_player_fantasy_profile", lambda name, plays: {"points_ppr": 12.0}
+        "pro_football_slm.fantasy.compute_player_fantasy_profile", lambda name, plays: {"points_ppr": 12.0}
     )
     out = cli.strip_ansi(ct.render_player_contract_view("Quincy Testarro", plays=[_play(qb="N.Nobody")], season=2025))
     assert "unavailable (no name match)" in out

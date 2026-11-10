@@ -4,7 +4,7 @@ Mirrors normalized rows, where ``player_name`` on a pass play is the receiver.
 """
 import pytest
 
-from nfl_stat_cli import fantasy as fa
+from pro_football_slm import fantasy as fa
 
 GID = "2025_01_DDD_OFF"
 QB, WR, RB = "Q.Alpha", "W.Bravo", "R.Charlie"

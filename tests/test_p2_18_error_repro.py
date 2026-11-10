@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 REPO = Path(cli.__file__).resolve().parent.parent
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -81,7 +81,7 @@ def test_build_repro_context_fields_and_row_cap(monkeypatch):
 
 
 def test_create_error_report_stores_repro_block(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     rep = cli.create_error_report("q", {}, "n", repro={"git_sha": SHA, "snapshot_id": "3-abc", "is_sample": True})
     data = json.loads((tmp_path / "ipc" / "pending" / f"{rep['id']}.json").read_text())
     assert data["repro"] == {"git_sha": SHA, "snapshot_id": "3-abc", "is_sample": True}
@@ -91,9 +91,9 @@ def test_create_error_report_stores_repro_block(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="piped TUI stdin")
 def test_tui_error_report_contains_repro_fields(tmp_path):
-    env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), NFL_STAT_IPC_DIR=str(tmp_path / "ipc"))
+    env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), PFSLM_IPC_DIR=str(tmp_path / "ipc"))
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025"],
         input="epa per play\n/error looks wrong\nn\nquit\n", capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=120,
     )
     assert res.returncode == 0, res.stderr
@@ -111,9 +111,9 @@ def test_tui_error_report_contains_repro_fields(tmp_path):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="piped TUI stdin")
 def test_report_after_refusal_does_not_reuse_the_previous_queries_table(tmp_path):
-    env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), NFL_STAT_IPC_DIR=str(tmp_path / "ipc"))
+    env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), PFSLM_IPC_DIR=str(tmp_path / "ipc"))
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025"],
         input="epa per play\nZorblax passing yards\n/error should know him\nn\nquit\n", capture_output=True, text=True,
         env=env, cwd=str(tmp_path), timeout=120,
     )
@@ -154,12 +154,12 @@ def test_git_sha_rejects_odd_ref_names(tmp_path):
 
 
 def test_error_report_still_saved_when_repro_context_fails(tmp_path):
-    env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), NFL_STAT_IPC_DIR=str(tmp_path / "ipc"))
+    env = dict(os.environ, PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"), PFSLM_IPC_DIR=str(tmp_path / "ipc"))
     code = (
-        "import nfl_stat_cli as c, sys\n"
+        "import pro_football_slm as c, sys\n"
         "def boom(*a, **k): raise RuntimeError('x')\n"
         "c.build_repro_context = boom\n"
-        "sys.argv=['nfl-stat-cli','tui','--engine','offline','--season','2025']\n"
+        "sys.argv=['pro-football-slm','tui','--engine','offline','--season','2025']\n"
         "raise SystemExit(c.main())\n"
     )
     res = subprocess.run([sys.executable, "-c", code], input="epa per play\n/error wrong\nn\nquit\n", capture_output=True,

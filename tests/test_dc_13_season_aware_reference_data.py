@@ -1,8 +1,8 @@
 """Issue #13: embedded coaches, contracts and positions are season-keyed and never silently reused."""
 import pytest
 
-import nfl_stat_cli as cli
-from nfl_stat_cli import contracts as ct
+import pro_football_slm as cli
+from pro_football_slm import contracts as ct
 
 SNAP_COACH = getattr(cli, "COACHING_SNAPSHOT_SEASON", 2025)
 _CATALOG = getattr(ct, "CONTRACT_SEASONS", {2019: 0, 2032: 0})  # resolved lazily so every test fails on behaviour on base

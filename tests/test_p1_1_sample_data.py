@@ -1,7 +1,7 @@
 """Regression tests: built-in sample plays must never be presented as live data (issue #1)."""
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 @pytest.fixture
@@ -40,10 +40,10 @@ def test_require_live_raises_instead_of_falling_back(tmp_path):
 
 
 def test_require_live_env_flag(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_REQUIRE_LIVE", "1")
+    monkeypatch.setenv("PFSLM_REQUIRE_LIVE", "1")
     with pytest.raises(cli.LiveDataUnavailableError):
         _bridge(tmp_path).load_pbp([2025])
-    monkeypatch.setenv("NFL_STAT_REQUIRE_LIVE", "0")
+    monkeypatch.setenv("PFSLM_REQUIRE_LIVE", "0")
     assert _bridge(tmp_path).load_pbp([2025])
 
 
@@ -73,7 +73,7 @@ def test_cli_require_live_flag_exits_nonzero(tmp_path, monkeypatch, capsys):
 def test_cli_prints_sample_warning(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.delenv("NFL_STAT_REQUIRE_LIVE", raising=False)
+    monkeypatch.delenv("PFSLM_REQUIRE_LIVE", raising=False)
     cli.main(["stat", "epa_per_play", "--engine", "offline", "--season", "2025"])
     out = cli.strip_ansi(capsys.readouterr().out)
     assert "SAMPLE DATA - built-in demo plays" in out          # source label
@@ -83,7 +83,7 @@ def test_cli_prints_sample_warning(tmp_path, monkeypatch, capsys):
 def test_cli_stat_page_and_play_commands_carry_sample_footer(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.delenv("NFL_STAT_REQUIRE_LIVE", raising=False)
+    monkeypatch.delenv("PFSLM_REQUIRE_LIVE", raising=False)
     for argv in (["stat-page"], ["play", "--player", "Mahomes"], ["stat", "epa_per_play"]):
         capsys.readouterr()
         cli.main(argv + ["--engine", "offline", "--season", "2025"])
@@ -97,14 +97,14 @@ def test_tui_warns_at_startup_in_prompt_and_in_nl_footer(tmp_path):
     env = dict(os.environ)
     env.update({"PYTHONPATH": str(Path(cli.__file__).resolve().parent.parent), "HOME": str(tmp_path),
                 "USERPROFILE": str(tmp_path), "NO_COLOR": "1"})
-    env.pop("NFL_STAT_REQUIRE_LIVE", None)
+    env.pop("PFSLM_REQUIRE_LIVE", None)
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
         input="epa per play\n/season 2024\nquit\n", capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = cli.strip_ansi(res.stdout)
-    assert "nfl-stat [SAMPLE DATA] >" in out
+    assert "pro-football-slm [SAMPLE DATA] >" in out
     assert out.count("NOT real season statistics") >= 2  # startup warning + NL footer
 
 
@@ -113,9 +113,9 @@ def test_tui_require_live_fails_closed(tmp_path):
     from pathlib import Path
     env = dict(os.environ)
     env.update({"PYTHONPATH": str(Path(cli.__file__).resolve().parent.parent), "HOME": str(tmp_path),
-                "USERPROFILE": str(tmp_path), "NO_COLOR": "1", "NFL_STAT_REQUIRE_LIVE": "1"})
+                "USERPROFILE": str(tmp_path), "NO_COLOR": "1", "PFSLM_REQUIRE_LIVE": "1"})
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025", "--slm-model", "off"],
         input="quit\n", capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=60,
     )
     assert res.returncode == 1

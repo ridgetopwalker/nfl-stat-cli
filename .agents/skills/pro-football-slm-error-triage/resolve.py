@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Signal that an nfl-stat error report is fixed, so the waiting nfl-stat session can pick it up.
+"""Signal that a pro-football-slm error report is fixed, so the waiting pro-football-slm session can pick it up.
 
 Usage: python3 resolve.py <local|wsl> <report_id> <commit> [--pull] -- "<summary>"
        (put `--` before the summary if it can start with a dash)
 
-  local  write the resolution into $NFL_STAT_IPC_DIR (default ~/.nfl_stat_cli/error_ipc) using the
-         nfl_stat_cli package of this checkout (override the checkout with $NFL_STAT_REPO).
-  wsl    do the same inside WSL: needs $NFL_STAT_WSL_REPO (absolute checkout path inside WSL), optionally
-         $NFL_STAT_WSL_PYTHON (default: python3) and $NFL_STAT_WSL_IPC_DIR (exported as NFL_STAT_IPC_DIR there).
+  local  write the resolution into $PFSLM_IPC_DIR (default ~/.pro_football_slm/error_ipc) using the
+         pro_football_slm package of this checkout (override the checkout with $PFSLM_REPO).
+  wsl    do the same inside WSL: needs $PFSLM_WSL_REPO (absolute checkout path inside WSL), optionally
+         $PFSLM_WSL_PYTHON (default: python3) and $PFSLM_WSL_IPC_DIR (exported as PFSLM_IPC_DIR there).
   --pull (wsl only) first run `git pull --ff-only` in that WSL checkout. Off by default; this is an agent-side
-         step, nfl-stat itself never runs git on /reload.
+         step, pro-football-slm itself never runs git on /reload.
 
 <report_id> must look like err_YYYYMMDD_HHMMSS_xxxxxxxx (the id format written by `/error`).
 The waiting session then shows the summary and, only if the user agrees, reloads the code in place.
@@ -26,13 +26,13 @@ SKILL_DIR = Path(__file__).resolve().parent
 
 # Run inside the target checkout; all values arrive through argv (never formatted into code).
 SNIPPET = (
-    "import sys, json; sys.path.insert(0, sys.argv[1]); import nfl_stat_cli as cli; "
+    "import sys, json; sys.path.insert(0, sys.argv[1]); import pro_football_slm as cli; "
     "print(json.dumps(cli.write_resolution(report_id=sys.argv[2], summary=sys.argv[3], commit=sys.argv[4])))"
 )
 
 
 def repo_root() -> str:
-    override = os.environ.get("NFL_STAT_REPO", "").strip()
+    override = os.environ.get("PFSLM_REPO", "").strip()
     return override or str(SKILL_DIR.parents[2])
 
 
@@ -50,18 +50,18 @@ def resolve_local(rid: str, commit: str, summary: str, repo: str = "") -> int:
 
 def resolve_wsl(rid: str, commit: str, summary: str, pull: bool = False) -> int:
     check_id(rid)
-    repo = os.environ.get("NFL_STAT_WSL_REPO", "").strip()
+    repo = os.environ.get("PFSLM_WSL_REPO", "").strip()
     if not repo:
-        raise SystemExit("Set NFL_STAT_WSL_REPO to the nfl-stat-cli checkout path inside WSL.")
+        raise SystemExit("Set PFSLM_WSL_REPO to the pro-football-slm checkout path inside WSL.")
     if not repo.startswith("/"):
-        raise SystemExit("NFL_STAT_WSL_REPO must be an absolute path inside WSL (no ~ or $HOME: no shell expands it).")
-    py = os.environ.get("NFL_STAT_WSL_PYTHON", "").strip() or "python3"
+        raise SystemExit("PFSLM_WSL_REPO must be an absolute path inside WSL (no ~ or $HOME: no shell expands it).")
+    py = os.environ.get("PFSLM_WSL_PYTHON", "").strip() or "python3"
     # `wsl.exe -e` executes the program directly (no login shell), so the free-text summary is never
     # re-parsed by a shell.
     if pull:
         subprocess.run(["wsl.exe", "-e", "git", "-C", repo, "pull", "--ff-only"], check=True)
-    ipc = os.environ.get("NFL_STAT_WSL_IPC_DIR", "").strip()
-    prefix = ["wsl.exe", "-e", "env", f"NFL_STAT_IPC_DIR={ipc}"] if ipc else ["wsl.exe", "-e"]
+    ipc = os.environ.get("PFSLM_WSL_IPC_DIR", "").strip()
+    prefix = ["wsl.exe", "-e", "env", f"PFSLM_IPC_DIR={ipc}"] if ipc else ["wsl.exe", "-e"]
     return subprocess.run(prefix + [py, "-c", SNIPPET, repo, rid, summary, commit], check=True).returncode
 
 

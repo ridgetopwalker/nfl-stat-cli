@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
-from nfl_stat_cli import sportsbook as sb
+import pro_football_slm as cli
+from pro_football_slm import sportsbook as sb
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -118,7 +118,7 @@ def test_user_facing_projection_text_avoids_banned_words(season_plays):
 
 def test_every_string_literal_in_the_module_avoids_banned_words():
     """Static guard: no new user-facing literal (outside identifiers and the required disclaimer) uses the old framing."""
-    tree = ast.parse((ROOT / "nfl_stat_cli" / "sportsbook.py").read_text(encoding="utf-8"))
+    tree = ast.parse((ROOT / "pro_football_slm" / "sportsbook.py").read_text(encoding="utf-8"))
     offenders = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -404,12 +404,12 @@ def test_total_constants_match_the_handicap_matchup_literals():
 
 def _env(home):
     env = dict(os.environ)
-    env.update({"HOME": str(home), "USERPROFILE": str(home), "NFL_STAT_SLM_MODEL": "off"})
+    env.update({"HOME": str(home), "USERPROFILE": str(home), "PFSLM_SLM_MODEL": "off"})
     return env
 
 
 def _run(home, *args, stdin=None):
-    return subprocess.run([sys.executable, "-m", "nfl_stat_cli", *args], input=stdin, capture_output=True,
+    return subprocess.run([sys.executable, "-m", "pro_football_slm", *args], input=stdin, capture_output=True,
                           text=True, env=_env(home), cwd=str(ROOT), timeout=120)
 
 

@@ -1,7 +1,7 @@
 """Issue #26: inferred play concepts must never contradict explicit attributes (synthetic rows only)."""
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 def _row(**kw):

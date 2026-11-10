@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="piped TUI stdin + POSIX git shim")
 
-ARGS = [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025"]
+ARGS = [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025"]
 
 
 def _env(tmp_path, enabled=True):
@@ -29,14 +29,14 @@ def _env(tmp_path, enabled=True):
         PATH=f"{bindir}{os.pathsep}{env.get('PATH', '')}",
         PYTHONPATH=str(Path(cli.__file__).resolve().parent.parent),
         HOME=str(tmp_path / "home"),
-        NFL_STAT_IPC_DIR=str(tmp_path / "ipc"),
+        PFSLM_IPC_DIR=str(tmp_path / "ipc"),
     )
-    env.pop("NFL_STAT_ALLOW_GIT_UPDATE", None)
-    env.pop("NFL_STAT_DISABLE_ERROR_IPC", None)
+    env.pop("PFSLM_ALLOW_GIT_UPDATE", None)
+    env.pop("PFSLM_DISABLE_ERROR_IPC", None)
     if enabled:
-        env["NFL_STAT_ENABLE_ERROR_IPC"] = "1"
+        env["PFSLM_ENABLE_ERROR_IPC"] = "1"
     else:
-        env.pop("NFL_STAT_ENABLE_ERROR_IPC", None)
+        env.pop("PFSLM_ENABLE_ERROR_IPC", None)
     return env, log
 
 
@@ -111,15 +111,15 @@ def test_resolve_then_reload_in_same_session_runs_no_git(tmp_path):
             if reps:
                 rid = reps[0]["id"]
                 # the same call an agent/developer script makes, with the new id format
-                env_backup = os.environ.get("NFL_STAT_IPC_DIR")
-                os.environ["NFL_STAT_IPC_DIR"] = str(ipc)
+                env_backup = os.environ.get("PFSLM_IPC_DIR")
+                os.environ["PFSLM_IPC_DIR"] = str(ipc)
                 try:
                     cli.write_resolution(report_id=rid, summary="fixed in abc1234", commit="abc1234")
                 finally:
                     if env_backup is None:
-                        os.environ.pop("NFL_STAT_IPC_DIR", None)
+                        os.environ.pop("PFSLM_IPC_DIR", None)
                     else:
-                        os.environ["NFL_STAT_IPC_DIR"] = env_backup
+                        os.environ["PFSLM_IPC_DIR"] = env_backup
                 return
             time.sleep(0.05)
 
@@ -146,7 +146,7 @@ def test_reload_shows_latest_resolution_note_without_git(tmp_path):
     rid = _pending(tmp_path)[0]["id"]
     res = subprocess.run(
         [sys.executable, "-c",
-         "import nfl_stat_cli as c; c.write_resolution(report_id=%r, summary='parser fixed', commit='deadbee')" % rid],
+         "import pro_football_slm as c; c.write_resolution(report_id=%r, summary='parser fixed', commit='deadbee')" % rid],
         env=env, capture_output=True, text=True, cwd=str(tmp_path),
     )
     assert res.returncode == 0, res.stderr
@@ -157,14 +157,14 @@ def test_reload_shows_latest_resolution_note_without_git(tmp_path):
 
 
 def test_old_style_report_ids_are_rejected_by_resolution_writer(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     for bad in ("err_20240101_000000", "../x", "err_20240101_000000_ZZZZZZZZ", ""):
         with pytest.raises(ValueError):
             cli.write_resolution(report_id=bad, summary="x")
 
 
 def test_create_error_report_tolerates_non_json_values_and_caps_response(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     rep = cli.create_error_report(
         "q", {"intent": "stat_query", "when": Path("/x"), "weird": {1, 2}.__class__}, "notes", season=2025,
         response_text="\x1b[31m" + "r" * 20000,
@@ -177,15 +177,15 @@ def test_create_error_report_tolerates_non_json_values_and_caps_response(tmp_pat
 
 def test_error_capture_is_on_by_default_without_any_env_flag(tmp_path):
     env, log = _env(tmp_path, enabled=False)
-    assert "NFL_STAT_ENABLE_ERROR_IPC" not in env
+    assert "PFSLM_ENABLE_ERROR_IPC" not in env
     out = _run(tmp_path, "epa per play\n/error wrong\nn\nquit\n", env)
     assert "saved to the local error IPC folder" in out
     assert len(_pending(tmp_path)) == 1
     assert not log.exists()
 
 
-@pytest.mark.parametrize("name,value", [("NFL_STAT_DISABLE_ERROR_IPC", "1"), ("NFL_STAT_ENABLE_ERROR_IPC", "0"),
-                                        ("NFL_STAT_ENABLE_ERROR_IPC", "false")])
+@pytest.mark.parametrize("name,value", [("PFSLM_DISABLE_ERROR_IPC", "1"), ("PFSLM_ENABLE_ERROR_IPC", "0"),
+                                        ("PFSLM_ENABLE_ERROR_IPC", "false")])
 def test_error_capture_can_be_turned_off(tmp_path, name, value):
     env, _ = _env(tmp_path, enabled=False)
     env[name] = value
@@ -195,18 +195,18 @@ def test_error_capture_can_be_turned_off(tmp_path, name, value):
 
 
 def test_error_ipc_enabled_flag_logic(monkeypatch):
-    for k in ("NFL_STAT_ENABLE_ERROR_IPC", "NFL_STAT_DISABLE_ERROR_IPC"):
+    for k in ("PFSLM_ENABLE_ERROR_IPC", "PFSLM_DISABLE_ERROR_IPC"):
         monkeypatch.delenv(k, raising=False)
     assert cli.error_ipc_enabled() is True
-    monkeypatch.setenv("NFL_STAT_ENABLE_ERROR_IPC", "1")
+    monkeypatch.setenv("PFSLM_ENABLE_ERROR_IPC", "1")
     assert cli.error_ipc_enabled() is True
-    monkeypatch.setenv("NFL_STAT_DISABLE_ERROR_IPC", "yes")
+    monkeypatch.setenv("PFSLM_DISABLE_ERROR_IPC", "yes")
     assert cli.error_ipc_enabled() is False
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
 def test_default_report_dir_is_private_and_outside_the_repo(tmp_path, monkeypatch):
-    monkeypatch.delenv("NFL_STAT_IPC_DIR", raising=False)
+    monkeypatch.delenv("PFSLM_IPC_DIR", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     d = cli.get_ipc_dir()
     repo_root = Path(cli.__file__).resolve().parent.parent
@@ -222,7 +222,7 @@ def test_unwritable_report_dir_fails_gracefully(tmp_path):
     ro = tmp_path / "ro"
     ro.mkdir()
     ro.chmod(0o500)
-    env["NFL_STAT_IPC_DIR"] = str(ro / "ipc")
+    env["PFSLM_IPC_DIR"] = str(ro / "ipc")
     try:
         out = _run(tmp_path, "epa per play\n/error wrong\nquit\n", env)
     finally:
@@ -231,7 +231,7 @@ def test_unwritable_report_dir_fails_gracefully(tmp_path):
 
 
 def test_create_error_report_survives_unserializable_parse(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     circular = {}
     circular["self"] = circular
     rep = cli.create_error_report("q", circular, "n")
@@ -241,6 +241,6 @@ def test_create_error_report_survives_unserializable_parse(tmp_path, monkeypatch
 
 
 def test_unserializable_keys_keep_the_rest_of_the_parse(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     rep = cli.create_error_report("q", {"stat_name": "epa_per_play", (1, 2): "tuple key"}, "n")
     assert rep["parsed"]["stat_name"] == "epa_per_play" and rep["parsed"]["(1, 2)"] == "tuple key"

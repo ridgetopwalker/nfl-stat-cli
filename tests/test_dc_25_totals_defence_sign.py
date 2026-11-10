@@ -1,7 +1,7 @@
 """Issue #25: modeled totals must fall as a defence gets stronger (lower EPA allowed). Synthetic data only."""
 import pytest
 
-from nfl_stat_cli import sportsbook as sb
+from pro_football_slm import sportsbook as sb
 
 
 def _ratings(off, def_allowed):

@@ -1,5 +1,7 @@
 * text=auto eol=lf
 *.sh text eol=lf
+pro-football-slm text eol=lf
+pfslm text eol=lf
 nfl-stat text eol=lf
 *.py text eol=lf
 *.R text eol=lf

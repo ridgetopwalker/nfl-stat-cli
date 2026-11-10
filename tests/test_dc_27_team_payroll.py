@@ -1,8 +1,8 @@
 """Issue #27: coach pay must not be folded into the team cap total (synthetic contracts only)."""
 import pytest
 
-import nfl_stat_cli as cli
-from nfl_stat_cli import contracts as ct
+import pro_football_slm as cli
+from pro_football_slm import contracts as ct
 
 
 def _rec(name, pos, ctype, apy, cap, team="ZZZ"):

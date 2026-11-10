@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping with nfl-stat-cli. Please run the tests before opening a pull request:
+Thanks for helping with pro-football-slm. Please run the tests before opening a pull request:
 
 ```bash
 python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate

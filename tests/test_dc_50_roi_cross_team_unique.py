@@ -1,8 +1,8 @@
 """Issue #50: an abbreviated ROI name that is unique in a season matches across teams; shared keys stay team-gated."""
 import pytest
 
-import nfl_stat_cli as cli
-from nfl_stat_cli import contracts as ct
+import pro_football_slm as cli
+from pro_football_slm import contracts as ct
 
 
 def _contract(name, team="ZZZ", pos="WR"):

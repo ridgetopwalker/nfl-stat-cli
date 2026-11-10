@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 NLA = cli.NaturalLanguageStatAssistant
 
@@ -169,7 +169,7 @@ def test_nl_mutations_can_be_switched_off(engine, monkeypatch, tmp_path, via, pa
     if via == "param":
         kwargs["allow_mutations"] = False
     else:
-        monkeypatch.setenv("NFL_STAT_DISABLE_NL_MUTATIONS", "1")
+        monkeypatch.setenv("PFSLM_DISABLE_NL_MUTATIONS", "1")
     out = cli.strip_ansi(cli.handle_nl_query_result(dict(parsed), engine, cli.SAMPLE_PBP_PLAYS, interactive=True, **kwargs))
     assert "turned off" in out
     assert "victim_stat" in engine.stats and "newbie" not in engine.stats
@@ -177,9 +177,9 @@ def test_nl_mutations_can_be_switched_off(engine, monkeypatch, tmp_path, via, pa
 
 
 def test_explicit_allow_overrides_env_for_trusted_callers(engine, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_DISABLE_NL_MUTATIONS", "1")
+    monkeypatch.setenv("PFSLM_DISABLE_NL_MUTATIONS", "1")
     assert cli.nl_mutations_allowed() is False and cli.nl_mutations_allowed(True) is True
-    monkeypatch.delenv("NFL_STAT_DISABLE_NL_MUTATIONS")
+    monkeypatch.delenv("PFSLM_DISABLE_NL_MUTATIONS")
     assert cli.nl_mutations_allowed() is True and cli.nl_mutations_allowed(False) is False
 
 
@@ -196,8 +196,8 @@ def test_typed_create_does_not_write_the_catalog_without_a_prompt(engine):
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.test/x", "javascript:alert(1)", "gopher://h:70/", "//host:11434",
                                  "http://user:secret@127.0.0.1:11434", "http://127.0.0.1:99999", "http:///nohost", "localhost:11434", "http://[::1"])
 def test_non_http_or_malformed_ollama_urls_disable_the_slm_without_any_request(monkeypatch, url):
-    monkeypatch.setenv("NFL_STAT_OLLAMA_URL", url)
-    monkeypatch.delenv("NFL_STAT_SLM_MODEL", raising=False)
+    monkeypatch.setenv("PFSLM_OLLAMA_URL", url)
+    monkeypatch.delenv("PFSLM_SLM_MODEL", raising=False)
     calls = []
     monkeypatch.setattr(cli.urllib.request, "urlopen", lambda *a, **k: calls.append(a))
     assert NLA.ollama_base_url() is None
@@ -212,12 +212,12 @@ def test_non_http_or_malformed_ollama_urls_disable_the_slm_without_any_request(m
     ("HTTPS://models.example.test:8443", "https://models.example.test:8443"),
 ])
 def test_http_and_https_urls_are_accepted(monkeypatch, url, expected):
-    monkeypatch.setenv("NFL_STAT_OLLAMA_URL", url)
+    monkeypatch.setenv("PFSLM_OLLAMA_URL", url)
     assert NLA.ollama_base_url() == expected
 
 
 def test_explicit_allow_overrides_env_through_the_handler(engine, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_DISABLE_NL_MUTATIONS", "1")
+    monkeypatch.setenv("PFSLM_DISABLE_NL_MUTATIONS", "1")
     monkeypatch.setattr(cli, "prompt_input", lambda prompt: "y")
     _register(engine)
     out = cli.strip_ansi(cli.handle_nl_query_result({"intent": "delete_stat", "stat_name": "victim_stat", "query": "q"}, engine,
@@ -236,12 +236,12 @@ def test_odd_stat_names_are_refused_not_echoed_or_deleted(engine, monkeypatch, i
 
 
 def test_ollama_url_keeps_a_path_prefix_and_accepts_ipv6_loopback(monkeypatch):
-    monkeypatch.setenv("NFL_STAT_OLLAMA_URL", "http://gateway.example.test:8080/ollama/")
+    monkeypatch.setenv("PFSLM_OLLAMA_URL", "http://gateway.example.test:8080/ollama/")
     assert NLA.ollama_base_url() == "http://gateway.example.test:8080/ollama"
-    monkeypatch.setenv("NFL_STAT_OLLAMA_URL", "http://[::1]:11434")
+    monkeypatch.setenv("PFSLM_OLLAMA_URL", "http://[::1]:11434")
     assert NLA.ollama_base_url() == "http://[::1]:11434"
-    monkeypatch.setenv("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:0")
+    monkeypatch.setenv("PFSLM_OLLAMA_URL", "http://127.0.0.1:0")
     assert NLA.ollama_base_url() is None
     for odd in ("http://h:1/a b", "http://h:1/../x", "http://h:1/a?x=1", "http://h:1/a#f", "http://h:1/a\\b"):
-        monkeypatch.setenv("NFL_STAT_OLLAMA_URL", odd)
+        monkeypatch.setenv("PFSLM_OLLAMA_URL", odd)
         assert NLA.ollama_base_url() is None, odd

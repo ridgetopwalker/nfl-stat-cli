@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 def _report_name(day_offset: int = 0, seq: int = 1) -> str:
@@ -207,7 +207,7 @@ def test_cleanup_never_raises_on_bad_ipc_dir(tmp_path):
 
 
 def test_create_error_report_triggers_cleanup_without_touching_pending(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     monkeypatch.delenv("PFSLM_ERROR_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("NFL_STAT_ERROR_RETENTION_DAYS", raising=False)
     ipc = cli.get_ipc_dir()
@@ -275,7 +275,7 @@ def test_stale_stamp_allows_non_forced_cleanup(tmp_path):
 
 
 def test_write_resolution_refreshes_history_mtime_before_cleanup(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     ipc = cli.get_ipc_dir()
     now = time.time()
     rid = "err_20200101_120000_abcd1234"

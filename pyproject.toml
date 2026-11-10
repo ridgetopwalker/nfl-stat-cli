@@ -3,9 +3,9 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nfl-stat-cli"
+name = "pro-football-slm"
 version = "2.0.0"
-description = "Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, play visualizer (behind-offense, behind-defense, sideline), & composable custom stat CLI powered by nflverse (R), sportsdataverse-py (Python), and optional local SLM (Ollama)."
+description = "Pro Football SLM: the American pro football stat engine. Cross-platform colorized terminal analytics, play visualizer, and composable custom stats (nflverse / sportsdataverse + optional local SLM)."
 readme = {file = "README.md", content-type = "text/markdown"}
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
@@ -26,6 +26,8 @@ keywords = [
   "nflverse",
   "sportsdataverse",
   "play-by-play",
+  "pfslm",
+  "pro-football-slm",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -68,10 +70,11 @@ Issues = "https://github.com/ridgetopwalker/nfl-stat-cli/issues"
 Changelog = "https://github.com/ridgetopwalker/nfl-stat-cli/releases"
 
 [project.scripts]
-nfl-stat = "nfl_stat_cli:main"
-nfl-stat-cli = "nfl_stat_cli:main"
+pfslm = "pro_football_slm:main"
+nfl-stat = "pro_football_slm:main"
+pro-football-slm = "pro_football_slm:main"
 
 [tool.setuptools]
-packages = ["nfl_stat_cli"]
-package-data = {"nfl_stat_cli" = ["*.R", "*.json"]}
+packages = ["pro_football_slm"]
+package-data = {"pro_football_slm" = ["*.R", "*.json", "NOTICE.txt"]}
 include-package-data = true

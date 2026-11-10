@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 HEADER = ["season", "week", "game_id", "play_id", "posteam", "defteam", "play_type", "pass_attempt",
           "rush_attempt", "penalty", "timeout", "desc", "epa"]
@@ -67,7 +67,7 @@ def _write(text):
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch, tmp_path):
-    monkeypatch.delenv("NFL_STAT_R_TIMEOUT", raising=False)
+    monkeypatch.delenv("PFSLM_R_TIMEOUT", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
 
@@ -98,7 +98,7 @@ def test_r_backend_keeps_exactly_the_rows_the_python_backend_keeps(monkeypatch, 
 
 def test_bridge_script_exports_all_possession_plays():
     root = Path(__file__).resolve().parent.parent
-    packaged = (root / "nfl_stat_cli" / "nflverse_bridge.R").read_text(encoding="utf-8")
+    packaged = (root / "pro_football_slm" / "nflverse_bridge.R").read_text(encoding="utf-8")
     assert not (root / "nflverse_bridge.R").exists(), "R bridge lives only inside the package"
     assert "out_df <- as.data.frame(pbp)[!is.na(pbp$posteam), keep_cols, drop = FALSE]" in packaged
     assert "pass_attempt == 1) | (!is.na(pbp$rush_attempt)" not in packaged
@@ -195,7 +195,7 @@ def test_default_timeout_is_raised_and_env_overrides_it(monkeypatch, tmp_path):
     _bridge(tmp_path)._try_nflverse_r([2025])
     assert fake.calls[0][1]["timeout"] == 300
 
-    monkeypatch.setenv("NFL_STAT_R_TIMEOUT", "7")
+    monkeypatch.setenv("PFSLM_R_TIMEOUT", "7")
     fake2 = FakeR(monkeypatch, _write(_csv_text()))
     cli.NFLDataBridge(cache_dir=tmp_path / "cache2", engine="r")._try_nflverse_r([2025])
     assert fake2.calls[0][1]["timeout"] == 7
@@ -203,7 +203,7 @@ def test_default_timeout_is_raised_and_env_overrides_it(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("bad", ["", "abc", "0", "-5"])
 def test_invalid_timeout_env_falls_back_to_default(monkeypatch, bad):
-    monkeypatch.setenv("NFL_STAT_R_TIMEOUT", bad)
+    monkeypatch.setenv("PFSLM_R_TIMEOUT", bad)
     assert cli._r_timeout_seconds() == 300
 
 

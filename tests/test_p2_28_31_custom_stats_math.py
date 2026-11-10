@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 PLAYS = cli.SAMPLE_PBP_PLAYS
 
@@ -224,7 +224,7 @@ def test_saved_stat_dependencies_are_recomputed_not_trusted(tmp_path):
 
 def test_load_warnings_are_printed_to_stderr_by_main(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    state = tmp_path / ".nfl_stat_cli"
+    state = tmp_path / ".pro_football_slm"
     state.mkdir()
     _write_state(state / "custom_stats.json", {"yards_per_play": _item("yards_per_play", "plays * 1000")})
     cli.main(["list-stats", "--no-color"])

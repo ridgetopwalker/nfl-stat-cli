@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 # The one place the product name lives (used by every footer / export / about text).
-PRODUCT_NAME = "nfl-stat-cli"
+PRODUCT_NAME = "pro-football-slm"
 
 NFLVERSE_URL = "https://github.com/nflverse/nflverse-data"
 CC_BY_NAME = "CC BY 4.0"

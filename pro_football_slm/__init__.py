@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-nfl-stat-cli: Cross-Platform (*nix & Windows) Colorized Terminal NFL Analytics,
-Multi-Angle Play Visualizer (Behind Offense, Behind Defense, Sideline), & General Composable Custom Stat Engine.
-Powered by sportsdataverse-py (Python), nflverse / nflreadr / nflfastR (R), and Local Small Language Model (SLM via Ollama) + Deterministic Engine.
+Pro Football SLM: the American pro football stat engine.
+
+Cross-platform (*nix & Windows) colorized terminal analytics, multi-angle play
+visualizer (behind offense, behind defense, sideline), and composable custom
+stat engine. Powered by sportsdataverse-py (Python), nflverse / nflreadr /
+nflfastR (R), and an optional local small language model (SLM via Ollama).
+Not affiliated with or endorsed by the NFL.
 """
 
 from __future__ import annotations
@@ -42,6 +46,8 @@ from importlib import resources
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
+
+from .legacy_compat import OLD_ENV_PREFIX, default_data_dir, env_get, env_truthy
 
 from .fantasy import (
     calculate_player_fantasy_points,
@@ -87,6 +93,13 @@ from . import attribution
 __version__ = "2.0.0"
 __author__ = "Sean McClain"
 __license__ = "MIT"
+
+# Single product-name constant — every user-facing brand string must use this.
+PRODUCT_NAME = "Pro Football SLM"
+PRODUCT_TAGLINE = "Pro Football SLM: the American pro football stat engine"
+PRODUCT_SLUG = "pro-football-slm"
+PRODUCT_MODULE = "pro_football_slm"
+AFFILIATION_DISCLAIMER = "Not affiliated with or endorsed by the NFL"
 
 
 def current_nfl_season(today: Optional[dt.date] = None) -> int:
@@ -291,9 +304,9 @@ EXPORT_ALLOWED_SUFFIXES: Tuple[str, ...] = (".csv", ".json")
 
 
 def get_export_dir() -> Path:
-    """Directory that user-requested exports are confined to (override with NFL_STAT_EXPORT_DIR)."""
-    override = os.environ.get("NFL_STAT_EXPORT_DIR", "").strip()
-    return Path(override).expanduser() if override else Path.home() / ".nfl_stat_cli" / "exports"
+    """Directory that user-requested exports are confined to (override with PFSLM_EXPORT_DIR)."""
+    override = env_get("PFSLM_EXPORT_DIR", "").strip()
+    return Path(override).expanduser() if override else default_data_dir() / "exports"
 
 
 def resolve_export_path(
@@ -387,20 +400,20 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
                 headers = LAST_RENDERED_TABLE["headers"]
                 records = [dict(zip(headers, row)) for row in LAST_RENDERED_TABLE["rows"]]
                 payload = {
-                    "title": LAST_RENDERED_TABLE.get("title", "NFL Stat Query Result"),
+                    "title": LAST_RENDERED_TABLE.get("title", "Pro Football SLM Query Result"),
                     "count": len(records),
                     "headers": headers,
                     "records": records,
                 }
             elif LAST_RESULT_RECORDS:
                 payload = {
-                    "title": "NFL Stat Query Result",
+                    "title": "Pro Football SLM Query Result",
                     "count": len(LAST_RESULT_RECORDS),
                     "records": LAST_RESULT_RECORDS,
                 }
             else:
                 payload = {
-                    "title": "NFL Stat Query Result",
+                    "title": "Pro Football SLM Query Result",
                     "text": LAST_RAW_OUTPUT,
                 }
             payload["license"] = attribution.json_license_block()
@@ -460,7 +473,7 @@ SLASH_COMMAND_OPTIONS: List[str] = [
 
 class CLICompleter:
     """
-    Case-insensitive tab autocompleter for nfl-stat-cli slash commands,
+    Case-insensitive tab autocompleter for pro-football-slm slash commands,
     stat metric IDs, NFL teams, player names, and filenames, following
     the standard command-line autocompletion behavior when matching files in a folder.
     """
@@ -1695,13 +1708,13 @@ def require_season_plays(plays: List[Dict[str, Any]], season: int) -> List[Dict[
     raise NoSeasonDataError(
         f"No play-by-play data loaded for the {season} season (available: {avail_str}). "
         f"Use --season YEAR (or `/season YEAR` in the interactive prompt), or install the live data "
-        f"packages (`pip install nfl-stat-cli[live]`) to fetch {season}."
+        f"packages (`pip install pro-football-slm[live]`) to fetch {season}."
     )
 
 
 R_CACHE_FORMAT = "v2"
 R_TIMEOUT_DEFAULT_SECONDS = 300
-R_TIMEOUT_ENV = "NFL_STAT_R_TIMEOUT"
+R_TIMEOUT_ENV = "PFSLM_R_TIMEOUT"
 # Columns that every valid bridge CSV must carry
 _R_CSV_REQUIRED_COLUMNS = ("season", "posteam", "play_type", "pass_attempt", "rush_attempt")
 
@@ -1776,8 +1789,8 @@ def _game_id_parts(game_id: str) -> Tuple[int, int]:
 
 
 def _r_timeout_seconds() -> int:
-    """Rscript timeout in seconds; override with NFL_STAT_R_TIMEOUT (invalid or non-positive values are ignored)."""
-    raw = os.environ.get(R_TIMEOUT_ENV, "").strip()
+    """Rscript timeout in seconds; override with PFSLM_R_TIMEOUT (invalid or non-positive values are ignored)."""
+    raw = env_get(R_TIMEOUT_ENV, "").strip()
     try:
         value = int(raw)
     except ValueError:
@@ -1850,7 +1863,7 @@ class LiveDataUnavailableError(RuntimeError):
 
 
 def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+    return env_get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _one_line(text: Any, limit: int = 200) -> str:
@@ -1874,10 +1887,10 @@ class NFLDataBridge:
     """
 
     def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto", require_live: Optional[bool] = None) -> None:
-        self._cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
+        self._cache_dir = cache_dir or (default_data_dir() / "cache")
         self._cache_dir_ready = False
         self.engine = engine.lower()
-        self.require_live = _env_flag("NFL_STAT_REQUIRE_LIVE") if require_live is None else bool(require_live)
+        self.require_live = _env_flag("PFSLM_REQUIRE_LIVE") if require_live is None else bool(require_live)
         # Assign the private field so the setter does not treat "no data yet" as a source change.
         self._last_source_used = SAMPLE_DATA_SOURCE_LABEL
         self.last_error: Optional[str] = None
@@ -1944,7 +1957,7 @@ class NFLDataBridge:
         if self.require_live:
             detail = f" ({_one_line(self.last_error)})" if self.last_error else " (no live backend loaded any rows)"
             raise LiveDataUnavailableError(
-                "Live NFL data is required (--require-live / NFL_STAT_REQUIRE_LIVE) but no live backend "
+                "Live NFL data is required (--require-live / PFSLM_REQUIRE_LIVE) but no live backend "
                 "could load it; refusing to fall back to sample data" + detail
             )
 
@@ -3442,7 +3455,7 @@ class StatEngine:
 
     def __init__(self, storage_dir: Optional[Path] = None) -> None:
         # The state directory is created on the first save (_atomic_write_json), not when the engine is built.
-        self.storage_dir = storage_dir or (Path.home() / ".nfl_stat_cli")
+        self.storage_dir = storage_dir or default_data_dir()
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
         self.stats: Dict[str, StatDefinition] = dict(DEFAULT_STATS)
@@ -3753,7 +3766,7 @@ class StatEngine:
             if include_traditional or v.category == "custom"
         }
         payload = {
-            "package": "nfl-stat-cli",
+            "package": PRODUCT_SLUG,
             "schema_version": "2.0",
             "exported_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "stat_count": len(exported),
@@ -4596,15 +4609,19 @@ class AsciiArtRenderer:
 
     @staticmethod
     def banner() -> str:
+        # Brand art spells PFSLM only — never "NFL" in the logo / product name.
         lines = [
-            f"{C.BOLD}{C.GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.CYAN}███╗   ██╗███████╗██╗         ███████╗████████╗ █████╗ ████████╗   ██████╗██╗     ██╗{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.CYAN}████╗  ██║██╔════╝██║         ██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝  ██╔════╝██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.WHITE}██╔██╗ ██║█████╗  ██║   █████╗███████╗   ██║   ███████║   ██║     ██║     ██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.GREEN}██║╚██╗██║██╔══╝  ██║   ╚════╝╚════██║   ██║   ██╔══██║   ██║     ██║     ██║     ██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.BOLD}{C.GREEN}██║ ╚████║██║     ███████╗    ███████║   ██║   ██║  ██║   ██║     ╚██████╗███████╗██║{C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}║{C.RESET} {C.DIM}{C.WHITE}nflverse (R) + sportsdataverse-py (Python) • Custom Stat Engine & Play Visualizer    {C.RESET} {C.BOLD}{C.GOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}╚═══════════════════════════════════════════════════════════════════════════════════════╝{C.RESET}",
+            f"{C.BOLD}{C.GOLD}╔══════════════════════════════════════════════════════════════════════════╗{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.CYAN}██████╗ ███████╗███████╗██╗     ███╗   ███╗{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.CYAN}██╔══██╗██╔════╝██╔════╝██║     ████╗ ████║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.WHITE}██████╔╝█████╗  ███████╗██║     ██╔████╔██║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}██╔═══╝ ██╔══╝  ╚════██║██║     ██║╚██╔╝██║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}██║     ██║     ███████║███████╗██║ ╚═╝ ██║{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.GREEN}╚═╝     ╚═╝     ╚══════╝╚══════╝╚═╝     ╚═╝{C.RESET}                              {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.BOLD}{C.WHITE}{PRODUCT_TAGLINE:<68}{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.DIM}{C.WHITE}{'nflverse + sportsdataverse-py • custom stats & play visualizer':<68}{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}║{C.RESET}  {C.DIM}{C.WHITE}{AFFILIATION_DISCLAIMER:<68}{C.RESET}  {C.BOLD}{C.GOLD}║{C.RESET}",
+            f"{C.BOLD}{C.GOLD}╚══════════════════════════════════════════════════════════════════════════╝{C.RESET}",
         ]
         return "\n".join(lines)
 
@@ -5561,13 +5578,13 @@ class AsciiArtRenderer:
 # ---------------------------------------------------------------------------
 
 # Hard cap on natural-language query length, enforced before any parsing/regex work so crafted
-# long inputs cannot reach backtracking-prone patterns (override with NFL_STAT_MAX_QUERY_CHARS).
+# long inputs cannot reach backtracking-prone patterns (override with PFSLM_MAX_QUERY_CHARS).
 MAX_QUERY_CHARS = 300
 
 
 def get_max_query_chars() -> int:
     try:
-        val = int(os.environ.get("NFL_STAT_MAX_QUERY_CHARS", "") or MAX_QUERY_CHARS)
+        val = int(env_get("PFSLM_MAX_QUERY_CHARS", "") or MAX_QUERY_CHARS)
     except ValueError:
         return MAX_QUERY_CHARS
     if val < 1:
@@ -5833,8 +5850,8 @@ class NaturalLanguageStatAssistant:
 
     @staticmethod
     def ollama_base_url() -> Optional[str]:
-        """NFL_STAT_OLLAMA_URL (default: local Ollama), limited to http/https; None when the setting is not a usable URL."""
-        raw = os.environ.get("NFL_STAT_OLLAMA_URL", "").strip() or "http://127.0.0.1:11434"
+        """PFSLM_OLLAMA_URL (default: local Ollama), limited to http/https; None when the setting is not a usable URL."""
+        raw = env_get("PFSLM_OLLAMA_URL", "").strip() or "http://127.0.0.1:11434"
         try:
             parts = urllib.parse.urlsplit(raw)
             port_ok = parts.port is None or 0 < parts.port < 65536
@@ -5852,7 +5869,7 @@ class NaturalLanguageStatAssistant:
             return None
         if requested_model and requested_model.strip().lower() != "auto":
             return requested_model.strip()
-        env_model = os.environ.get("NFL_STAT_SLM_MODEL")
+        env_model = env_get("PFSLM_SLM_MODEL")
         if env_model:
             if env_model.strip().lower() in ("none", "off", "disable", "disabled"):
                 return None
@@ -5969,7 +5986,7 @@ class NaturalLanguageStatAssistant:
             return None
         available_stats = list(engine.stats.keys())
         system_prompt = (
-            "You are the NFL-Stat-CLI Local Small Language Model parser. "
+            "You are the Pro Football SLM Local Small Language Model parser. "
             "Respond ONLY with a valid JSON object matching one of these intents:\n"
             "1. 'stat_query': when the user asks for a season average, leaderboard, ranking, or aggregate stat across the year. "
             "Set 'show_field': false.\n"
@@ -7428,7 +7445,7 @@ def render_custom_stat_example_walkthrough(
     team: Optional[str] = None,
 ) -> str:
     """
-    Interactive guide demonstrating how to design and build custom stats in nfl-stat-cli,
+    Interactive guide demonstrating how to design and build custom stats in pro-football-slm,
     using MLB-style QB Meaningful Wins (MW / ML) and QB Impact Score as the canonical example.
     """
     s_plays = plays_for_season(plays, season)
@@ -7451,7 +7468,7 @@ def render_custom_stat_example_walkthrough(
         f"   the defense carries a subpar performance, or tag them with a loss in a 42-38 shootout.",
         f"   {C.GREEN}Goal:{C.RESET} Build an MLB-pitcher style Decision System — Meaningful Wins (MW), Meaningful Losses (ML),",
         f"   and No-Decisions (ND) based on whether the QB met an objective performance threshold.",
-        f"\n{C.BOLD}{C.CYAN}2. The 3-Step Construction in nfl-stat-cli:{C.RESET}",
+        f"\n{C.BOLD}{C.CYAN}2. The 3-Step Construction in pro-football-slm:{C.RESET}",
         f"   {C.BOLD}Step A: Select Evaluation Scope{C.RESET}",
         f"     • Scope: `{C.YELLOW}game{C.RESET}` (evaluates each individual game rather than the full season aggregate)",
         f"     • Aggregation: `{C.YELLOW}sum{C.RESET}` (sums the 1s and 0s across all games in the season)",
@@ -7471,7 +7488,7 @@ def render_custom_stat_example_walkthrough(
         f"     2. {C.BOLD}Natural Language:{C.RESET} Type directly in plain English:",
         f"        {C.DIM}\"create stat called clutch_win with formula ifelse(epa_per_play > 0.15 and team_win == 1, 1, 0) by qb\"{C.RESET}",
         f"     3. {C.BOLD}CLI Command:{C.RESET}",
-        f"        {C.DIM}nfl-stat create-stat --name qb_meaningful_win --scope game --agg sum --formula \"ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)\" --title \"Meaningful Win\" --description \"...\" --explained \"...\"{C.RESET}",
+        f"        {C.DIM}pro-football-slm create-stat --name qb_meaningful_win --scope game --agg sum --formula \"ifelse((team_win == 1) and (qb_impact_score >= 55.0), 1, 0)\" --title \"Meaningful Win\" --description \"...\" --explained \"...\"{C.RESET}",
         f"\n{C.BOLD}{C.GREEN}3. Live Example Demonstration ({display_season} Leaderboard):{C.RESET}\n",
         report_table,
     ]
@@ -7759,14 +7776,14 @@ NL_MUTATION_INTENTS = {
     "export_data": "write an export file",
     "export_stats": "write an export file",
 }
-NL_MUTATIONS_DISABLE_ENV = "NFL_STAT_DISABLE_NL_MUTATIONS"
+NL_MUTATIONS_DISABLE_ENV = "PFSLM_DISABLE_NL_MUTATIONS"
 
 
 def nl_mutations_allowed(explicit: Optional[bool] = None) -> bool:
-    """False when a caller passed allow_mutations=False or NFL_STAT_DISABLE_NL_MUTATIONS is set (e.g. for a web front end)."""
+    """False when a caller passed allow_mutations=False or PFSLM_DISABLE_NL_MUTATIONS is set (e.g. for a web front end)."""
     if explicit is not None:
         return bool(explicit)
-    return os.environ.get(NL_MUTATIONS_DISABLE_ENV, "").strip().lower() not in ("1", "true", "yes", "on")
+    return env_get(NL_MUTATIONS_DISABLE_ENV, "").strip().lower() not in ("1", "true", "yes", "on")
 
 
 _NL_NON_NAME_WORDS = frozenset("""
@@ -10736,18 +10753,18 @@ def render_stats_catalog(engine: StatEngine) -> str:
 # IPC Error Reporting & Self-Healing Agent Signaling
 # ==============================================================================
 
-ERROR_IPC_ENV = "NFL_STAT_ENABLE_ERROR_IPC"  # set to 0/false to turn local /error capture off
-ERROR_IPC_DISABLE_ENV = "NFL_STAT_DISABLE_ERROR_IPC"  # set to 1 to turn local /error capture off
-GIT_UPDATE_ENV = "NFL_STAT_ALLOW_GIT_UPDATE"
+ERROR_IPC_ENV = "PFSLM_ENABLE_ERROR_IPC"  # set to 0/false to turn local /error capture off
+ERROR_IPC_DISABLE_ENV = "PFSLM_DISABLE_ERROR_IPC"  # set to 1 to turn local /error capture off
+GIT_UPDATE_ENV = "PFSLM_ALLOW_GIT_UPDATE"
 IPC_WAIT_TIMEOUT_SECONDS = 600.0
 _IPC_REPORT_ID_RE = re.compile(r"err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", re.ASCII)
 _IPC_REPORT_FILE_RE = re.compile(r"^err_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.json$", re.ASCII)
 IPC_MAX_FILE_BYTES = 65536
 IPC_MAX_RESPONSE_CHARS = 8000
-ERROR_RETENTION_DAYS_ENV = "PFSLM_ERROR_RETENTION_DAYS"  # preferred; falls back to NFL_STAT_ name
-ERROR_RETENTION_DAYS_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_DAYS"
+ERROR_RETENTION_DAYS_ENV = "PFSLM_ERROR_RETENTION_DAYS"  # preferred; falls back to the legacy name
+ERROR_RETENTION_DAYS_ENV_LEGACY = OLD_ENV_PREFIX + "ERROR_RETENTION_DAYS"
 ERROR_RETENTION_MAX_ENV = "PFSLM_ERROR_RETENTION_MAX"
-ERROR_RETENTION_MAX_ENV_LEGACY = "NFL_STAT_ERROR_RETENTION_MAX"
+ERROR_RETENTION_MAX_ENV_LEGACY = OLD_ENV_PREFIX + "ERROR_RETENTION_MAX"
 ERROR_RETENTION_DEFAULT_DAYS = 30
 ERROR_RETENTION_DEFAULT_MAX = 500
 ERROR_RETENTION_MIN_INTERVAL_SECONDS = 86400  # cheap check: at most once per day unless forced
@@ -10756,19 +10773,19 @@ ERROR_RETENTION_SUBDIRS = ("resolved", "history")  # never touch pending/
 
 
 def _truthy_env(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+    return env_get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def error_ipc_enabled() -> bool:
     """
     Local `/error` report capture is ON by default: nothing is written unless the user types `/error`,
     reports go only to a private per-user folder, and nothing is sent anywhere. Opt out with
-    NFL_STAT_DISABLE_ERROR_IPC=1 or NFL_STAT_ENABLE_ERROR_IPC=0. Force-reload and git updates are
+    PFSLM_DISABLE_ERROR_IPC=1 or PFSLM_ENABLE_ERROR_IPC=0. Force-reload and git updates are
     separate and are never enabled by this. Any value not listed as "off" leaves capture on.
     """
     if _truthy_env(ERROR_IPC_DISABLE_ENV):
         return False
-    raw = os.environ.get(ERROR_IPC_ENV, "").strip().lower()
+    raw = env_get(ERROR_IPC_ENV, "").strip().lower()
     return raw not in ("0", "false", "no", "off", "none", "disable", "disabled")
 
 
@@ -10791,10 +10808,10 @@ def get_ipc_dir(create: bool = True) -> Path:
     Returns the error-report IPC directory (pending/resolved/history). With ``create=True`` (the default,
     used before writing) it creates the directories with owner-only permissions; with ``create=False``
     (used by read-only callers) nothing is created, and directories that already exist are still checked.
-    Lives in the user's private state dir; override with NFL_STAT_IPC_DIR.
+    Lives in the user's private state dir; override with PFSLM_IPC_DIR.
     """
-    override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
-    ipc_path = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
+    override = env_get("PFSLM_IPC_DIR", "").strip()
+    ipc_path = Path(override) if override else default_data_dir() / "error_ipc"
     for sub in ("", "pending", "resolved", "history"):
         d = ipc_path / sub if sub else ipc_path
         if create:
@@ -10829,7 +10846,7 @@ def _env_int_with_fallback(
     valid, ``default`` is returned.
     """
     for name in (preferred, legacy):
-        raw = os.environ.get(name)
+        raw = env_get(name, legacy_only=(name == legacy))
         if raw is None:
             continue
         raw = raw.strip()
@@ -10846,7 +10863,7 @@ def _env_int_with_fallback(
 
 
 def error_retention_days() -> int:
-    """Days to keep resolved/history error reports. Default 30. PFSLM_* wins over NFL_STAT_*."""
+    """Days to keep resolved/history error reports. Default 30. The preferred prefix wins over the legacy prefix."""
     return _env_int_with_fallback(
         ERROR_RETENTION_DAYS_ENV,
         ERROR_RETENTION_DAYS_ENV_LEGACY,
@@ -10857,7 +10874,7 @@ def error_retention_days() -> int:
 
 
 def error_retention_max() -> int:
-    """Max resolved+history report files to keep. Default 500. PFSLM_* wins over NFL_STAT_*."""
+    """Max resolved+history report files to keep. Default 500. The preferred prefix wins over the legacy prefix."""
     return _env_int_with_fallback(
         ERROR_RETENTION_MAX_ENV,
         ERROR_RETENTION_MAX_ENV_LEGACY,
@@ -10873,7 +10890,7 @@ def _is_error_report_filename(name: str) -> bool:
 
 def _log_retention_issue(message: str) -> None:
     try:
-        sys.stderr.write(f"nfl-stat-cli: error-report retention: {message}\n")
+        sys.stderr.write(f"pro-football-slm: error-report retention: {message}\n")
     except Exception:
         pass
 
@@ -10992,9 +11009,9 @@ def cleanup_error_reports(
     Prune old resolved/ and history/ error reports. Never touches pending/.
 
     Deletes matching ``err_YYYYMMDD_HHMMSS_xxxxxxxx.json`` files older than the retention
-    window (default 30 days; ``PFSLM_ERROR_RETENTION_DAYS`` / ``NFL_STAT_ERROR_RETENTION_DAYS``),
-    then enforces a total cap (default 500; ``PFSLM_ERROR_RETENTION_MAX`` /
-    ``NFL_STAT_ERROR_RETENTION_MAX``) by removing oldest first. A stamp file limits work to
+    window (default 30 days; ``PFSLM_ERROR_RETENTION_DAYS`` with legacy fallback),
+    then enforces a total cap (default 500; ``PFSLM_ERROR_RETENTION_MAX`` with legacy
+    fallback) by removing oldest first. A stamp file limits work to
     about once per day unless ``force=True``. Errors are swallowed and logged; this never
     raises into the CLI.
     """
@@ -11292,9 +11309,9 @@ def wait_for_resolution(
         time.sleep(poll_interval)
 
 
-def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
+def reload_pro_football_slm(pull_git: bool = False) -> Any:
     """
-    Cleanly reload nfl-stat-cli and all its submodules in-place.
+    Cleanly reload pro-football-slm and all its submodules in-place.
     Purges cached submodules from sys.modules to ensure fresh imports.
     ``pull_git`` is accepted for backward compatibility but is ignored: reloading never runs git.
     Use git_update_package() for an explicit, gated update.
@@ -11304,20 +11321,20 @@ def reload_nfl_stat_cli(pull_git: bool = False) -> Any:
 
     # Purge cached submodules so fresh code is loaded from disk
     for m in list(sys.modules.keys()):
-        if m.startswith("nfl_stat_cli."):
+        if m.startswith("pro_football_slm."):
             try:
                 del sys.modules[m]
             except KeyError:
                 pass
 
-    import nfl_stat_cli as _cur_mod
+    import pro_football_slm as _cur_mod
     return importlib.reload(_cur_mod)
 
 
 def git_update_package() -> Tuple[bool, str]:
     """
     Explicit, opt-in self-update: `git pull --ff-only` pinned to this package's own checkout.
-    Requires NFL_STAT_ALLOW_GIT_UPDATE=1, an interactive terminal, and a `.git` directory at the package root.
+    Requires PFSLM_ALLOW_GIT_UPDATE=1, an interactive terminal, and a `.git` directory at the package root.
     Never invoked by /reload.
     """
     if not _truthy_env(GIT_UPDATE_ENV):
@@ -11343,7 +11360,7 @@ def git_update_package() -> Tuple[bool, str]:
 def render_slash_help() -> str:
     return f"""
 {C.BOLD}{C.CYAN}┌───────────────────────────────────────────────────────────────────────────────────────┐
-│                      NFL-STAT-CLI : NATURAL LANGUAGE & /COMMANDS                      │
+│                      Pro Football SLM : NATURAL LANGUAGE & /COMMANDS                      │
 ├───────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}
   {C.BOLD}{C.GOLD}Default Mode (Natural Language):{C.RESET}
     Type any question or stat request directly (no slash needed):
@@ -11377,10 +11394,10 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/import{C.RESET} [file.json]             Import custom stats from JSON
     {C.BOLD}{C.CYAN}/why{C.RESET}                            Show the parsed JSON intent of the last natural-language query
     {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save the last query + answer as a local error report (nothing is sent; old resolved/history pruned after 30d / ~500)
-    {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs NFL_STAT_ALLOW_GIT_UPDATE=1)
+    {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs PFSLM_ALLOW_GIT_UPDATE=1)
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
     {C.BOLD}{C.CYAN}/about{C.RESET}                          Data attribution, licenses & credits (NOTICE)
-    {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
+    {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit pro-football-slm
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
 
 
@@ -11469,7 +11486,7 @@ def show_startup_loading(is_interactive: bool = True, seasons: Optional[List[int
         (f"Loading NFL play-by-play data for years [{seasons_str}]...", 45),
         ("Downcasting floats & optimizing memory...", 70),
         ("Calibrating chalkboard & multi-angle visualizers...", 90),
-        ("Ready! Launching NFL-STAT-CLI...", 100),
+        ("Ready! Launching Pro Football SLM...", 100),
     ]
     bar_width = 30
     frames = ConsoleSpinner.SPINNER_FRAMES
@@ -11516,8 +11533,8 @@ def interactive_tui(
     print(AsciiArtRenderer.banner())
     if error_ipc_enabled():
         try:
-            override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
-            existing = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
+            override = env_get("PFSLM_IPC_DIR", "").strip()
+            existing = Path(override) if override else default_data_dir() / "error_ipc"
             st = os.lstat(existing)
             if (not stat.S_ISLNK(st.st_mode)) and stat.S_ISDIR(st.st_mode):
                 cleanup_error_reports(existing)  # once-daily prune; never raises
@@ -11557,9 +11574,9 @@ def interactive_tui(
             if _GLOBAL_COMPLETER:
                 _GLOBAL_COMPLETER.set_context(None)
             _sample_tag = f"{C.BOLD}{C.RED}[SAMPLE DATA]{C.RESET} " if any(p.get("is_sample") for p in plays) else ""
-            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}nfl-stat {_sample_tag}{C.BOLD}{C.GOLD}> {C.RESET}").lstrip("\ufeff").strip()
+            raw_in = prompt_input(f"\n{C.BOLD}{C.GOLD}pro-football-slm {_sample_tag}{C.BOLD}{C.GOLD}> {C.RESET}").lstrip("\ufeff").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nExiting nfl-stat-cli.")
+            print(f"\nExiting {PRODUCT_NAME}.")
             break
 
         if not raw_in:
@@ -11567,7 +11584,7 @@ def interactive_tui(
 
         low_in = raw_in.lower()
         if low_in in ("q", "quit", "/quit", "/q", "close", "/close", "exit", "/exit"):
-            print("Exiting nfl-stat-cli.")
+            print(f"Exiting {PRODUCT_NAME}.")
             break
 
         try:
@@ -11883,7 +11900,7 @@ def interactive_tui(
                         )
                     except OSError as save_err:
                         print(f"  {C.RED}✖ Could not save the error report: {sanitize_ipc_text(save_err, 200)}{C.RESET}")
-                        print(f"  {C.DIM}Set NFL_STAT_IPC_DIR to a writable folder and try again.{C.RESET}")
+                        print(f"  {C.DIM}Set PFSLM_IPC_DIR to a writable folder and try again.{C.RESET}")
                         continue
                     rep_id = rep["id"]
                     print(f"\n  {C.GREEN}✔ Error report `{rep_id}` saved to the local error IPC folder.{C.RESET}")
@@ -11919,7 +11936,7 @@ def interactive_tui(
                                 reload_choice = "n"
                             if reload_choice in ("y", "yes"):
                                 try:
-                                    _cur_mod = reload_nfl_stat_cli()
+                                    _cur_mod = reload_pro_football_slm()
                                     engine = _cur_mod.StatEngine()
                                     re_parsed = _cur_mod.NaturalLanguageStatAssistant.interpret_query(
                                         last_query_raw, engine=engine, slm_model=slm_model, pre_detected_model=detected_slm, default_season=active_season
@@ -11936,7 +11953,7 @@ def interactive_tui(
                 elif cmd_token in ("/reload", "/update", "/refresh"):
                     if cmd_token == "/update" and "--git" in cmd_args:
                         try:
-                            go = prompt_input(f"  {C.BOLD}Run `git pull --ff-only` in the nfl-stat-cli checkout? [y/N]: {C.RESET}").strip().lower() in ("y", "yes") if is_interactive else False
+                            go = prompt_input(f"  {C.BOLD}Run `git pull --ff-only` in the pro-football-slm checkout? [y/N]: {C.RESET}").strip().lower() in ("y", "yes") if is_interactive else False
                         except (EOFError, KeyboardInterrupt):
                             go = False
                         if not go:
@@ -11952,9 +11969,9 @@ def interactive_tui(
                                 continue
                         except (EOFError, KeyboardInterrupt):
                             continue
-                    print(f"  {C.CYAN}🔄 Reloading nfl-stat-cli modules and custom stats in-place (no git pull)...{C.RESET}")
+                    print(f"  {C.CYAN}🔄 Reloading pro-football-slm modules and custom stats in-place (no git pull)...{C.RESET}")
                     try:
-                        _cur_mod = reload_nfl_stat_cli()
+                        _cur_mod = reload_pro_football_slm()
                         engine = _cur_mod.StatEngine()
                         res_info = ""
                         if error_ipc_enabled():
@@ -12038,7 +12055,7 @@ def interactive_tui(
                     os.system("cls" if os.name == "nt" else "clear")
                     print(AsciiArtRenderer.banner())
                 elif cmd_token in ("/about", "/license", "/credits", "/notice"):
-                    print(attribution.about_text())
+                    print(f"{PRODUCT_NAME}\n{PRODUCT_TAGLINE}\n{AFFILIATION_DISCLAIMER}\n\n{attribution.about_text()}")
                 else:
                     print(f"  {C.YELLOW}Unknown command `{cmd_token}`. Type `/help` to see all available slash commands.{C.RESET}")
                     continue
@@ -12097,15 +12114,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Camera perspective when rendering a play on the ASCII field (default: behind-offense)",
     )
     common.add_argument("--slm-model", default=argparse.SUPPRESS, help="Optional local Ollama SLM model name (e.g. qwen2.5:1.5b, llama3.2:1b) for NL queries")
-    common.add_argument("--require-live", action="store_true", default=argparse.SUPPRESS, help="Fail instead of falling back to built-in sample data when no live NFL data backend is available (also NFL_STAT_REQUIRE_LIVE=1)")
+    common.add_argument("--require-live", action="store_true", default=argparse.SUPPRESS, help="Fail instead of falling back to built-in sample data when no live NFL data backend is available (also PFSLM_REQUIRE_LIVE=1)")
     common.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help="Disable ANSI color codes")
 
     parser = argparse.ArgumentParser(
-        prog="nfl-stat-cli",
+        prog="pro-football-slm",
         parents=[common],
         description="Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, multi-angle play diagrammer, & composable custom stat CLI.",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
+    parser.epilog = "Short form: pfslm. Legacy alias: nfl-stat"
     parser.add_argument("--about", action="store_true", default=False, help="Show data attribution, licenses and credits (NOTICE) and exit")
     parser.set_defaults(
         engine="auto",
@@ -12205,6 +12223,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "about", False):
+        print(f"{PRODUCT_NAME}\n{PRODUCT_TAGLINE}\n{AFFILIATION_DISCLAIMER}\n\n{attribution.about_text()}")
+        return 0
 
     colour_snapshot = C.snapshot()
     try:
@@ -12218,7 +12239,7 @@ def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         C.disable()
 
     if getattr(args, "about", False) or args.command == "about":
-        print(attribution.about_text())
+        print(f"{PRODUCT_NAME}\n{PRODUCT_TAGLINE}\n{AFFILIATION_DISCLAIMER}\n\n{attribution.about_text()}")
         return 0
 
     bridge = NFLDataBridge(engine=args.engine, require_live=True if getattr(args, "require_live", False) else None)

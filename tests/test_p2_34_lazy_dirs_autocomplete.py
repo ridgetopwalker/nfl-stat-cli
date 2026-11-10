@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 REPO = Path(__file__).resolve().parent.parent
 
 
 def _sample_only_names():
-    from nfl_stat_cli.contracts import NFL_CONTRACTS
+    from pro_football_slm.contracts import NFL_CONTRACTS
     known = set()
     for c in NFL_CONTRACTS:
         parts = c.name.split()
@@ -32,9 +32,9 @@ def test_importing_and_constructing_creates_nothing_in_home(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "PYTHONPATH": str(REPO)}
-    env.pop("NFL_STAT_IPC_DIR", None)
+    env.pop("PFSLM_IPC_DIR", None)
     code = (
-        "import nfl_stat_cli as c\n"
+        "import pro_football_slm as c\n"
         "e = c.StatEngine()\n"
         "b = c.NFLDataBridge(engine='offline')\n"
         "c.get_ipc_dir(create=False)\n"
@@ -77,7 +77,7 @@ def test_cache_dir_can_be_reassigned(tmp_path):
 @pytest.fixture
 def ipc_env(tmp_path, monkeypatch):
     target = tmp_path / "ipc"
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(target))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(target))
     return target
 
 
@@ -111,7 +111,7 @@ def test_read_only_call_still_refuses_a_symlinked_existing_dir(tmp_path, monkeyp
     real.mkdir()
     link = tmp_path / "link"
     link.symlink_to(real, target_is_directory=True)
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(link))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(link))
     with pytest.raises(PermissionError):
         cli.get_ipc_dir(create=False)
 
@@ -187,7 +187,7 @@ def test_tui_binds_completer_to_the_loaded_plays(monkeypatch, tmp_path):
 @pytest.mark.skipif(os.name == "nt", reason="symlink checks are POSIX-only")
 def test_wait_for_resolution_rechecks_directories_that_appear_while_polling(tmp_path, monkeypatch):
     target = tmp_path / "ipc"
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(target))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(target))
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
 
@@ -218,11 +218,11 @@ def test_cleanup_error_reports_does_not_create_ipc_dir(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("NFL_STAT_IPC_DIR", raising=False)
-    target = home / ".nfl_stat_cli" / "error_ipc"
+    monkeypatch.delenv("PFSLM_IPC_DIR", raising=False)
+    target = home / ".pro_football_slm" / "error_ipc"
     assert not target.exists()
     result = cli.cleanup_error_reports(force=True)
     assert isinstance(result, dict)
     assert result.get("skipped") == 1
     assert not target.exists()
-    assert not (home / ".nfl_stat_cli").exists()
+    assert not (home / ".pro_football_slm").exists()

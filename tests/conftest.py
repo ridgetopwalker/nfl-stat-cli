@@ -2,7 +2,7 @@
 
 Every test runs with:
   * a throw-away HOME / USERPROFILE (nothing is read from or written to the real
-    ``~/.nfl_stat_cli`` cache and custom-stat store); this is also applied for the whole session
+    ``~/.pro_football_slm`` cache and custom-stat store); this is also applied for the whole session
     before the package is imported,
   * an isolated error-IPC directory (nothing is written to the repository's
     ``.error_ipc`` where a running watcher could act on it),
@@ -17,6 +17,7 @@ unreachable Ollama URL, IPC dir) but not the in-process guards.
 """
 import inspect
 import ipaddress
+import os
 import socket
 import subprocess
 import tempfile
@@ -38,9 +39,12 @@ def _set_home(monkeypatch, home):
 def pytest_configure(config):
     """Isolate HOME before any test module (and therefore the package) is imported."""
     config._nfl_session_mp = pytest.MonkeyPatch()
+    for name in list(os.environ):
+        if name.startswith(("PFSLM_", "NFL_STAT_")):
+            config._nfl_session_mp.delenv(name, raising=False)
     config._nfl_session_home = tempfile.TemporaryDirectory(prefix="nfl-test-home-")
     _set_home(config._nfl_session_mp, config._nfl_session_home.name)
-    config._nfl_session_mp.setenv("NFL_STAT_SLM_MODEL", "off")
+    config._nfl_session_mp.setenv("PFSLM_SLM_MODEL", "off")
 
 
 def pytest_unconfigure(config):
@@ -70,21 +74,25 @@ def _is_blocked_git(argv):
 
 @pytest.fixture(autouse=True)
 def _hermetic_environment(tmp_path_factory, monkeypatch):
+    for name in list(os.environ):
+        if name.startswith(("PFSLM_", "NFL_STAT_")):
+            monkeypatch.delenv(name, raising=False)
+    # Re-establish safe values after clearing inherited PFSLM_/NFL_STAT_ overrides.
     home = tmp_path_factory.mktemp("home")
     ipc = tmp_path_factory.mktemp("error_ipc")
     _set_home(monkeypatch, home)
-    monkeypatch.setenv("NFL_STAT_SLM_MODEL", "off")
+    monkeypatch.setenv("PFSLM_SLM_MODEL", "off")
     # Even if a test forgets to disable the SLM, the probe cannot reach a real Ollama server.
-    monkeypatch.setenv("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:9")
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(ipc))
+    monkeypatch.setenv("PFSLM_OLLAMA_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(ipc))
 
-    import nfl_stat_cli as cli
+    import pro_football_slm as cli
 
-    # Builds that do not yet honour NFL_STAT_IPC_DIR resolve the IPC dir inside the repo checkout.
+    # Builds that do not yet honour PFSLM_IPC_DIR resolve the IPC dir inside the repo checkout.
     # Detect that from the source (calling it would create the directory we want to avoid) and
     # redirect it; test_hermetic.py asserts the resulting property either way.
     try:
-        honours_env = "NFL_STAT_IPC_DIR" in inspect.getsource(cli.get_ipc_dir)
+        honours_env = "PFSLM_IPC_DIR" in inspect.getsource(cli.get_ipc_dir)
     except (OSError, TypeError):
         honours_env = False
     if not honours_env:

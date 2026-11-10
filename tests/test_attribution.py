@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
-from nfl_stat_cli import attribution as attr
+import pro_football_slm as cli
+from pro_football_slm import attribution as attr
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -35,13 +35,13 @@ def isolated_home(tmp_path, monkeypatch):
 
 def _env(home):
     env = dict(os.environ)
-    env.update({"HOME": str(home), "USERPROFILE": str(home), "NFL_STAT_SLM_MODEL": "off"})
+    env.update({"HOME": str(home), "USERPROFILE": str(home), "PFSLM_SLM_MODEL": "off"})
     return env
 
 
 def _run(home, *args, stdin=None):
     return subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", *args],
+        [sys.executable, "-m", "pro_football_slm", *args],
         input=stdin, capture_output=True, text=True, env=_env(home), cwd=str(ROOT), timeout=120,
     )
 
@@ -55,7 +55,8 @@ def test_notice_file_matches_generated_text_and_required_credit():
     assert "https://creativecommons.org/licenses/by/4.0/" in text
     assert "CC BY 4.0" in text
     assert "Changes:" in text and "derived statistics" in text
-    assert "not affiliated with or endorsed by" in text
+    assert "This project is not affiliated with or endorsed by nflverse, FTN, the NFL, or any team.\n" in text
+    assert text.startswith("This software is MIT-licensed")
     assert "MIT" in text and "code only" in text
     # FTN paragraph only appears when FTN data is loaded
     assert "CC BY-SA 4.0" not in text
@@ -120,7 +121,7 @@ def test_no_verified_otc_spotrac_sourcing_claim_in_package():
         "verified filings",
     )
     hits = []
-    for path in (ROOT / "nfl_stat_cli").rglob("*"):
+    for path in (ROOT / "pro_football_slm").rglob("*"):
         if not path.is_file():
             continue
         if path.suffix not in {".py", ".md", ".txt", ".R"} and path.name not in {"NOTICE"}:
@@ -141,14 +142,14 @@ def test_no_verified_otc_spotrac_sourcing_claim_in_package():
 
 
 def test_contract_and_coach_footers_use_lawyer_wording():
-    from nfl_stat_cli.contracts import render_contracts_leaderboard_view
+    from pro_football_slm.contracts import render_contracts_leaderboard_view
     board = cli.strip_ansi(render_contracts_leaderboard_view(contract_type="player", limit=5))
     assert LAWYER_CONTRACT_FOOTER in board
     assert "Verified" not in board
     coach = cli.strip_ansi(cli.render_coaching_staff_view("KC"))
     assert LAWYER_COACH_FOOTER in coach
     # module docstring / comment also updated
-    csrc = (ROOT / "nfl_stat_cli" / "contracts.py").read_text(encoding="utf-8")
+    csrc = (ROOT / "pro_football_slm" / "contracts.py").read_text(encoding="utf-8")
     assert "compiled from public reports (approximate)" in csrc
     assert "OverTheCap & Spotrac verified filings" not in csrc
 
@@ -464,8 +465,8 @@ def test_table_and_text_exports_carry_credit(tmp_path, monkeypatch):
 # --- datasets gate -------------------------------------------------------------------------
 
 def _loader_calls():
-    py = (ROOT / "nfl_stat_cli" / "__init__.py").read_text(encoding="utf-8")
-    r = (ROOT / "nfl_stat_cli" / "nflverse_bridge.R").read_text(encoding="utf-8")
+    py = (ROOT / "pro_football_slm" / "__init__.py").read_text(encoding="utf-8")
+    r = (ROOT / "pro_football_slm" / "nflverse_bridge.R").read_text(encoding="utf-8")
     calls = set(re.findall(r"\b(?:nfl|nfl_data|sdv_nfl)\.(\w+)\(", py))
     calls |= set(re.findall(r"nflreadr::(\w+)", r))
     calls |= set(re.findall(r'"pbp <- (\w+)\(', py))
@@ -476,7 +477,7 @@ def test_only_reviewed_nflverse_datasets_are_loaded():
     """Attribution gate: adding a loader (FTN/NGS/PFR/ESPN/...) must come with a license review."""
     assert _loader_calls() == {"load_pbp", "import_pbp_data", "load_nfl_pbp", "load_teams"}
     forbidden = re.compile(r"ftn_charting|\b(?:load|import)_(?:ftn|nextgen|ngs|pfr|espn)\w*", re.I)
-    for f in (ROOT / "nfl_stat_cli").rglob("*.py"):
+    for f in (ROOT / "pro_football_slm").rglob("*.py"):
         if f.name == "attribution.py":
             continue
         assert not forbidden.search(f.read_text(encoding="utf-8")), f.name
@@ -517,3 +518,7 @@ def test_constructing_a_bridge_does_not_overwrite_the_active_source(tmp_path):
 
 def test_unidentified_python_backend_is_not_credited_as_nflverse():
     assert attr.classify_source(attr.LABEL_PYTHON_UNIDENTIFIED) == "sample"
+
+
+def test_packaged_notice_matches_generated_notice():
+    assert (ROOT / "pro_football_slm" / "NOTICE.txt").read_text(encoding="utf-8") == attr.render_notice()

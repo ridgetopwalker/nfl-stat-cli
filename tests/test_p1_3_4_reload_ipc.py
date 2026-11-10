@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 def _fake_git_env(tmp_path):
@@ -25,8 +25,8 @@ def _fake_git_env(tmp_path):
     env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
     env["PYTHONPATH"] = str(Path(cli.__file__).resolve().parent.parent)
     env["HOME"] = str(tmp_path / "home")
-    env["NFL_STAT_IPC_DIR"] = str(tmp_path / "ipc")
-    env.pop("NFL_STAT_ALLOW_GIT_UPDATE", None)
+    env["PFSLM_IPC_DIR"] = str(tmp_path / "ipc")
+    env.pop("PFSLM_ALLOW_GIT_UPDATE", None)
     return env, log
 
 
@@ -35,7 +35,7 @@ def _fake_git_env(tmp_path):
 def test_tui_reload_commands_never_invoke_git(tmp_path, cmd):
     env, log = _fake_git_env(tmp_path)
     res = subprocess.run(
-        [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025"],
+        [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025"],
         input=f"{cmd}\nquit\n", capture_output=True, text=True, env=env, cwd=str(tmp_path),
     )
     assert res.returncode == 0, res.stderr
@@ -49,13 +49,13 @@ def test_reload_function_does_not_run_subprocess(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(("run", a)))
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: calls.append(("Popen", a)))
     # pull_git=True is accepted for compatibility but ignored
-    mod = cli.reload_nfl_stat_cli(pull_git=True)
-    assert hasattr(mod, "reload_nfl_stat_cli")
+    mod = cli.reload_pro_football_slm(pull_git=True)
+    assert hasattr(mod, "reload_pro_football_slm")
     assert calls == []  # recorded rather than raised: the old code swallowed exceptions around git pull
 
 
 def test_git_update_is_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("NFL_STAT_ALLOW_GIT_UPDATE", raising=False)
+    monkeypatch.delenv("PFSLM_ALLOW_GIT_UPDATE", raising=False)
     def boom(*a, **k):
         raise AssertionError("git must not run when update is not allowed")
     monkeypatch.setattr(subprocess, "run", boom)
@@ -64,14 +64,14 @@ def test_git_update_is_disabled_by_default(monkeypatch):
 
 
 def test_git_update_requires_tty(monkeypatch):
-    monkeypatch.setenv("NFL_STAT_ALLOW_GIT_UPDATE", "1")
+    monkeypatch.setenv("PFSLM_ALLOW_GIT_UPDATE", "1")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
     ok, msg = cli.git_update_package()
     assert ok is False and "interactive" in msg
 
 
 def test_git_update_is_ff_only_and_pinned_to_package_root(monkeypatch):
-    monkeypatch.setenv("NFL_STAT_ALLOW_GIT_UPDATE", "1")
+    monkeypatch.setenv("PFSLM_ALLOW_GIT_UPDATE", "1")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
     pkg_root = Path(cli.__file__).resolve().parent.parent
@@ -101,7 +101,7 @@ def test_git_update_is_ff_only_and_pinned_to_package_root(monkeypatch):
 
 @pytest.fixture
 def ipc(tmp_path, monkeypatch):
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(tmp_path / "ipc"))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(tmp_path / "ipc"))
     return tmp_path / "ipc"
 
 
@@ -149,7 +149,7 @@ def test_wait_for_resolution_times_out(ipc):
 
 def test_wait_for_resolution_returns_payload_without_reloading(ipc, monkeypatch):
     called = []
-    monkeypatch.setattr(cli, "reload_nfl_stat_cli", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(cli, "reload_pro_football_slm", lambda *a, **k: called.append(1))
     rep = _report()
     cli.write_resolution(rep["id"], "fixed", commit="abc123")
     data = cli.wait_for_resolution(rep["id"], poll_interval=0.01, timeout=1)
@@ -181,19 +181,19 @@ def test_sanitize_ipc_text_strips_ansi_and_controls():
 @pytest.mark.skipif(sys.platform == "win32", reason="uses piped TUI stdin")
 def test_tui_error_command_is_opt_in_and_never_force_reloads(tmp_path):
     env, log = _fake_git_env(tmp_path)
-    env.pop("NFL_STAT_ENABLE_ERROR_IPC", None)
-    base_args = [sys.executable, "-m", "nfl_stat_cli", "tui", "--engine", "offline", "--season", "2025"]
+    env.pop("PFSLM_ENABLE_ERROR_IPC", None)
+    base_args = [sys.executable, "-m", "pro_football_slm", "tui", "--engine", "offline", "--season", "2025"]
 
     # Explicit opt-out: no report written
-    env["NFL_STAT_DISABLE_ERROR_IPC"] = "1"
+    env["PFSLM_DISABLE_ERROR_IPC"] = "1"
     res = subprocess.run(base_args, input="epa per play\n/error bad\nquit\n", capture_output=True, text=True, env=env, cwd=str(tmp_path))
     out = cli.strip_ansi(res.stdout)
     assert "turned off" in out
     assert not (tmp_path / "ipc" / "pending").exists() or not list((tmp_path / "ipc" / "pending").glob("err_*.json"))
-    env.pop("NFL_STAT_DISABLE_ERROR_IPC")
+    env.pop("PFSLM_DISABLE_ERROR_IPC")
 
     # Enabled: a resolution file planted with ANSI text must not trigger a reload without consent
-    env["NFL_STAT_ENABLE_ERROR_IPC"] = "1"
+    env["PFSLM_ENABLE_ERROR_IPC"] = "1"
     ipc_dir = tmp_path / "ipc"
 
     def plant():
@@ -221,7 +221,7 @@ def test_tui_error_command_is_opt_in_and_never_force_reloads(tmp_path):
     assert "\x1b[2J" not in out
     assert "A resolution signal was received" in cli.strip_ansi(out)
     assert "Not reloading" in cli.strip_ansi(out)
-    assert "Reloading nfl-stat-cli" not in cli.strip_ansi(out)
+    assert "Reloading pro-football-slm" not in cli.strip_ansi(out)
     assert "Error during hot-reload" not in cli.strip_ansi(out)
 
 
@@ -231,7 +231,7 @@ def test_ipc_dir_symlink_is_refused(tmp_path, monkeypatch):
     real.mkdir()
     link = tmp_path / "link"
     os.symlink(real, link)
-    monkeypatch.setenv("NFL_STAT_IPC_DIR", str(link))
+    monkeypatch.setenv("PFSLM_IPC_DIR", str(link))
     with pytest.raises(PermissionError):
         cli.get_ipc_dir()
 

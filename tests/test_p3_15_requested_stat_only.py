@@ -1,7 +1,7 @@
 """Regression tests for #15: a leaderboard evaluates the requested stat (and its dependencies), not every registered stat."""
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 PLAYS = cli.SAMPLE_PBP_PLAYS
 

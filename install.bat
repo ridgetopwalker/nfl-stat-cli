@@ -1,8 +1,8 @@
 @echo off
 REM ============================================================================
-REM nfl-stat-cli : Run-Once Windows Installer Bootstrapper
+REM pro-football-slm : Run-Once Windows Installer Bootstrapper
 REM Installs Python (if needed), pip (if needed), all required packages,
-REM and sets up nfl-stat-cli.
+REM and sets up pro-football-slm.
 REM ============================================================================
 setlocal
 cd /d "%~dp0"

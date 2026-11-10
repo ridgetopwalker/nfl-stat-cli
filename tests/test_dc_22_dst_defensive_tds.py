@@ -4,7 +4,7 @@ Synthetic plays only. Game id format is season_week_AWAY_HOME.
 """
 import pytest
 
-from nfl_stat_cli import fantasy as fa
+from pro_football_slm import fantasy as fa
 
 GID = "2025_01_OFF_DDD"
 

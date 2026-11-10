@@ -1,7 +1,7 @@
 """Golden tests: pass-play production is credited to the passer, not the receiver (issue #5)."""
 import pytest
 
-import nfl_stat_cli as cli
+import pro_football_slm as cli
 
 
 def _play(idx, **kw):

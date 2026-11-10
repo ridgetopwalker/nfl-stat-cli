@@ -1,5 +1,5 @@
 #!/usr/bin/env Rscript
-# nflverse_bridge.R — R Data & Modeling Bridge for nfl-stat-cli
+# nflverse_bridge.R — R Data & Modeling Bridge for pro-football-slm
 # Uses {nflverse}, {nflreadr}, and {nflfastR} to pull play-by-play data,
 # EPA/WPA/CPOE/xYAC models, and screen-pass / play-direction flags.
 
