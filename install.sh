@@ -52,13 +52,15 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
+# Run the package in-place (works without `pip install`, from any directory).
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+    exec "$SCRIPT_DIR/.venv/bin/python" -m nfl_stat_cli "$@"
 else
-    exec python3 "$SCRIPT_DIR/nfl_stat_cli.py" "$@"
+    exec python3 -m nfl_stat_cli "$@"
 fi
 EOF
-    chmod +x "$SCRIPT_DIR/nfl-stat" "$SCRIPT_DIR/nfl_stat_cli.py"
+    chmod +x "$SCRIPT_DIR/nfl-stat"
 }
 
 prompt_add_to_path() {
