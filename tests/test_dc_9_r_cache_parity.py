@@ -23,12 +23,12 @@ RAW_PLAYS = [
     (3, "ZZZ", "kickoff", 0, 0, 0, 0, "kickoff into the end zone"),
     (4, "ZZZ", "no_play", 0, 0, 1, 0, "false start, no play"),
     (5, "ZZZ", "no_play", 0, 0, 0, 1, "timeout called"),
-    (6, "ZZZ", "punt", 0, 0, 0, 0, "punt, penalty declined"),      # kept by the shared desc rule
+    (6, "ZZZ", "punt", 0, 0, 0, 0, "punt, penalty declined"),      # dropped (#17): a declined penalty does not make a punt a play
     (7, "ZZZ", "run", 0, 0, 0, 0, "typed run without attempt flag"),  # kept by play_type rule
     (8, "", "pass", 1, 0, 0, 0, "no possession team"),            # never kept
     (9, "ZZZ", "field_goal", 0, 0, 0, 0, "field goal is good"),
 ]
-EXPECTED_IDS = {1, 2, 4, 5, 6, 7}
+EXPECTED_IDS = {1, 2, 4, 5, 7}
 
 
 def _csv_text(plays=RAW_PLAYS, season=2025):
