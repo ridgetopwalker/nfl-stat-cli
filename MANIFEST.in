@@ -2,11 +2,9 @@ include LICENSE
 include NOTICE
 include README.md
 include pyproject.toml
-include nflverse_bridge.R
 include pro_football_slm/*.R
-include custom_stats_export.json
 include install.sh
 include install.bat
 include install.ps1
+include requirements-live.txt
 global-exclude *.py[cod] __pycache__ *.so *.dylib .DS_Store *.docx *.zip
-include pro_football_slm.py

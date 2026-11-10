@@ -8,7 +8,7 @@ version = "2.0.0"
 description = "Pro Football SLM: the American pro football stat engine. Cross-platform colorized terminal analytics, play visualizer, and composable custom stats (nflverse / sportsdataverse + optional local SLM)."
 readme = {file = "README.md", content-type = "text/markdown"}
 license = {file = "LICENSE"}
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [
   {name = "Sean McClain", email = "dev@ridgetopwalker.com"}
 ]
@@ -30,7 +30,7 @@ keywords = [
   "pro-football-slm",
 ]
 classifiers = [
-  "Development Status :: 5 - Production/Stable",
+  "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Intended Audience :: End Users/Desktop",
@@ -38,8 +38,6 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -72,9 +70,8 @@ Issues = "https://github.com/ridgetopwalker/nfl-stat-cli/issues"
 Changelog = "https://github.com/ridgetopwalker/nfl-stat-cli/releases"
 
 [project.scripts]
+nfl-stat = "pro_football_slm:main"
 pro-football-slm = "pro_football_slm:main"
-pfslm = "pro_football_slm:main"
-nfl-stat = "pro_football_slm.shim:main"
 
 [tool.setuptools]
 packages = ["pro_football_slm"]

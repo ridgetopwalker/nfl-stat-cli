@@ -8,8 +8,10 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
+# Run the package in-place (works without `pip install`, from any directory).
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/pro_football_slm.py" "$@"
+    exec "$SCRIPT_DIR/.venv/bin/python" -m pro_football_slm "$@"
 else
-    exec python3 "$SCRIPT_DIR/pro_football_slm.py" "$@"
+    exec python3 -m pro_football_slm "$@"
 fi

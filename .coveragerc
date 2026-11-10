@@ -1,0 +1,7 @@
+[run]
+source = pro_football_slm
+branch = True
+
+[report]
+show_missing = True
+skip_empty = True
