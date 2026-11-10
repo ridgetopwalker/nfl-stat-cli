@@ -131,4 +131,4 @@ pip install "nfl-stat-cli[live]"
 
 ## License
 
-Released under the [MIT License](LICENSE). Play-by-play data provided via [nflverse/nflverse-data](https://github.com/nflverse/nflverse-data) (CC-BY 4.0) and [sportsdataverse-py](https://github.com/sportsdataverse/sportsdataverse-py).
+Code: MIT (see LICENSE). Data: nflverse (https://github.com/nflverse/nflverse-data), CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); we aggregate and derive statistics from it. Optional Python backend: sportsdataverse-py (https://github.com/sportsdataverse/sportsdataverse-py, MIT). Contract and coaching-staff tables are compiled by us from public reports. See NOTICE. Not affiliated with or endorsed by the NFL, nflverse, sportsdataverse, Over The Cap, or Spotrac.

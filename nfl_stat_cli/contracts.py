@@ -1,6 +1,6 @@
 """
 NFL-Stat-CLI Player & Coach Contract Analytics Engine.
-Provides comprehensive, publicly sourced contract data from OverTheCap & Spotrac:
+Provides contract data compiled from public reports (approximate):
 - Player contracts across all positions (Quarterbacks, Skill Positions, Linemen, Defense).
 - Head Coach contracts, salaries, and contract expiration horizons.
 - Team payroll distributions, cap hits, guaranteed allocations, and free agency classes.
@@ -33,7 +33,7 @@ class ContractRecord:
     notes: str = ""
 
 
-# Publicly compiled NFL contracts (OverTheCap & Spotrac verified filings):
+# Contract figures compiled from public reports (approximate):
 NFL_CONTRACTS: List[ContractRecord] = [
     # ------------------ QUARTERBACKS ------------------
     ContractRecord("Patrick Mahomes", "KC", "QB", "player", 450.0, 45.0, 141.5, 10, 2020, 2032, 37.0, "10-yr extension, rolling guarantees & roster bonus restructuring"),
@@ -415,7 +415,7 @@ def render_contracts_leaderboard_view(
         rows,
         alignments=["right", "left", "center", "center", "right", "right", "right", "center", "right", "center"],
     )
-    footer = f"\n  {C.DIM}Contract Source: Verified public OverTheCap & Spotrac NFL contract filings.{C.RESET}"
+    footer = f"\n  {C.DIM}Contract figures: compiled from public reports; approximate and may be out of date. Not affiliated with Over The Cap or Spotrac.{C.RESET}"
     return f"\n{tbl}{footer}"
 
 

@@ -78,6 +78,7 @@ from .contracts import (
     render_team_payroll_view,
     interactive_contracts_browser,
 )
+from . import attribution
 
 __version__ = "2.0.0"
 __author__ = "Sean McClain"
@@ -278,6 +279,18 @@ LAST_RAW_OUTPUT: str = ""
 LAST_RESULT_RECORDS: Optional[List[Dict[str, Any]]] = None
 
 
+def attribution_footer() -> str:
+    """Dim, indented credit footer for the data that actually backs the result (see attribution.py)."""
+    lines = attribution.footer_text().split("\n")
+    return "\n".join(f"  {C.DIM}{ln}{C.RESET}" for ln in lines)
+
+
+def _write_csv_license_comment(f: Any) -> None:
+    """Write the license/attribution comment line(s) that start every CSV export."""
+    for line in attribution.csv_comment_lines():
+        f.write(line + "\n")
+
+
 def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
     """
     Export the data rows from the last executed query or stat result to CSV or JSON.
@@ -320,6 +333,7 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
                     "title": "NFL Stat Query Result",
                     "text": LAST_RAW_OUTPUT,
                 }
+            payload["license"] = attribution.json_license_block()
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
             num_rows = len(payload.get("records", [])) if "records" in payload else 1
@@ -328,6 +342,7 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
         elif ext == ".csv":
             if LAST_RENDERED_TABLE and LAST_RENDERED_TABLE.get("headers") and LAST_RENDERED_TABLE.get("rows"):
                 with open(path, "w", encoding="utf-8", newline="") as f:
+                    _write_csv_license_comment(f)
                     writer = csv.writer(f)
                     writer.writerow(LAST_RENDERED_TABLE["headers"])
                     for row in LAST_RENDERED_TABLE["rows"]:
@@ -336,6 +351,7 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
             elif LAST_RESULT_RECORDS:
                 keys = list(LAST_RESULT_RECORDS[0].keys())
                 with open(path, "w", encoding="utf-8", newline="") as f:
+                    _write_csv_license_comment(f)
                     writer = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
                     writer.writeheader()
                     for r in LAST_RESULT_RECORDS:
@@ -344,6 +360,7 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
             else:
                 lines = [l for l in LAST_RAW_OUTPUT.splitlines() if l.strip()]
                 with open(path, "w", encoding="utf-8", newline="") as f:
+                    _write_csv_license_comment(f)
                     writer = csv.writer(f)
                     writer.writerow(["Line"])
                     for l in lines:
@@ -352,6 +369,7 @@ def export_last_result(target_path: Union[str, Path]) -> Tuple[bool, str]:
         else:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(LAST_RAW_OUTPUT or (LAST_RENDERED_TABLE.get("title", "") if LAST_RENDERED_TABLE else ""))
+                f.write("\n\n" + "\n".join(attribution.text_footer_lines()) + "\n")
             return True, f"Exported output to {path.resolve()}"
     except Exception as e:
         return False, f"Failed to export data to {path.resolve()}: {e}"
@@ -366,7 +384,7 @@ SLASH_COMMAND_OPTIONS: List[str] = [
     "/player", "/play", "/games", "/fantasy", "/sportsbook", "/contract", "/camera",
     "/season", "/why", "/error", "/reload", "/update", "/query", "/page", "/example",
     "/screen-pass", "/play-efficiency", "/export", "/export-stats", "/import",
-    "/clear", "/quit", "/exit"
+    "/clear", "/about", "/quit", "/exit"
 ]
 
 
@@ -1631,8 +1649,25 @@ class NFLDataBridge:
         self._cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
         self._cache_dir_ready = False
         self.engine = engine.lower()
-        self.last_source_used = "built-in-nflverse-sample"
+        self._last_source_used = attribution.LABEL_SAMPLE  # no data loaded yet; not a source change
         self.last_error: Optional[str] = None
+        self._python_backend_label: Optional[str] = None
+
+    @property
+    def last_source_used(self) -> str:
+        """Human-readable name of the backend that really supplied the last rows."""
+        return self._last_source_used
+
+    @last_source_used.setter
+    def last_source_used(self, value: str) -> None:
+        self._last_source_used = value
+        # Keep export metadata and footers pointed at the real source of the rows.
+        attribution.set_active_source(value)
+
+    @property
+    def last_source_kind(self) -> str:
+        """'nflverse', 'sportsdataverse' or 'sample' (never nflverse for sample/fallback rows)."""
+        return attribution.classify_source(self._last_source_used)
 
     @property
     def cache_dir(self) -> Path:
@@ -1662,25 +1697,27 @@ class NFLDataBridge:
         if self.engine in ("auto", "python", "sdv"):
             rows = self._try_sportsdataverse_py(seasons, spinner=spinner)
             if rows:
-                self.last_source_used = "nflreadpy / nfl_data_py (Python)"
+                # Report the backend that really produced the rows (not a generic nflverse label)
+                self.last_source_used = self._python_backend_label or attribution.LABEL_PYTHON_UNIDENTIFIED
                 return rows
 
         if self.engine in ("auto", "r", "nflverse"):
             rows = self._try_nflverse_r(seasons, spinner=spinner)
             if rows:
-                self.last_source_used = "nflverse / nflreadr (R)"
+                self.last_source_used = attribution.LABEL_NFLREADR
                 return rows
 
         if spinner:
             spinner.update("Downcasting floats & preparing offline dataset...")
 
-        self.last_source_used = "built-in nflverse/sdv offline dataset"
+        self.last_source_used = attribution.LABEL_SAMPLE
         norm_sample = [self._normalize_row(r, idx) for idx, r in enumerate(SAMPLE_PBP_PLAYS, 1)]
         # Never substitute another season's rows for the requested ones
         return [r for r in norm_sample if int(r.get("season", 0)) in seasons]
 
     def _try_sportsdataverse_py(self, seasons: List[int], spinner: Optional[Any] = None) -> Optional[List[Dict[str, Any]]]:
         errors: List[str] = []
+        self._python_backend_label = None
         try:
             import nflreadpy as nfl  # type: ignore[import]
             if spinner:
@@ -1691,6 +1728,7 @@ class NFLDataBridge:
             df = _downcast_dataframe_floats(df)
             rows = self._normalize_dataframe(df)
             if rows:
+                self._python_backend_label = attribution.LABEL_NFLREADPY
                 return rows
         except Exception as exc:
             errors.append(f"nflreadpy: {exc}")
@@ -1704,6 +1742,7 @@ class NFLDataBridge:
             df = _downcast_dataframe_floats(df)
             rows = self._normalize_dataframe(df)
             if rows:
+                self._python_backend_label = attribution.LABEL_NFL_DATA_PY
                 return rows
         except Exception as exc:
             errors.append(f"nfl_data_py: {exc}")
@@ -1717,6 +1756,7 @@ class NFLDataBridge:
             df = _downcast_dataframe_floats(df)
             rows = self._normalize_dataframe(df)
             if rows:
+                self._python_backend_label = attribution.LABEL_SPORTSDATAVERSE
                 return rows
         except Exception as exc:
             errors.append(f"sportsdataverse: {exc}")
@@ -8951,7 +8991,8 @@ def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None
     oc_name = staff.get("oc", "N/A")
     dc_name = staff.get("dc", "N/A")
     summary = f"  {C.BOLD}Head Coach:{C.RESET} {C.CYAN}{hc_name}{C.RESET}  │  {C.BOLD}OC:{C.RESET} {oc_name}  │  {C.BOLD}DC:{C.RESET} {dc_name}\n"
-    return summary + table
+    footer = f"\n  {C.DIM}Coaching staffs: compiled from public team announcements; may be out of date.{C.RESET}"
+    return summary + table + footer
 
 
 def render_team_drilldown_view(
@@ -11008,6 +11049,7 @@ def render_slash_help() -> str:
     {C.BOLD}{C.CYAN}/error{C.RESET} [notes]                  Save the last query + answer as a local error report (nothing is sent; old resolved/history pruned after 30d / ~500)
     {C.BOLD}{C.CYAN}/reload{C.RESET} | {C.BOLD}{C.CYAN}/update{C.RESET}             Reload code in-place (never runs git; `/update --git` needs NFL_STAT_ALLOW_GIT_UPDATE=1)
     {C.BOLD}{C.CYAN}/clear{C.RESET}                          Clear terminal screen
+    {C.BOLD}{C.CYAN}/about{C.RESET}                          Data attribution, licenses & credits (NOTICE)
     {C.BOLD}{C.CYAN}/quit{C.RESET} | {C.BOLD}{C.CYAN}/close{C.RESET} | {C.BOLD}{C.CYAN}quit{C.RESET} | {C.BOLD}{C.CYAN}close{C.RESET}   Exit nfl-stat-cli
 {C.BOLD}{C.CYAN}└───────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}"""
 
@@ -11161,8 +11203,8 @@ def interactive_tui(
     slm_status = f"Ollama SLM ({detected_slm})" if detected_slm else "Built-in Deterministic AST Parser (Offline)"
     if not is_interactive:
         print(f"  {C.GREEN}✔ Loaded {len(plays)} play-by-play records via [{bridge.last_source_used}]{C.RESET}")
-        if bridge.last_error and "offline" in bridge.last_source_used:
-            print(f"  {C.YELLOW}⚠ Live backend note ({bridge.last_error[:95]}) — using built-in offline dataset.{C.RESET}")
+        if bridge.last_error and bridge.last_source_kind == attribution.SOURCE_SAMPLE:
+            print(f"  {C.YELLOW}⚠ Live backend note ({bridge.last_error[:95]}) — using built-in sample data (not nflverse).{C.RESET}")
         print(f"  {C.CYAN}✔ Natural Language Engine: [{slm_status}] • Season: [{active_season}] • Camera: [{default_camera}]{C.RESET}")
         if not plays_for_season(plays, active_season):
             avail = ", ".join(map(str, available_seasons(plays))) or "none"
@@ -11636,8 +11678,13 @@ def interactive_tui(
                 elif cmd_token in ("/clear", "/cls"):
                     os.system("cls" if os.name == "nt" else "clear")
                     print(AsciiArtRenderer.banner())
+                elif cmd_token in ("/about", "/license", "/credits", "/notice"):
+                    print(attribution.about_text())
                 else:
                     print(f"  {C.YELLOW}Unknown command `{cmd_token}`. Type `/help` to see all available slash commands.{C.RESET}")
+                    continue
+                if attribution.wants_footer(cmd_token):
+                    print(attribution_footer())
                 continue
 
             # Default: Natural Language Query
@@ -11659,6 +11706,8 @@ def interactive_tui(
                 last_response_text = res_str
                 last_result_table = LAST_RENDERED_TABLE if LAST_RENDERED_TABLE is not _table_before else None
             print(res_str)
+            if attribution.wants_footer_for_intent(parsed):
+                print(attribution_footer())
         except KeyboardInterrupt:
             print(f"\n  {C.YELLOW}⚠ Operation cancelled.{C.RESET}")
         except Exception as exc:
@@ -11697,6 +11746,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, multi-angle play diagrammer, & composable custom stat CLI.",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--about", action="store_true", default=False, help="Show data attribution, licenses and credits (NOTICE) and exit")
     parser.set_defaults(
         engine="auto",
         season=CURRENT_SEASON,
@@ -11739,6 +11789,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     player_p = sub.add_parser("player", parents=[common], help="Drill down into player passing, rushing, and receiving stats")
     player_p.add_argument("player_name", nargs="?", default="Mahomes", help="Player name (e.g. Mahomes, Allen, Goff, Worthy)")
+
+    sub.add_parser("about", parents=[common], help="Show data attribution, licenses and credits (NOTICE)")
 
     sub.add_parser("list-stats", parents=[common], help="List all registered traditional and custom stats with their formulas and scopes")
 
@@ -11802,6 +11854,10 @@ def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
     if args.no_color:
         C.disable()
 
+    if getattr(args, "about", False) or args.command == "about":
+        print(attribution.about_text())
+        return 0
+
     bridge = NFLDataBridge(engine=args.engine)
     engine = StatEngine()
     for _warn in engine.load_warnings:
@@ -11861,6 +11917,8 @@ def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
             print(AsciiArtRenderer.banner())
             print(f"  {C.DIM}Data Source: {bridge.last_source_used}  |  Platform: {platform.system()} ({os.name}){C.RESET}")
             print(handle_nl_query_result(parsed, engine, all_plays, view_override=args.view, camera_override=args.camera))
+            if attribution.wants_footer_for_intent(parsed):
+                print(attribution_footer())
             return 0
 
         # Load the requested season plus the prior season (Stat Page lookback); no cross-season fallback
@@ -11963,6 +12021,7 @@ def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
                 unit="idx",
             )
             print(render_stat_page(engine, all_plays))
+        print(attribution_footer())
         return 0
     except (KeyError, ValueError, SyntaxError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(f"\n{C.RED}✖ Error: {exc}{C.RESET}", file=sys.stderr)
