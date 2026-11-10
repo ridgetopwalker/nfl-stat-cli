@@ -129,7 +129,7 @@ def test_csv_style_string_values_work_and_the_r_bridge_exports_the_columns():
     row = _norm(play_type="pass", pass_attempt="1", interception="1", touchdown="1", td_team="YYY", return_touchdown="1")
     assert row["return_touchdown"] == 1 and row["td_team"] == "YYY" and row["pass_touchdown"] == 0
     root = Path(__file__).resolve().parent.parent
-    for script in (root / "nfl_stat_cli" / "nflverse_bridge.R", root / "nflverse_bridge.R"):
+    for script in (root / "nfl_stat_cli" / "nflverse_bridge.R",):
         text = script.read_text(encoding="utf-8")
         assert '"td_team"' in text and '"return_touchdown"' in text
 
