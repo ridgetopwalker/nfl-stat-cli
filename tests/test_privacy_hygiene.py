@@ -38,10 +38,6 @@ PLACEHOLDER_USERS = {
     "circleci", "travis", "vagrant", "app", "git",
 }
 
-# TODO(#44): remove PENDING_44 and the xfail test below once the triage skill no longer
-# embeds local paths (it is reworked on its own branch).
-PENDING_44 = ".agents/skills/nfl-stat-error-triage/"
-
 SKIP_DIRS = {
     ".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".eggs",
     ".idea", ".vscode", "node_modules", "build", "dist", ".error_ipc",
@@ -164,14 +160,6 @@ def test_file_discovery_falls_back_outside_git(tmp_path):
 
 
 def test_tree_has_no_personal_email_or_local_paths():
-    files = [n for n in tracked_files() if not n.startswith(PENDING_44)]
+    files = tracked_files()
     assert files, "scanner found no files"
-    assert scan(files) == []
-
-
-@pytest.mark.xfail(raises=AssertionError, reason="local paths in the triage skill are being removed on the #44 branch", strict=True)
-def test_error_triage_skill_has_no_local_paths():
-    """strict: once #44 removes the paths this XPASSes and fails, which is the signal to delete PENDING_44."""
-    files = [n for n in tracked_files() if n.startswith(PENDING_44)]
-    assert files, "the exempted folder is gone: remove PENDING_44"
     assert scan(files) == []
