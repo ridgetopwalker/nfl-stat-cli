@@ -10,7 +10,9 @@ Provides contract data compiled from public reports (approximate):
 from __future__ import annotations
 
 import difflib
+import math
 import re
+import unicodedata
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -234,6 +236,56 @@ def get_all_coach_contracts() -> List[ContractRecord]:
     return coaches
 
 
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+_SURNAME_PARTICLES = {"st", "de", "di", "del", "la", "le", "van", "von"}
+_ROI_SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}  # positions that appear in the play-by-play name fields
+_PLAY_NAME_FIELDS = ("player_name", "qb_name", "rusher_player_name", "receiver_player_name")
+
+
+def name_match_key(name: Any) -> Optional[Tuple[str, str]]:
+    """
+    Normalize a player name to (first initial, surname) so full contract names ("Patrick Mahomes",
+    "C.J. Stroud", "Patrick Surtain II") match play-by-play forms ("P.Mahomes", "C.Stroud", "P.Surtain II").
+    Accents are folded ("Jose"), and a leading numeric id prefix ("00-") is ignored. Returns None for blank names.
+    """
+    raw = unicodedata.normalize("NFKD", str(name or "").strip())
+    raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
+    raw = re.sub(r"^\d+-", "", raw)
+    if not raw:
+        return None
+    raw = re.sub(r"\.(?=\S)", ". ", raw.replace("'", "").replace("\u2019", ""))
+    tokens = [t for t in re.sub(r"[^a-z0-9\s-]", " ", raw.lower()).split() if t]
+    while len(tokens) > 1 and tokens[-1] in _NAME_SUFFIXES:
+        tokens.pop()
+    if not tokens:
+        return None
+    if len(tokens) == 1:
+        return ("", tokens[0])
+    surname = tokens[-1]
+    if len(tokens) >= 3 and tokens[-2] in _SURNAME_PARTICLES:
+        surname = f"{tokens[-2]} {tokens[-1]}"
+    return (tokens[0][0], surname)
+
+
+_TEAM_ALIASES = {
+    "LAR": "LA", "STL": "LA", "SL": "LA", "JAC": "JAX", "WSH": "WAS", "OAK": "LV", "ARZ": "ARI",
+    "SD": "LAC", "BLT": "BAL", "CLV": "CLE", "HST": "HOU",
+}
+
+
+def _team_code(value: Any) -> str:
+    code = str(value or "").strip().upper()
+    return _TEAM_ALIASES.get(code, code)
+
+
+def _safe_epa(value: Any) -> float:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if math.isfinite(f) else 0.0  # NaN / inf -> 0.0
+
+
 def calculate_contract_performance_efficiency(
     contract: ContractRecord,
     plays: List[Dict[str, Any]],
@@ -244,21 +296,37 @@ def calculate_contract_performance_efficiency(
     - Cost per EPA: APY ($M) / Total Season EPA
     - Cost per Fantasy Point: APY ($M) / Total Season Fantasy Points
     - APY per Touchdown
+
+    Contracts carry full names while play-by-play uses abbreviated forms ("P.Mahomes"), so plays are
+    matched on a normalized (first initial, surname) key, and an abbreviated name must also be on the contract's
+    team (so uncataloged namesakes elsewhere are not credited). `epa_matched_plays` reports how many
+    plays were matched so callers can tell "no EPA" from "no name match".
     """
     from .fantasy import compute_player_fantasy_profile
 
     p_low = contract.name.strip().lower()
-    p_plays = [
-        p for p in plays
-        if (
-            str(p.get("player_name", "")).strip().lower() == p_low
-            or str(p.get("qb_name", "")).strip().lower() == p_low
-            or str(p.get("rusher_player_name", "")).strip().lower() == p_low
-            or str(p.get("receiver_player_name", "")).strip().lower() == p_low
-        )
-    ]
+    # Coaches are only matched on the exact full name: an abbreviated "J.Harbaugh" row is a player, not a coach
+    c_key = name_match_key(contract.name) if contract.contract_type != "coach" else None
+    c_team = _team_code(contract.team)
 
-    tot_epa = sum(float(p.get("epa", 0.0)) for p in p_plays)
+    def _play_matches(p: Dict[str, Any]) -> bool:
+        for field in _PLAY_NAME_FIELDS:
+            val = str(p.get(field, "") or "").strip()
+            if not val:
+                continue
+            if val.lower() == p_low:
+                return True
+            # An abbreviated name ("J.Allen") is shared by many league players, only some of whom are
+            # cataloged, so it must also be on the contract's team (rows without a team are accepted).
+            if c_key and name_match_key(val) == c_key:
+                p_team = _team_code(p.get("posteam"))
+                if not p_team or p_team == c_team:
+                    return True
+        return False
+
+    p_plays = [p for p in plays if _play_matches(p)]
+
+    tot_epa = sum(_safe_epa(p.get("epa", 0.0)) for p in p_plays)
     fprof = compute_player_fantasy_profile(contract.name, plays)
     f_pts = fprof.get("points_ppr", 0.0)
 
@@ -273,6 +341,7 @@ def calculate_contract_performance_efficiency(
         "apy_m": contract.apy_m,
         "cap_hit_m": contract.cap_hit_current_m,
         "total_epa": round(tot_epa, 1),
+        "epa_matched_plays": len(p_plays),
         "fantasy_points": round(f_pts, 1),
         "cost_per_epa_k": cost_per_epa_k,
         "cost_per_fpoint_k": cost_per_fpoint_k,
@@ -384,13 +453,21 @@ def render_player_contract_view(
 
     if plays and season:
         eff = calculate_contract_performance_efficiency(c, plays, season)
+        no_epa_match = eff["epa_matched_plays"] == 0
+        if no_epa_match and c.contract_type == "player" and c.position in _ROI_SKILL_POSITIONS:
+            # Say so instead of showing an empty-looking ROI card
+            lines.extend([
+                "",
+                f"  {C.YELLOW}⚠ EPA unavailable ({season}): no play-by-play rows matched '{c.name}' (name/team mismatch, or no snaps).{C.RESET}",
+            ])
         if eff["total_epa"] != 0 or eff["fantasy_points"] != 0:
             cost_epa_str = f"${eff['cost_per_epa_k']}k / EPA" if eff["cost_per_epa_k"] > 0 else "N/A"
             cost_fp_str = f"${eff['cost_per_fpoint_k']}k / Pt" if eff["cost_per_fpoint_k"] > 0 else "N/A"
+            epa_total_str = "unavailable (no name match)" if no_epa_match else f"{eff['total_epa']:+.1f} EPA"
             lines.extend([
                 "",
                 f"  {C.MAGENTA}📈 PERFORMANCE ROI & CAP EFFICIENCY ({season}):{C.RESET}",
-                f"     • Total Season EPA:         {eff['total_epa']:+.1f} EPA",
+                f"     • Total Season EPA:         {epa_total_str}",
                 f"     • Season Fantasy Points:    {eff['fantasy_points']:.1f} Pts",
                 f"     • Cost per EPA:             {cost_epa_str}",
                 f"     • Cost per Fantasy Point:   {cost_fp_str}",
@@ -399,8 +476,39 @@ def render_player_contract_view(
     return "\n".join(lines)
 
 
+def _split_contracts(rows: List[ContractRecord]) -> Tuple[List[ContractRecord], List[ContractRecord], List[ContractRecord]]:
+    """Partition contracts into (players, coaches, other); only players count toward cap totals."""
+    players = [c for c in rows if str(c.contract_type).strip().lower() == "player"]
+    coaches = [c for c in rows if str(c.contract_type).strip().lower() == "coach"]
+    other = [c for c in rows if c not in players and c not in coaches]
+    return players, coaches, other
+
+
+def compute_team_payroll_totals(team_abbr: str, contracts: Optional[List[ContractRecord]] = None) -> Dict[str, Any]:
+    """
+    Sum cataloged contract money for one team, keeping player cap and coach pay apart.
+
+    Only contracts of type "player" are summed into the player totals. Head-coach salaries are not
+    salary-cap charges, and any other contract type is listed but also excluded from the totals.
+    The catalog is partial (a curated list, not every roster contract), so the totals describe only
+    cataloged players.
+    """
+    t = team_abbr.strip().upper()
+    rows = get_contracts_by_team(t) if contracts is None else contracts
+    players, coaches, other = _split_contracts(rows)
+    return {
+        "team": t,
+        "player_count": len(players),
+        "coach_count": len(coaches),
+        "other_count": len(other),
+        "player_apy_m": sum(c.apy_m for c in players),
+        "player_cap_hit_m": sum(c.cap_hit_current_m for c in players),
+        "coach_apy_m": sum(c.apy_m for c in coaches),
+    }
+
+
 def render_team_payroll_view(team_abbr: str) -> str:
-    """Render a breakdown of a team's top contracts and committed salary cap."""
+    """Render a breakdown of a team's cataloged contracts: player subtotal, coach pay listed separately."""
     from . import C, AsciiArtRenderer
 
     t = team_abbr.strip().upper()
@@ -408,40 +516,57 @@ def render_team_payroll_view(team_abbr: str) -> str:
     if not team_contracts:
         return f"\n{C.YELLOW}⚠ No contracts cataloged for team '{team_abbr}'.{C.RESET}"
 
-    team_contracts.sort(key=lambda x: x.apy_m, reverse=True)
+    totals = compute_team_payroll_totals(t, team_contracts)
+    players, coaches, other = _split_contracts(team_contracts)
+    players = sorted(players, key=lambda x: x.apy_m, reverse=True)
+    coaches = sorted(coaches, key=lambda x: x.apy_m, reverse=True)
+    other = sorted(other, key=lambda x: x.apy_m, reverse=True)
 
     title_str = f"🏛️ Team Contract Payroll & Cap Allocation: {t}"
     headers = ["Name", "Pos", "Type", "APY ($M)", "Total ($M)", "Guaranteed ($M)", "Yrs", "Cap Hit ($M)", "FA"]
     rows = []
 
-    tot_apy = 0.0
-    tot_cap = 0.0
-    for c in team_contracts:
-        tot_apy += c.apy_m
-        tot_cap += c.cap_hit_current_m
-        rows.append([
+    def _contract_row(c: ContractRecord, show_cap_hit: bool) -> List[str]:
+        return [
             f"{C.BOLD}{c.name}{C.RESET}",
             c.position,
-            c.contract_type.upper(),
+            str(c.contract_type).upper(),
             f"${c.apy_m:.2f}M",
             f"${c.total_value_m:.1f}M",
             f"${c.guaranteed_m:.1f}M",
             f"{c.years}y",
-            f"${c.cap_hit_current_m:.1f}M",
+            f"${c.cap_hit_current_m:.1f}M" if show_cap_hit else "-",
             str(c.free_agent_year),
+        ]
+
+    def _label_row(text: str) -> List[str]:
+        return [f"{C.DIM}{text}{C.RESET}"] + ["-"] * (len(headers) - 1)
+
+    for c in players:
+        rows.append(_contract_row(c, show_cap_hit=True))
+
+    if players:
+        rows.append([
+            f"{C.BOLD}CATALOGED PLAYERS SUBTOTAL ({len(players)}){C.RESET}",
+            "-",
+            "-",
+            f"{C.BOLD}{C.GREEN}${totals['player_apy_m']:.2f}M{C.RESET}",
+            "-",
+            "-",
+            "-",
+            f"{C.BOLD}${totals['player_cap_hit_m']:.2f}M{C.RESET}",
+            "-",
         ])
 
-    rows.append([
-        f"{C.BOLD}TOTAL COMMITTED{C.RESET}",
-        "-",
-        "-",
-        f"{C.BOLD}{C.GREEN}${tot_apy:.2f}M{C.RESET}",
-        "-",
-        "-",
-        "-",
-        f"{C.BOLD}${tot_cap:.2f}M{C.RESET}",
-        "-",
-    ])
+    # Coach pay is listed for reference only: it is not a salary-cap charge and is excluded from the subtotal.
+    if coaches:
+        rows.append(_label_row("COACH PAY (not in subtotal)"))
+        for c in coaches:
+            rows.append(_contract_row(c, show_cap_hit=False))
+    if other:
+        rows.append(_label_row("OTHER CONTRACTS (not in subtotal)"))
+        for c in other:
+            rows.append(_contract_row(c, show_cap_hit=False))
 
     tbl = AsciiArtRenderer.render_table(
         title_str,
@@ -449,7 +574,12 @@ def render_team_payroll_view(team_abbr: str) -> str:
         rows,
         alignments=["left", "center", "center", "right", "right", "right", "center", "right", "center"],
     )
-    return f"\n{tbl}"
+    notes = []
+    if players:
+        notes.append(f"  {C.DIM}Subtotal covers only the {len(players)} cataloged player contract(s); the catalog is partial, so this is not the team's full cap commitment.{C.RESET}")
+    if coaches or other:
+        notes.append(f"  {C.DIM}Coach pay and other contract types are listed separately and are not included in the subtotal.{C.RESET}")
+    return f"\n{tbl}\n" + "\n".join(notes)
 
 
 def interactive_contracts_browser(
