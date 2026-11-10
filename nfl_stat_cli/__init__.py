@@ -67,7 +67,10 @@ from .sportsbook import (
 )
 from .contracts import (
     ContractRecord,
+    as_season,
     NFL_CONTRACTS,
+    contract_catalog_note,
+    contract_season_cataloged,
     find_contract_by_name,
     get_contracts_by_team,
     get_contracts_by_position,
@@ -896,8 +899,39 @@ NFL_COACHING_STAFFS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Season catalog for the embedded staffs. The table carries no source or date. The app labelled it 2025 and
+# issue #13 reports that it looks like 2024 rosters; neither is verifiable here, so it stays under the label
+# the app gave it and is flagged "unverified". A season that is not listed is NOT cataloged and never falls
+# back to this table.
+COACHING_SNAPSHOT_SEASON = 2025
+COACHING_STAFFS_BY_SEASON: Dict[int, Dict[str, Dict[str, Any]]] = {COACHING_SNAPSHOT_SEASON: NFL_COACHING_STAFFS}
+COACHING_STAFF_STATUS: Dict[int, str] = {COACHING_SNAPSHOT_SEASON: "unverified"}
+
+
+def coaching_season_cataloged(season: Optional[int]) -> bool:
+    """True when staffs exist for ``season``; None means "the latest cataloged season"."""
+    return True if season is None else as_season(season) in COACHING_STAFFS_BY_SEASON
+
+
+def coaching_catalog_note(season: Optional[int] = None) -> str:
+    """One-line statement of what the coaching data can and cannot say for ``season``."""
+    cataloged = sorted(COACHING_STAFFS_BY_SEASON)
+    if coaching_season_cataloged(season):
+        use = max(cataloged) if season is None else as_season(season)
+        return f"Coaching staffs are a {COACHING_STAFF_STATUS.get(use, 'unverified')} static snapshot for season {use}."
+    return (f"Coaching staffs are not cataloged for season {as_season(season)} "
+            f"(cataloged: {', '.join(str(c) for c in cataloged)}, unverified).")
+
+
 def get_team_coaching_staff(team_abbr: str, season: Optional[int] = None) -> Dict[str, Any]:
-    """Retrieve full coaching staff dictionary (HC, OC, DC, position coaches) for a given team."""
+    """
+    Coaching staff dictionary (HC, OC, DC, position coaches) for a team and season.
+    ``season=None`` uses the latest cataloged season; a season that is not cataloged, or a team that is
+    not in the table, returns an empty dict (never another team's or another season's staff).
+    """
+    if not coaching_season_cataloged(season):
+        return {}
+    # NFL_COACHING_STAFFS is the one cataloged snapshot (see COACHING_STAFFS_BY_SEASON)
     resolved = resolve_team_abbr(team_abbr) or team_abbr.upper()
     return NFL_COACHING_STAFFS.get(resolved, {})
 
@@ -907,14 +941,14 @@ def get_team_head_coach(team_abbr: str, season: Optional[int] = None) -> str:
     return str(get_team_coaching_staff(team_abbr, season).get("hc", "Unknown Coach"))
 
 
-def find_coach_team(coach_name: str) -> Optional[Tuple[str, str, str]]:
+def find_coach_team(coach_name: str, season: Optional[int] = None) -> Optional[Tuple[str, str, str]]:
     """
     Search for a coach across all NFL teams.
     Matches exact full name, or exact last name (if >= 4 chars and not a common stop word).
     Returns (team_abbr, coach_canonical_name, role) if found, otherwise None.
     """
     c_low = coach_name.strip().lower()
-    if len(c_low) < 3:
+    if len(c_low) < 3 or not coaching_season_cataloged(season):
         return None
     stop_words = {
         "the", "for", "and", "who", "what", "which", "with", "from", "team", "play", "rank",
@@ -924,7 +958,8 @@ def find_coach_team(coach_name: str) -> Optional[Tuple[str, str, str]]:
     if c_low in stop_words:
         return None
 
-    for team, staff in NFL_COACHING_STAFFS.items():
+    staffs = COACHING_STAFFS_BY_SEASON[max(COACHING_STAFFS_BY_SEASON) if season is None else as_season(season)]
+    for team, staff in staffs.items():
         if team == "LAR":
             continue
         for role, name in staff.items():
@@ -1130,6 +1165,17 @@ KNOWN_PLAYER_POSITIONS: Dict[str, str] = {
 }
 
 
+@functools.lru_cache(maxsize=1)
+def _surname_only_position_keys() -> frozenset:
+    """Registry surnames that have no initial/full-name entry; any other bare surname is an alias of one player."""
+    keys = list(KNOWN_PLAYER_POSITIONS)
+    return frozenset(
+        k for k in keys
+        if "." not in k and " " not in k
+        and not any(re.fullmatch(r"[a-z]\." + re.escape(k), o) or o.endswith(" " + k) for o in keys)
+    )
+
+
 def get_player_position(player_name: str, plays: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
     """
     Resolve a player's official football position (QB, RB, WR, TE, K, P, DEF).
@@ -1141,17 +1187,16 @@ def get_player_position(player_name: str, plays: Optional[List[Dict[str, Any]]] 
     raw = str(player_name).strip()
     p_low = raw.lower()
 
-    # 1. Exact match in canonical registry
-    if p_low in KNOWN_PLAYER_POSITIONS:
-        return KNOWN_PLAYER_POSITIONS[p_low]
+    # 1. Exact match in the registry ("j.warren", "x. worthy" -> "x.worthy", "jahmyr gibbs")
+    p_norm = re.sub(r"\.\s+", ".", p_low)
+    for key in (p_low, p_norm):
+        if key in KNOWN_PLAYER_POSITIONS:
+            return KNOWN_PLAYER_POSITIONS[key]
 
-    # Clean leading initials/periods (e.g. "J.Warren" -> "warren", "X. Worthy" -> "worthy")
-    cleaned = re.sub(r"^[a-z]\.\s*", "", p_low)
-    if cleaned in KNOWN_PLAYER_POSITIONS:
-        return KNOWN_PLAYER_POSITIONS[cleaned]
-
-    parts = p_low.replace(".", " ").split()
-    if len(parts) > 1 and parts[-1] in KNOWN_PLAYER_POSITIONS:
+    # A name with a first name or initial is reduced to its surname only when the registry knows that surname
+    # and nothing more specific (no "x.surname" / "first surname" entry): "K.Allen" must not become the QB "allen".
+    parts = p_norm.replace(".", " ").split()
+    if len(parts) > 1 and parts[-1] in _surname_only_position_keys():
         return KNOWN_PLAYER_POSITIONS[parts[-1]]
 
     # 2. Check play rows if plays are provided
@@ -7689,6 +7734,7 @@ def handle_nl_query_result(
     qtr = parsed.get("qtr")
     player = parsed.get("player") or parsed.get("qb")
     camera = camera_override or parsed.get("camera") or "behind-offense"
+    header += _reference_data_note(parsed.get("stat_name"), parsed.get("group_by"), season)
 
     if division:
         div_low = division.strip().lower()
@@ -7774,6 +7820,12 @@ def handle_nl_query_result(
             return header + f"\n  {C.GREEN}✔ Successfully deleted custom stat `{deleted.name}` ({deleted.title}).{C.RESET}"
         except (KeyError, ValueError) as err:
             return header + f"\n  {C.RED}✖ {err}{C.RESET}"
+
+    if intent == "coaching_staff" and season and not coaching_season_cataloged(season):
+        return header + "\n" + render_coaching_staff_view(team or "", season=season)
+    if parsed.get("stat_name") in _CONTRACT_STAT_NAMES and season and not contract_season_cataloged(season):
+        # the note above says why; a ranking built from another season's contracts would be misleading
+        return header + f"\n  {C.YELLOW}⚠ No contract-based ranking is shown for season {season}.{C.RESET}"
 
     if intent == "coaching_staff":
         resolved_t = resolve_team_abbr(team) or team
@@ -8976,10 +9028,31 @@ def render_player_drilldown_view(
     return "\n".join(out)
 
 
-def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None) -> str:
+_CONTRACT_STAT_NAMES = frozenset({
+    "cap_hit", "cap_hit_current_m", "yearly_salary_against_cap", "salary_against_cap",
+    "apy", "apy_m", "salary", "guaranteed_m", "contract_value_m",
+})
+
+
+def _reference_data_note(stat_name: Optional[str], group_by: Optional[str], season: Optional[int]) -> str:
+    """Yellow info line(s) when a query needs contract or coaching data for a season that is not cataloged."""
+    notes: List[str] = []
+    if season:
+        if stat_name in _CONTRACT_STAT_NAMES and not contract_season_cataloged(season):
+            notes.append(contract_catalog_note(season))
+        if str(group_by or "") == "coach" and not coaching_season_cataloged(season):
+            notes.append(coaching_catalog_note(season))
+    return "".join(f"\n  {C.YELLOW}ℹ {n}{C.RESET}" for n in notes)
+
+
+def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None, season: Optional[int] = None) -> str:
     """Render a structured, colorized ASCII table detailing team coaching staff (HC, OC, DC, position coaches)."""
     resolved_t = resolve_team_abbr(team_abbr) or team_abbr.upper()
-    staff = get_team_coaching_staff(resolved_t)
+    if not coaching_season_cataloged(season):
+        return f"\n{C.YELLOW}⚠ {coaching_catalog_note(season)} No staff is shown for it.{C.RESET}"
+    staff = get_team_coaching_staff(resolved_t, season)
+    if not staff:
+        return f"\n{C.YELLOW}⚠ No coaching staff is cataloged for '{team_abbr}'.{C.RESET}"
     full_name = TEAM_FULL_NAMES.get(resolved_t, f"{resolved_t} Football Team")
     headers = ["Role / Position", "Coach Name", "Category"]
     rows = []
@@ -9028,6 +9101,7 @@ def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None
     oc_name = staff.get("oc", "N/A")
     dc_name = staff.get("dc", "N/A")
     summary = f"  {C.BOLD}Head Coach:{C.RESET} {C.CYAN}{hc_name}{C.RESET}  │  {C.BOLD}OC:{C.RESET} {oc_name}  │  {C.BOLD}DC:{C.RESET} {dc_name}\n"
+    summary += f"  {C.DIM}{coaching_catalog_note(season)}{C.RESET}\n"
     footer = f"\n  {C.DIM}Coaching staffs: compiled from public team announcements; may be out of date.{C.RESET}"
     return summary + table + footer
 
@@ -9166,6 +9240,8 @@ def render_team_drilldown_view(
             receivers.setdefault(rc_n, []).append(p)
 
     staff = get_team_coaching_staff(team_abbr, season)
+    staff_missing = "" if staff else (
+        f"not cataloged for season {season}" if not coaching_season_cataloged(season) else "not cataloged for this team")
     pos_coaches = [
         f"QB: {staff.get('qb_coach')}" if staff.get("qb_coach") else "",
         f"OL: {staff.get('ol_coach')}" if staff.get("ol_coach") else "",
@@ -9183,9 +9259,9 @@ def render_team_drilldown_view(
         f"  Team Record: {C.BOLD}{record_str}{C.RESET} {win_pct_str}  |  Offensive Plays Tracked: {tot_off}  |  Defensive Plays: {tot_def}",
         "",
         f"  {C.BOLD}{C.MAGENTA}┌─ COACHING STAFF & LEADERSHIP ────────────────────────────────────────────────────────┐{C.RESET}",
-        f"  │ Head Coach (HC):            {C.BOLD}{staff.get('hc', 'N/A'):<56}{C.RESET}│",
-        f"  │ Offensive Coordinator (OC): {staff.get('oc', 'N/A'):<56}│",
-        f"  │ Defensive Coordinator (DC): {staff.get('dc', 'N/A'):<56}│",
+        f"  │ Head Coach (HC):            {C.BOLD}{staff.get('hc', staff_missing or 'N/A'):<56}{C.RESET}│",
+        f"  │ Offensive Coordinator (OC): {staff.get('oc', staff_missing or 'N/A'):<56}│",
+        f"  │ Defensive Coordinator (DC): {staff.get('dc', staff_missing or 'N/A'):<56}│",
         f"  │ Key Position Coaches:       {pos_str:<56}│",
         f"  {C.BOLD}{C.MAGENTA}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
         "",
