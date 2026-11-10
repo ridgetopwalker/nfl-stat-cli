@@ -2,7 +2,9 @@
 Model Projections: statistical game projections built from play-by-play data.
 - Team power ratings derived from net EPA/play, scoring differential, and success rate.
 - Home-field advantage (HFA = 1.8 pts).
-- Projected point spread (rounded to the nearest half point).
+- Projected point spread: snapped onto an NFL key number (3, 7, 10, 6, 4, in that priority order) when the
+  raw margin is within 0.5 pts of one, otherwise rounded to the nearest half point (see KEY_NFL_NUMBERS,
+  KEY_NUMBER_SNAP_WINDOW and SPREAD_ROUNDING_STEP).
 - Projected game total from scoring pace and drive efficiency.
 - Win probability from a normal model (margin standard deviation = 13.5 pts) and moneyline-style
   conversions that include a modeled margin.
@@ -25,10 +27,19 @@ HOME_FIELD_ADVANTAGE_PTS = 1.8
 NFL_MARGIN_STD_DEV = 13.5
 LEAGUE_AVERAGE_TOTAL = 44.0
 
-KEY_NFL_NUMBERS = [3.0, 7.0, 6.0, 10.0, 4.0, 14.0]
+# Spread key-number snapping (see snap_to_sportsbook_spread):
+# - KEY_NFL_NUMBERS: the most common NFL final margins, in PRIORITY order. When the absolute raw spread is
+#   within KEY_NUMBER_SNAP_WINDOW (inclusive) of one or more key numbers, the line snaps to the key listed
+#   first here (so 3.5 -> 3 because 3 outranks 4, and 6.5 -> 7 because 7 outranks 6).
+# - Otherwise the spread is rounded to the nearest SPREAD_ROUNDING_STEP. The sign is kept (negative = home favored).
+KEY_NFL_NUMBERS = [3.0, 7.0, 10.0, 6.0, 4.0]
+KEY_NUMBER_SNAP_WINDOW = 0.5
 
-# Spread rounding step (the projected margin is rounded to the nearest half point).
+# Spread rounding step for lines that are not snapped onto a key number (nearest half point).
 SPREAD_ROUNDING_STEP = 0.5
+
+# Tolerance for float noise when comparing a margin's distance with KEY_NUMBER_SNAP_WINDOW.
+_SNAP_EPSILON = 1e-9
 
 # Power rating = POWER_EPA_SCALE * net EPA/play * POWER_EPA_WEIGHT + point differential * POWER_DIFF_WEIGHT
 POWER_EPA_SCALE = 26.0
@@ -47,7 +58,7 @@ TOTAL_ROUNDING_STEP = 0.5
 # multiplied by MONEYLINE_MARGIN_FACTOR (the modeled margin), capped at MONEYLINE_IMPLIED_CAP, then converted.
 MONEYLINE_PROB_MIN = 0.01
 MONEYLINE_PROB_MAX = 0.99
-MONEYLINE_MARGIN_FACTOR = 1.025
+MONEYLINE_MARGIN_FACTOR = 1.045   # 4.5% modeled margin; labels and --explain text are derived from this
 MONEYLINE_IMPLIED_CAP = 0.98
 
 
@@ -145,10 +156,37 @@ def compute_team_power_ratings(plays: List[Dict[str, Any]], season: int) -> Dict
 
 def snap_to_sportsbook_spread(raw_spread: float) -> float:
     """
-    Round a continuous projected margin to the nearest half point (SPREAD_ROUNDING_STEP).
-    KEY_NFL_NUMBERS are listed for context only; rounding does not move a line onto them.
+    Turn a continuous projected spread into a displayed line.
+
+    Works on the absolute value of raw_spread:
+    - if it is within KEY_NUMBER_SNAP_WINDOW (inclusive) of a number in KEY_NFL_NUMBERS, the line snaps to
+      that key number; when several keys are in range, the one listed first in KEY_NFL_NUMBERS wins;
+    - otherwise it is rounded to the nearest SPREAD_ROUNDING_STEP.
+    The sign is then restored (negative = home favored). A zero result is always 0.0, never -0.0.
     """
-    return round(raw_spread / SPREAD_ROUNDING_STEP) * SPREAD_ROUNDING_STEP
+    sign = -1.0 if raw_spread < 0 else 1.0
+    mag = abs(raw_spread)
+    snapped = None
+    for key in KEY_NFL_NUMBERS:
+        if abs(mag - key) <= KEY_NUMBER_SNAP_WINDOW + _SNAP_EPSILON:
+            snapped = float(key)
+            break
+    if snapped is None:
+        snapped = _round_to_spread_step(mag)
+    result = sign * snapped
+    return 0.0 if result == 0 else result
+
+
+def _round_to_spread_step(raw_spread: float) -> float:
+    """Plain rounding to the nearest SPREAD_ROUNDING_STEP (no key-number snapping), symmetric in sign."""
+    sign = -1.0 if raw_spread < 0 else 1.0
+    result = sign * (round(abs(raw_spread) / SPREAD_ROUNDING_STEP) * SPREAD_ROUNDING_STEP)
+    return 0.0 if result == 0 else result
+
+
+def spread_snapped_to_key(raw_spread: float) -> bool:
+    """True when the key-number rule moved the line away from plain SPREAD_ROUNDING_STEP rounding."""
+    return abs(snap_to_sportsbook_spread(raw_spread) - _round_to_spread_step(raw_spread)) > _SNAP_EPSILON
 
 
 def calculate_american_moneyline(win_prob: float) -> Tuple[int, int]:
@@ -202,7 +240,10 @@ def handicap_matchup(
     # Traditional spread is expressed from home perspective:
     # If Home is favored by 3.5, spread = -3.5
     raw_spread = -raw_home_margin
+    # The snapped line drives everything shown below (labels, projected score, result vs. projection);
+    # the raw margin stays available as expected_margin.
     spread_line = snap_to_sportsbook_spread(raw_spread)
+    snapped_to_key = spread_snapped_to_key(raw_spread)
 
     # Favorite display
     if spread_line < 0:
@@ -270,6 +311,7 @@ def handicap_matchup(
         "hfa": HOME_FIELD_ADVANTAGE_PTS,
         "expected_margin": round(raw_home_margin, 2),
         "spread": spread_line,
+        "spread_snapped_to_key": snapped_to_key,
         "favorite_str": fav_label,
         "underdog_str": dog_label,
         "total": total_line,
@@ -766,13 +808,51 @@ def explanation_example() -> Dict[str, Any]:
     return hc
 
 
+def spread_snap_examples() -> List[Tuple[float, float]]:
+    """
+    (raw margin, line) pairs for the explanation, chosen from the snapping constants and computed with the real
+    snap_to_sportsbook_spread(), so the text can never drift: just inside the window of the first two keys, each
+    exact tie between two keys (higher priority wins), one value no key is near, and one negative (home favored).
+    """
+    keys = [float(k) for k in KEY_NFL_NUMBERS]
+    window = KEY_NUMBER_SNAP_WINDOW
+    raw: List[float] = []
+    if keys:
+        raw.append(keys[0] - window * 0.2)
+    if len(keys) > 1:
+        raw.append(keys[1] + window * 0.8)
+    ties = sorted({round((a + b) / 2.0, 4) for i, a in enumerate(keys) for b in keys[i + 1:]
+                   if 0 < abs(a - b) <= 2 * window + _SNAP_EPSILON})
+    raw.extend(ties)
+    start = min(keys) if keys else 0.0
+    for i in range(1, 200):
+        v = round(start + i * SPREAD_ROUNDING_STEP, 4)
+        if all(abs(v - k) > window + _SNAP_EPSILON for k in keys):
+            raw.append(v)
+            break
+    if len(keys) > 1:
+        raw.append(-(keys[1] + window * 0.8))
+    out: List[Tuple[float, float]] = []
+    for m in raw:
+        m = round(m, 4)
+        if all(m != prev for prev, _ in out):
+            out.append((m, snap_to_sportsbook_spread(m)))
+    return out
+
+
 def render_model_explanation() -> str:
     """Plain-language formulas behind the projections, generated from this module's constants."""
     from . import C
 
     n = _fmt_num
     keys = ", ".join(n(k) for k in KEY_NFL_NUMBERS)
+    snap_examples = ", ".join(f"{n(m)} -> {n(s)}" for m, s in spread_snap_examples())
     ex = explanation_example()
+    ex_raw_spread = -ex["expected_margin"]
+    ex_snap_note = (
+        f"(snapped onto key number {n(abs(ex['spread']))})" if ex["spread_snapped_to_key"]
+        else f"(no key number within {n(KEY_NUMBER_SNAP_WINDOW)} pts; rounded to the nearest {n(SPREAD_ROUNDING_STEP)})"
+    )
     z = ex["expected_margin"] / NFL_MARGIN_STD_DEV
     p_cap = n(MONEYLINE_IMPLIED_CAP)
     lines = [
@@ -789,9 +869,13 @@ def render_model_explanation() -> str:
         "",
         f"{C.BOLD}2. Projected spread and key numbers{C.RESET}",
         f"   expected home margin = home rating - away rating + home-field advantage ({n(HOME_FIELD_ADVANTAGE_PTS)} pts)",
-        f"   spread (home view) = -(expected home margin), rounded to the nearest {n(SPREAD_ROUNDING_STEP)} point",
-        f"   Key numbers ({keys}) are the most common final margins in NFL games. They are shown for context:"
-        " the rounding step above does not move a line onto them.",
+        "   spread (home view) = -(expected home margin), then snapped to a key number or rounded:",
+        f"   Key numbers ({keys}, in priority order) are the most common final margins in NFL games.",
+        f"   If the absolute spread is within {n(KEY_NUMBER_SNAP_WINDOW)} pts (inclusive) of a key number, the line moves"
+        " onto it; if more than one key is in range, the one listed first wins.",
+        f"   Otherwise the spread is rounded to the nearest {n(SPREAD_ROUNDING_STEP)} point."
+        " The sign is kept (negative = home favored).",
+        f"   Examples: {snap_examples}",
         "",
         f"{C.BOLD}3. Win probability (normal model){C.RESET}",
         f"   P(home wins) = NormalCDF(expected home margin / {n(NFL_MARGIN_STD_DEV)}), "
@@ -817,7 +901,7 @@ def render_model_explanation() -> str:
         f"away rating {ex['inputs']['AWAY']['power_rating']:+.1f}, offense EPA/play "
         f"{ex['inputs']['HOME']['off_epa']:.2f} and {ex['inputs']['AWAY']['off_epa']:.2f}, defense EPA/play 0.00)",
         f"   expected home margin = {ex['home_rating']:.1f} - {ex['away_rating']:.1f} + {n(HOME_FIELD_ADVANTAGE_PTS)}"
-        f" = {ex['expected_margin']:.2f}  ->  spread {ex['spread']:+.1f}",
+        f" = {ex['expected_margin']:.2f}  ->  raw spread {ex_raw_spread:+.2f}  ->  spread {ex['spread']:+.1f} {ex_snap_note}",
         f"   z = {ex['expected_margin']:.2f} / {n(NFL_MARGIN_STD_DEV)} = {z:.3f}  ->  P(home wins) = {ex['home_win_prob']:.1f}%",
         f"   moneyline values: home {ex['home_ml']:+d}, away {ex['away_ml']:+d}   ({modeled_margin_label()})",
         f"   projected total {ex['total']:.1f}  ->  projected score home {ex['proj_home_score']:.1f}, away {ex['proj_away_score']:.1f}",

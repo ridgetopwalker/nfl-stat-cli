@@ -19,7 +19,7 @@ DISCLAIMER = (
     "Statistical model projections for analysis and entertainment. Not betting advice. "
     "We don't take bets or link to sportsbooks, and we aren't affiliated with the NFL."
 )
-MARGIN_LABEL = "Includes a modeled 2.5% margin (typical market hold)"
+MARGIN_LABEL = "Includes a modeled 4.5% margin (typical market hold)"
 
 # Words that must not appear in user-facing projection text (the required disclaimer itself is exempt).
 BANNED = re.compile(
@@ -158,32 +158,33 @@ def test_even_line_is_not_called_pickem():
     assert "pick" not in hc["favorite_str"].lower()
 
 
-# --- numbers are unchanged (including the modeled margin) -------------------------------------
+# --- moneyline numbers (4.5% modeled margin, MONEYLINE_MARGIN_FACTOR = 1.045) ----------------
 
-@pytest.mark.parametrize("p,expected", [(0.5, (-105, -105)), (0.7, (-254, 225)), (0.99, (-4900, 9656)), (0.01, (9656, -4900))])
+@pytest.mark.parametrize("p,expected", [(0.5, (-109, -109)), (0.7, (-272, 219)), (0.99, (-4900, 9469)), (0.01, (9469, -4900))])
 def test_moneyline_values_are_unchanged(p, expected):
     assert sb.calculate_american_moneyline(p) == expected
 
 
 def test_matchup_golden_numbers():
     hc = sb.explanation_example()
-    assert (hc["spread"], hc["total"], hc["home_ml"], hc["away_ml"], hc["home_win_prob"]) == (-5.0, 46.0, -190, 170, 63.9)
+    assert (hc["spread"], hc["total"], hc["home_ml"], hc["away_ml"], hc["home_win_prob"]) == (-5.0, 46.0, -201, 165, 63.9)
     assert hc["proj_home_score"] == 25.5 and hc["proj_away_score"] == 20.5
 
 
 def test_margin_label_comes_from_the_constant(season_plays, monkeypatch):
     assert sb.modeled_margin_label() == MARGIN_LABEL
-    assert sb.modeled_margin_pct() == 2.5
-    monkeypatch.setattr(sb, "MONEYLINE_MARGIN_FACTOR", 1.045)
+    assert sb.MONEYLINE_MARGIN_FACTOR == 1.045
+    assert sb.modeled_margin_pct() == 4.5
+    monkeypatch.setattr(sb, "MONEYLINE_MARGIN_FACTOR", 1.06)
     label = sb.modeled_margin_label()
-    assert label == "Includes a modeled 4.5% margin (typical market hold)"
+    assert label == "Includes a modeled 6% margin (typical market hold)"
     for text in (sb.render_sportsbook_board_view(season_plays, 2025),
                  sb.render_game_handicap_dossier_view("AAA", "BBB", season_plays, 2025),
                  sb.render_model_explanation()):
         assert label in cli.strip_ansi(text)
         assert MARGIN_LABEL not in cli.strip_ansi(text)
     # and the numbers really move with the same constant
-    assert sb.calculate_american_moneyline(0.5) == (-109, -109)
+    assert sb.calculate_american_moneyline(0.5) == (-113, -113)
 
 
 def test_label_is_shown_wherever_moneylines_are_shown(season_plays):
@@ -307,10 +308,11 @@ def test_explain_mentions_every_formula_with_real_constants():
     for needle in (
         "power rating = 26 x net EPA/play x 0.65 + average point differential x 0.35",
         "home-field advantage (1.8 pts)",
-        "rounded to the nearest 0.5 point",
-        "Key numbers (3, 7, 6, 10, 4, 14)",
+        "Otherwise the spread is rounded to the nearest 0.5 point",
+        "Key numbers (3, 7, 10, 6, 4, in priority order)",
+        "within 0.5 pts (inclusive) of a key number",
         "NormalCDF(expected home margin / 13.5)",
-        "multiplied by 1.025",
+        "multiplied by 1.045",
         MARGIN_LABEL,
         "total = 44 + 24 x",
         "limited to 37-56",
@@ -329,13 +331,14 @@ def test_explain_mentions_every_formula_with_real_constants():
     ("POWER_EPA_SCALE", 20.0, ["power rating = 20 x net EPA/play x 0.65"], ["26 x net"]),
     ("POWER_EPA_WEIGHT", 0.5, ["x net EPA/play x 0.5 +"], ["x 0.65"]),
     ("POWER_DIFF_WEIGHT", 0.5, ["point differential x 0.5"], ["x 0.35"]),
-    ("SPREAD_ROUNDING_STEP", 0.25, ["spread (home view) = -(expected home margin), rounded to the nearest 0.25 point"], ["margin), rounded to the nearest 0.5"]),
+    ("SPREAD_ROUNDING_STEP", 0.25, ["Otherwise the spread is rounded to the nearest 0.25 point"], ["spread is rounded to the nearest 0.5"]),
     ("TOTAL_ROUNDING_STEP", 0.25, ["limited to 37-56 and rounded to the nearest 0.25"], ["56 and rounded to the nearest 0.5"]),
-    ("MONEYLINE_MARGIN_FACTOR", 1.05, ["multiplied by 1.05,", "modeled 5% margin"], ["2.5%", "1.025"]),
+    ("MONEYLINE_MARGIN_FACTOR", 1.05, ["multiplied by 1.05,", "modeled 5% margin"], ["4.5%", "1.045"]),
     ("MONEYLINE_IMPLIED_CAP", 0.9, ["capped at 0.9."], ["capped at 0.98"]),
     ("MONEYLINE_PROB_MIN", 0.05, ["limited to 0.05-0.99"], ["0.01-0.99"]),
     ("MONEYLINE_PROB_MAX", 0.95, ["limited to 0.01-0.95"], ["0.01-0.99"]),
-    ("KEY_NFL_NUMBERS", [3.0, 7.0], ["Key numbers (3, 7)"], ["(3, 7, 6"]),
+    ("KEY_NFL_NUMBERS", [3.0, 7.0], ["Key numbers (3, 7, in priority order)"], ["(3, 7, 10"]),
+    ("KEY_NUMBER_SNAP_WINDOW", 0.25, ["within 0.25 pts (inclusive)"], ["within 0.5 pts"]),
 ])
 def test_explanation_follows_the_constants(monkeypatch, const, value, present, absent):
     monkeypatch.setattr(sb, const, value)
@@ -369,7 +372,7 @@ def test_behaviour_follows_the_same_constants(monkeypatch):
     assert sb.handicap_matchup("H", "A", ratings)["expected_margin"] == 3.0
     monkeypatch.undo()
     monkeypatch.setattr(sb, "SPREAD_ROUNDING_STEP", 0.25)
-    assert sb.snap_to_sportsbook_spread(-3.3) == -3.25
+    assert sb.snap_to_sportsbook_spread(-5.3) == -5.25   # no key number within the window: plain rounding
     assert sb.handicap_matchup("H", "A", ratings)["spread"] == -4.75   # margin 4.8 rounds to 4.75 with the 0.25 step
     monkeypatch.undo()
     monkeypatch.setattr(sb, "MONEYLINE_MARGIN_FACTOR", 1.0)
@@ -449,3 +452,148 @@ def test_tui_projection_commands(tmp_path):
 def test_slash_completer_offers_projection_commands():
     assert "/projections" in cli.SLASH_COMMAND_OPTIONS and "/explain" in cli.SLASH_COMMAND_OPTIONS
     assert "/formula" in cli.SLASH_COMMAND_OPTIONS and "/sportsbook" not in cli.SLASH_COMMAND_OPTIONS
+
+
+# --- key-number snapping for spreads ---------------------------------------------------------
+
+# raw absolute spread -> expected line with the default constants (keys 3, 7, 10, 6, 4; window 0.5; step 0.5)
+SNAP_TABLE = [
+    (0.0, 0.0), (0.2, 0.0), (1.3, 1.5),
+    (2.5, 3.0), (2.9, 3.0), (3.1, 3.0), (3.5, 3.0), (3.6, 4.0),
+    (4.4, 4.0), (4.6, 4.5), (5.0, 5.0), (5.4, 5.5), (5.5, 6.0),
+    (6.4, 6.0), (6.5, 7.0), (7.4, 7.0), (7.5, 7.0), (7.6, 7.5),
+    (9.4, 9.5), (9.5, 10.0), (10.4, 10.0), (10.6, 10.5),
+]
+
+
+def test_snapping_constants_are_the_documented_design():
+    assert sb.KEY_NFL_NUMBERS == [3.0, 7.0, 10.0, 6.0, 4.0]
+    assert 14.0 not in sb.KEY_NFL_NUMBERS
+    assert sb.KEY_NUMBER_SNAP_WINDOW == 0.5
+    assert sb.SPREAD_ROUNDING_STEP == 0.5
+
+
+def test_snap_edges_positive_and_negative():
+    for raw, line in SNAP_TABLE:
+        assert sb.snap_to_sportsbook_spread(raw) == line, raw
+        assert sb.snap_to_sportsbook_spread(-raw) == -line, -raw
+
+
+def test_snap_named_negative_cases_symmetry_and_no_negative_zero():
+    for raw, line in [(-2.9, -3.0), (-3.1, -3.0), (-6.5, -7.0), (-7.4, -7.0), (-3.5, -3.0), (-7.5, -7.0), (-2.5, -3.0)]:
+        assert sb.snap_to_sportsbook_spread(raw) == line, raw
+    for raw, _ in SNAP_TABLE:   # symmetric in sign
+        assert sb.snap_to_sportsbook_spread(-raw) == -sb.snap_to_sportsbook_spread(raw), raw
+    for raw in (0.0, -0.0, 0.2, -0.2, 0.25, -0.25):
+        out = sb.snap_to_sportsbook_spread(raw)
+        assert out == 0.0 and str(out) == "0.0", raw   # never "-0.0"
+
+
+def test_snap_ties_resolve_by_priority_order_and_window_is_inclusive():
+    assert sb.snap_to_sportsbook_spread(3.5) == 3.0    # 3 and 4 both in range: 3 is listed first
+    assert sb.snap_to_sportsbook_spread(6.5) == 7.0    # 6 and 7 both in range: 7 is listed first
+    assert sb.snap_to_sportsbook_spread(-6.5) == -7.0
+    # exactly window-away values (with float noise from arithmetic) still snap
+    assert sb.snap_to_sportsbook_spread(7.0 + 0.1 * 5) == 7.0
+    assert sb.snap_to_sportsbook_spread(10.0 - 0.1 * 5) == 10.0
+    assert sb.snap_to_sportsbook_spread(3.0 - (0.3 + 0.2)) == 3.0
+    # just outside the window falls back to plain rounding
+    assert sb.snap_to_sportsbook_spread(7.0 + 0.5 + 1e-6) == 7.5
+
+
+def test_snapped_flag_marks_lines_moved_onto_a_key_number():
+    # plain half-point rounding would give 2.5, 3.5, 3.5, 4.5, 5.5, 6.5, 6.5, 7.5, 7.5, 9.5, 10.5 here
+    moved = {2.5, 3.5, 3.6, 4.4, 5.5, 6.4, 6.5, 7.4, 7.5, 9.5, 10.4}
+    for raw, _ in SNAP_TABLE:
+        assert sb.spread_snapped_to_key(raw) is (raw in moved), raw
+        assert sb.spread_snapped_to_key(-raw) is (raw in moved), -raw
+
+
+def test_snapping_follows_monkeypatched_constants(monkeypatch):
+    assert sb.snap_to_sportsbook_spread(3.4) == 3.0
+    monkeypatch.setattr(sb, "KEY_NUMBER_SNAP_WINDOW", 0.25)
+    assert sb.snap_to_sportsbook_spread(3.4) == 3.5      # outside the narrower window: plain rounding
+    assert sb.snap_to_sportsbook_spread(3.25) == 3.0     # inclusive edge of the narrower window
+    assert sb.snap_to_sportsbook_spread(-6.8) == -7.0
+    monkeypatch.undo()
+
+    assert sb.snap_to_sportsbook_spread(10.4) == 10.0
+    monkeypatch.setattr(sb, "KEY_NFL_NUMBERS", [3.0, 7.0])
+    assert sb.snap_to_sportsbook_spread(10.4) == 10.5    # 10 is no longer a key number
+    assert sb.snap_to_sportsbook_spread(3.6) == 3.5      # nor is 4
+    assert sb.snap_to_sportsbook_spread(-7.4) == -7.0
+    monkeypatch.setattr(sb, "KEY_NFL_NUMBERS", [4.0, 3.0])
+    assert sb.snap_to_sportsbook_spread(3.5) == 4.0      # priority order comes from the list
+    monkeypatch.undo()
+
+    monkeypatch.setattr(sb, "SPREAD_ROUNDING_STEP", 0.25)
+    assert sb.snap_to_sportsbook_spread(5.3) == 5.25
+    assert sb.snap_to_sportsbook_spread(7.4) == 7.0      # snapping still wins over the finer step
+    monkeypatch.setattr(sb, "SPREAD_ROUNDING_STEP", 1.0)
+    assert sb.snap_to_sportsbook_spread(-8.4) == -8.0
+
+
+def test_explain_shows_the_snapping_rule_and_real_examples():
+    text = cli.strip_ansi(sb.render_model_explanation())
+    assert "shown for context" not in text and "does not move a line" not in text
+    for needle in (
+        "Key numbers (3, 7, 10, 6, 4, in priority order)",
+        "within 0.5 pts (inclusive) of a key number, the line moves onto it",
+        "if more than one key is in range, the one listed first wins",
+        "Otherwise the spread is rounded to the nearest 0.5 point",
+        "negative = home favored",
+        "Examples: 2.9 -> 3, 7.4 -> 7, 3.5 -> 3, 6.5 -> 7, 5 -> 5, -7.4 -> -7",
+        "raw spread -4.80  ->  spread -5.0 (no key number within 0.5 pts; rounded to the nearest 0.5)",
+    ):
+        assert needle in text, needle
+    assert sb.spread_snap_examples() == [(2.9, 3.0), (7.4, 7.0), (3.5, 3.0), (6.5, 7.0), (5.0, 5.0), (-7.4, -7.0)]
+
+
+def test_explain_snapping_text_follows_monkeypatched_constants(monkeypatch):
+    monkeypatch.setattr(sb, "KEY_NUMBER_SNAP_WINDOW", 0.25)
+    text = cli.strip_ansi(sb.render_model_explanation())
+    assert "within 0.25 pts (inclusive)" in text
+    assert "Examples: 2.95 -> 3, 7.2 -> 7, 3.5 -> 3.5, -7.2 -> -7" in text   # no ties with a 0.25 window
+    monkeypatch.undo()
+    monkeypatch.setattr(sb, "KEY_NFL_NUMBERS", [3.0, 7.0])
+    text = cli.strip_ansi(sb.render_model_explanation())
+    assert "Key numbers (3, 7, in priority order)" in text
+    assert "6.5 -> 7" not in text and "3.5 -> 3," not in text
+    # the example lines come from the real snap function
+    monkeypatch.setattr(sb, "snap_to_sportsbook_spread", lambda raw: 99.0)
+    assert "2.9 -> 99" in cli.strip_ansi(sb.render_model_explanation())
+
+
+def test_worked_example_mentions_snapping_when_the_line_moves(monkeypatch):
+    monkeypatch.setattr(sb, "HOME_FIELD_ADVANTAGE_PTS", 4.4)   # example margin 4 - 1 + 4.4 = 7.4 -> snaps to 7
+    text = cli.strip_ansi(sb.render_model_explanation())
+    assert "raw spread -7.40  ->  spread -7.0 (snapped onto key number 7)" in text
+
+
+def _ratings_for_margin(margin):
+    return {"H": {"power_rating": margin - sb.HOME_FIELD_ADVANTAGE_PTS, "off_epa": 0.0, "def_epa": 0.0},
+            "A": {"power_rating": 0.0, "off_epa": 0.0, "def_epa": 0.0}}
+
+
+def test_handicap_matchup_uses_the_snapped_line_end_to_end():
+    hc = sb.handicap_matchup("H", "A", _ratings_for_margin(7.4), home_score=24, away_score=17)
+    assert hc["expected_margin"] == 7.4                 # raw margin is still exposed
+    assert hc["spread"] == -7.0 and hc["spread_snapped_to_key"] is True
+    assert hc["favorite_str"] == "H -7.0" and hc["underdog_str"] == "A +7.0"
+    assert hc["total"] == 44.0
+    assert (hc["proj_home_score"], hc["proj_away_score"]) == (25.5, 18.5)
+    assert hc["proj_home_score"] - hc["proj_away_score"] == -hc["spread"]
+    assert hc["ats_result"] == "At projection"           # won by exactly the snapped 7
+    road_fav = {"A": {"power_rating": 0.0}, "H": {"power_rating": 6.5 + sb.HOME_FIELD_ADVANTAGE_PTS}}
+    away_fav = sb.handicap_matchup("A", "H", road_fav)   # H is the away team, favored by 6.5 -> 7
+    assert away_fav["spread"] == 7.0 and away_fav["favorite_str"] == "H -7.0"
+    assert away_fav["spread_snapped_to_key"] is True
+
+
+def test_handicap_matchup_line_not_snapped():
+    hc = sb.handicap_matchup("H", "A", _ratings_for_margin(5.0), home_score=21, away_score=17)
+    assert hc["expected_margin"] == 5.0
+    assert hc["spread"] == -5.0 and hc["spread_snapped_to_key"] is False
+    assert hc["favorite_str"] == "H -5.0"
+    assert (hc["proj_home_score"], hc["proj_away_score"]) == (24.5, 19.5)
+    assert hc["ats_result"] == "A above projection"
