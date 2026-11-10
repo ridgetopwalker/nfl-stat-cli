@@ -327,6 +327,55 @@ def _team_code(value: Any) -> str:
     return _TEAM_ALIASES.get(code, code)
 
 
+# Optional per-field player ids (nflverse names). The bundled data export does not carry them yet; when a row does,
+# they decide whether two rows are the same player. Without them the identity is the (name key, team) pair.
+_PLAY_ID_FIELDS = {
+    "player_name": ("player_id",),
+    "qb_name": ("passer_player_id", "qb_player_id"),
+    "rusher_player_name": ("rusher_player_id",),
+    "receiver_player_name": ("receiver_player_id",),
+}
+
+
+def _play_season(p: Dict[str, Any]) -> int:
+    try:
+        return int(float(p.get("season") or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _name_key_identities(plays: List[Dict[str, Any]], key: Tuple[str, str]) -> Dict[int, set]:
+    """
+    Distinct players that share an abbreviated name ``key`` in each season of ``plays``, by player id when the
+    row has one, else by (key, team). A team-only identity is the same player as an id-bearing one on that team
+    (rows with and without ids can be mixed), and a row with neither an id nor a team adds nothing.
+    """
+    ids: Dict[int, Dict[str, set]] = {}
+    teams_without_id: Dict[int, set] = {}
+    for p in plays:
+        for field, id_fields in _PLAY_ID_FIELDS.items():
+            val = str(p.get(field, "") or "").strip()
+            if not val or name_match_key(val) != key:
+                continue
+            pid = next((str(p.get(i)).strip() for i in id_fields if str(p.get(i) or "").strip()), "")
+            team = _team_code(p.get("posteam"))
+            season = _play_season(p)
+            if pid:
+                ids.setdefault(season, {}).setdefault(pid, set())
+                if team:
+                    ids[season][pid].add(team)
+            elif team:
+                teams_without_id.setdefault(season, set()).add(team)
+    seen: Dict[int, set] = {}
+    for season in set(ids) | set(teams_without_id):
+        by_id = ids.get(season, {})
+        covered = set().union(*by_id.values()) if by_id else set()
+        seen[season] = {("id", pid) for pid in by_id} | {
+            ("name", key, t) for t in teams_without_id.get(season, set()) - covered
+        }
+    return seen
+
+
 def _safe_epa(value: Any) -> float:
     try:
         f = float(value)
@@ -347,9 +396,12 @@ def calculate_contract_performance_efficiency(
     - APY per Touchdown
 
     Contracts carry full names while play-by-play uses abbreviated forms ("P.Mahomes"), so plays are
-    matched on a normalized (first initial, surname) key, and an abbreviated name must also be on the contract's
-    team (so uncataloged namesakes elsewhere are not credited). `epa_matched_plays` reports how many
-    plays were matched so callers can tell "no EPA" from "no name match".
+    matched on a normalized (first initial, surname) key. When that key belongs to exactly one player in the
+    play's season (by player id if the rows carry one, else by distinct key+team pairs), it matches the contract
+    on any team, so plays from before a trade count. When two or more players share it that season, the play's
+    team must also be the contract's team (so namesakes are not credited).
+    `epa_matched_plays` reports how many plays were matched so callers can tell "no EPA" from "no name match";
+    `epa_ambiguous_key` / `epa_team_gated_plays` report plays left out because the key was ambiguous.
     """
     from .fantasy import compute_player_fantasy_profile
 
@@ -357,20 +409,26 @@ def calculate_contract_performance_efficiency(
     # Coaches are only matched on the exact full name: an abbreviated "J.Harbaugh" row is a player, not a coach
     c_key = name_match_key(contract.name) if contract.contract_type != "coach" else None
     c_team = _team_code(contract.team)
+    identities = _name_key_identities(plays, c_key) if c_key else {}
+    gated: List[Dict[str, Any]] = []
 
     def _play_matches(p: Dict[str, Any]) -> bool:
+        rejected = False
         for field in _PLAY_NAME_FIELDS:
             val = str(p.get(field, "") or "").strip()
             if not val:
                 continue
             if val.lower() == p_low:
                 return True
-            # An abbreviated name ("J.Allen") is shared by many league players, only some of whom are
-            # cataloged, so it must also be on the contract's team (rows without a team are accepted).
             if c_key and name_match_key(val) == c_key:
                 p_team = _team_code(p.get("posteam"))
-                if not p_team or p_team == c_team:
+                # a key held by one player that season is that player on any team; a shared key needs the
+                # contract's team (rows without a team are accepted)
+                if len(identities.get(_play_season(p), ())) <= 1 or not p_team or p_team == c_team:
                     return True
+                rejected = True
+        if rejected:
+            gated.append(p)  # once per row, and only when no field accepted it
         return False
 
     p_plays = [p for p in plays if _play_matches(p)]
@@ -391,6 +449,8 @@ def calculate_contract_performance_efficiency(
         "cap_hit_m": contract.cap_hit_current_m,
         "total_epa": round(tot_epa, 1),
         "epa_matched_plays": len(p_plays),
+        "epa_ambiguous_key": any(len(v) > 1 for v in identities.values()),
+        "epa_team_gated_plays": len(gated),
         "fantasy_points": round(f_pts, 1),
         "cost_per_epa_k": cost_per_epa_k,
         "cost_per_fpoint_k": cost_per_fpoint_k,
@@ -515,6 +575,12 @@ def render_player_contract_view(
             lines.extend([
                 "",
                 f"  {C.YELLOW}⚠ EPA unavailable ({season}): no play-by-play rows matched '{c.name}' (name/team mismatch, or no snaps).{C.RESET}",
+            ])
+        if eff["epa_team_gated_plays"]:
+            lines.extend([
+                "",
+                f"  {C.YELLOW}⚠ ROI may be partial ({season}): the abbreviated name for '{c.name}' is shared by more than "
+                f"one player, so only plays for {c.team} were counted ({eff['epa_team_gated_plays']} on other teams left out).{C.RESET}",
             ])
         if eff["total_epa"] != 0 or eff["fantasy_points"] != 0:
             cost_epa_str = f"${eff['cost_per_epa_k']}k / EPA" if eff["cost_per_epa_k"] > 0 else "N/A"
