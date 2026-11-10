@@ -1471,13 +1471,13 @@ def test_sportsbook_handicapping_and_power_ratings():
 
     # View renderers
     board = cli.strip_ansi(render_sportsbook_board_view(plays, season=2024))
-    assert "Sportsbook Betting Lines & Game Handicapping" in board
+    assert "Model Projections" in board
 
     pow_view = cli.strip_ansi(render_power_ratings_view(plays, season=2024))
     assert "NFL Team Power Ratings" in pow_view
 
     dossier_view = cli.strip_ansi(render_game_handicap_dossier_view("KC", "BUF", plays, season=2024))
-    assert "SPORTSBOOK HANDICAPPING DOSSIER" in dossier_view
+    assert "MODEL PROJECTION DOSSIER" in dossier_view
     assert "Point Spread" in dossier_view
     assert "MONEYLINES" in dossier_view
 
@@ -1609,7 +1609,7 @@ def test_nl_query_parsing_for_fantasy_sportsbook_and_contracts():
 def test_slash_help_includes_new_commands():
     help_text = cli.strip_ansi(cli.render_slash_help())
     assert "/fantasy" in help_text
-    assert "/sportsbook" in help_text
+    assert "/projections" in help_text
     assert "/contract" in help_text
 
 
