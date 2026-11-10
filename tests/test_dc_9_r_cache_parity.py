@@ -96,11 +96,10 @@ def test_r_backend_keeps_exactly_the_rows_the_python_backend_keeps(monkeypatch, 
     assert _ids(r_rows) == _ids(py_rows)
 
 
-def test_bridge_scripts_export_all_possession_plays_and_stay_identical():
+def test_bridge_script_exports_all_possession_plays():
     root = Path(__file__).resolve().parent.parent
     packaged = (root / "nfl_stat_cli" / "nflverse_bridge.R").read_text(encoding="utf-8")
-    top = (root / "nflverse_bridge.R").read_text(encoding="utf-8")
-    assert packaged == top
+    assert not (root / "nflverse_bridge.R").exists(), "R bridge lives only inside the package"
     assert "out_df <- as.data.frame(pbp)[!is.na(pbp$posteam), keep_cols, drop = FALSE]" in packaged
     assert "pass_attempt == 1) | (!is.na(pbp$rush_attempt)" not in packaged
     # every column the shared row predicate reads must be exported
