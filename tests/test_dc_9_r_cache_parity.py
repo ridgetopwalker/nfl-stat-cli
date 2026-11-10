@@ -239,6 +239,7 @@ def test_stale_temp_files_from_killed_runs_are_swept(monkeypatch, tmp_path):
     FakeR(monkeypatch, _write(_csv_text()))
     b = _bridge(tmp_path)
     stale = tmp_path / "cache" / ".nflverse_pbp_v2_2020.csv.1.tmp"
+    stale.parent.mkdir(parents=True, exist_ok=True)  # cache dir is created lazily on master
     stale.write_text("x", encoding="utf-8")
     old = stale.stat().st_mtime - 3 * 86400
     os.utime(stale, (old, old))
