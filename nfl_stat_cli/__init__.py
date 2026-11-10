@@ -34,6 +34,7 @@ import time
 import unicodedata
 import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import nullcontext
 from collections import Counter
@@ -5296,6 +5297,21 @@ class NaturalLanguageStatAssistant:
         (r"\b(?:fantasy\s+points\s+per\s+game|fantasy\s+ppg|fppg)\b", "fantasy_ppg", "player"),
     )
 
+    @staticmethod
+    def ollama_base_url() -> Optional[str]:
+        """NFL_STAT_OLLAMA_URL (default: local Ollama), limited to http/https; None when the setting is not a usable URL."""
+        raw = os.environ.get("NFL_STAT_OLLAMA_URL", "").strip() or "http://127.0.0.1:11434"
+        try:
+            parts = urllib.parse.urlsplit(raw)
+            port_ok = parts.port is None or 0 < parts.port < 65536
+        except ValueError:
+            return None
+        if parts.scheme.lower() not in ("http", "https") or not parts.hostname or parts.username or parts.password or not port_ok:
+            return None
+        if parts.query or parts.fragment or not re.fullmatch(r"[A-Za-z0-9._~/%-]*", parts.path) or ".." in parts.path.split("/"):
+            return None
+        return f"{parts.scheme.lower()}://{parts.netloc}{parts.path.rstrip('/')}"
+
     @classmethod
     def detect_ollama_model(cls, requested_model: Optional[str] = None) -> Optional[str]:
         if requested_model and requested_model.strip().lower() in ("none", "off", "disable", "disabled"):
@@ -5307,7 +5323,9 @@ class NaturalLanguageStatAssistant:
             if env_model.strip().lower() in ("none", "off", "disable", "disabled"):
                 return None
             return env_model.strip()
-        base_url = os.environ.get("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:11434")
+        base_url = cls.ollama_base_url()
+        if not base_url:
+            return None
         try:
             req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
             with urllib.request.urlopen(req, timeout=0.8) as resp:
@@ -5323,41 +5341,98 @@ class NaturalLanguageStatAssistant:
         except Exception:
             return None
 
+    # Intents the model may choose. Anything that writes or deletes (create_stat, delete_stat, exports) is
+    # deliberately absent: those only come from the deterministic parser or an explicit slash command.
+    SLM_ALLOWED_INTENTS = (
+        "stat_query", "specific_play", "qb_wins_report", "team_drilldown", "player_drilldown", "stat_page",
+        "dataset_info", "fantasy_report", "sportsbook_report", "contract_report",
+    )
+    _SLM_FILTER_RE = re.compile(r"[A-Za-z0-9_\s'\".=!<>()+\-*/%&|,]*")
+
+    @classmethod
+    def _slm_filter_ok(cls, flt: str) -> bool:
+        """Model-supplied filter text: short, ASCII, no dunders, and only comparisons/arithmetic (no calls, attributes or powers).
+        It is still evaluated by the AST-allow-listed formula evaluator; this is defence in depth."""
+        if not flt or len(flt) > 200 or "__" in flt or not cls._SLM_FILTER_RE.fullmatch(flt):
+            return False
+        try:
+            tree = ast.parse(flt, mode="eval")
+        except (SyntaxError, ValueError, RecursionError):
+            return False
+        return not any(isinstance(n, (ast.Call, ast.Attribute, ast.Subscript, ast.Lambda, ast.comprehension, ast.Pow)) for n in ast.walk(tree))
+
     @classmethod
     def _validate_slm_response(cls, parsed: Dict[str, Any], engine: Optional[StatEngine]) -> Optional[Dict[str, Any]]:
-        intent = str(parsed.get("intent") or "").strip().lower()
-        if intent not in (
-            "stat_query", "specific_play", "create_stat", "qb_wins_report",
-            "team_drilldown", "player_drilldown", "stat_page", "delete_stat",
-            "dataset_info", "fantasy_report", "sportsbook_report", "contract_report"
-        ):
+        """
+        Treat model output as untrusted: rebuild the result from an allow-list of typed, bounded fields.
+        Unknown keys (formula, save_stat, target_file, ...) are dropped; destructive intents are rejected.
+        """
+        if not isinstance(parsed, dict):
             return None
-        parsed["intent"] = intent
-        if "show_field" in parsed:
-            sf = parsed["show_field"]
-            parsed["show_field"] = (sf is True) or (isinstance(sf, str) and sf.strip().lower() == "true")
+        intent = str(parsed.get("intent") or "").strip().lower()
+        if intent not in cls.SLM_ALLOWED_INTENTS:
+            return None
+
+        def _text(v: Any, limit: int) -> Optional[str]:
+            if not isinstance(v, str):
+                return None
+            t = "".join(ch if ch.isprintable() else " " for ch in strip_ansi(v)).strip()
+            return t[:limit] if t else None
+
+        def _int(v: Any, lo: int, hi: int) -> Optional[int]:
+            if isinstance(v, bool):
+                return None
+            if isinstance(v, str) and re.fullmatch(r"\s*\d{1,6}\s*", v):
+                v = int(v)
+            if isinstance(v, float) and v.is_integer():
+                v = int(v)
+            return v if isinstance(v, int) and lo <= v <= hi else None
+
+        out: Dict[str, Any] = {"intent": intent}
+        sf = parsed.get("show_field")
+        out["show_field"] = (sf is True) or (isinstance(sf, str) and sf.strip().lower() == "true")
         cam = str(parsed.get("camera") or "behind-offense").strip().lower()
-        if cam not in ("behind-offense", "behind-defense", "sideline", "offense", "defense", "side", "all"):
-            cam = "behind-offense"
-        parsed["camera"] = cam
+        out["camera"] = cam if cam in ("behind-offense", "behind-defense", "sideline", "offense", "defense", "side", "all") else "behind-offense"
         grp = parsed.get("group_by")
-        if grp and str(grp).lower() not in GROUP_BY_COLUMN_MAP:
-            parsed["group_by"] = None
-        if "qb" in parsed:
-            if "player" not in parsed or not parsed["player"]:
-                parsed["player"] = parsed.pop("qb")
-            else:
-                parsed.pop("qb")
-        if engine and intent == "stat_query":
-            sname = str(parsed.get("stat_name") or "").strip().lower()
-            if sname not in engine.stats:
-                parsed["stat_name"] = None
-        return parsed
+        out["group_by"] = grp.strip().lower() if isinstance(grp, str) and grp.strip().lower() in GROUP_BY_COLUMN_MAP else None
+
+        player = _text(parsed.get("player"), 60)
+        if player is None and "qb" in parsed:
+            player = _text(parsed.get("qb"), 60)
+        out["player"] = player
+
+        sname = _text(parsed.get("stat_name"), 64)
+        sname = sname.lower() if sname and re.fullmatch(r"[A-Za-z0-9_]+", sname) else None
+        out["stat_name"] = sname if (sname and (engine is None or sname in engine.stats)) else None
+
+        season = _int(parsed.get("season"), 1999, 2100)
+        if season is not None:
+            out["season"] = season
+        for key, lo, hi in (("week", 1, 30), ("qtr", 1, 5), ("limit", 1, 100)):
+            val = _int(parsed.get(key), lo, hi)
+            if val is not None:
+                out[key] = val
+        conf = _text(parsed.get("conf"), 3)
+        out["conf"] = conf.upper() if conf and conf.upper() in ("AFC", "NFC") else None
+        team = _text(parsed.get("team"), 40)
+        out["team"] = (resolve_team_abbr(team) if team else None) or None
+        concept = _text(parsed.get("concept"), 40)
+        out["concept"] = concept if concept and re.fullmatch(r"[A-Za-z0-9_ -]+", concept) else None
+        sort_by = _text(parsed.get("sort_by"), 20)
+        if sort_by and sort_by.lower() in ("yards_gained", "epa", "wpa", "yac"):
+            out["sort_by"] = sort_by.lower()
+        flt = parsed.get("filter_expr")
+        flt = flt.strip() if isinstance(flt, str) else ""
+        out["filter_expr"] = flt if cls._slm_filter_ok(flt) else ""
+        out["explanation"] = _text(parsed.get("explanation"), 300) or ""
+        return out
 
     @classmethod
     def query_local_slm(cls, query: str, engine: StatEngine, model_name: str) -> Optional[Dict[str, Any]]:
         """Call local Ollama SLM to parse natural language into structured JSON intent."""
-        base_url = os.environ.get("NFL_STAT_OLLAMA_URL", "http://127.0.0.1:11434")
+        base_url = cls.ollama_base_url()
+        if not base_url:
+            return None
         available_stats = list(engine.stats.keys())
         system_prompt = (
             "You are the NFL-Stat-CLI Local Small Language Model parser. "
@@ -5366,13 +5441,13 @@ class NaturalLanguageStatAssistant:
             "Set 'show_field': false.\n"
             "2. 'specific_play': ONLY when the user asks to see, diagram, or find a specific single play (e.g. longest play, touchdown play, specific QB/player/team play, or behind offense/defense view). "
             "Set 'show_field': true and 'camera': 'behind-offense' | 'behind-defense' | 'sideline'.\n"
-            "3. 'create_stat': when the user wants to define/create/make a new custom stat.\n"
+            "3. Never create, delete, export or modify anything; those requests are handled elsewhere.\n"
             f"Available stats: {', '.join(available_stats)}.\n"
-            "JSON keys: {\"intent\": \"stat_query|specific_play|create_stat\", \"stat_name\": \"...\", "
+            "JSON keys: {\"intent\": \"stat_query|specific_play\", \"stat_name\": \"...\", "
             "\"group_by\": \"qb|team|play_concept|conference|receiver|rusher|game\", \"filter_expr\": \"...\", "
             "\"season\": 2025, \"conf\": null, \"team\": null, \"player\": null, \"concept\": null, "
             "\"sort_by\": \"yards_gained|epa|wpa|yac\", \"camera\": \"behind-offense|behind-defense|sideline\", "
-            "\"show_field\": false, \"formula\": \"\", \"title\": \"\", \"scope\": \"season|game|play\", \"agg\": \"formula|sum|avg\", \"explanation\": \"...\"}"
+            "\"show_field\": false, \"explanation\": \"...\"}"
         )
         payload = json.dumps({
             "model": model_name,
@@ -5396,6 +5471,7 @@ class NaturalLanguageStatAssistant:
                     validated = cls._validate_slm_response(parsed, engine)
                     if validated:
                         validated["slm_model_used"] = model_name
+                        validated["query"] = query
                         return validated
         except Exception:
             return None
@@ -5447,6 +5523,7 @@ class NaturalLanguageStatAssistant:
             if detected:
                 slm_res = cls.query_local_slm(query, engine, detected)
                 if slm_res and (slm_res.get("intent") != "stat_query" or slm_res.get("stat_name")):
+                    slm_res.setdefault("season", default_season)
                     return slm_res
 
         q = query.strip()
@@ -7116,6 +7193,23 @@ def render_dataset_info_view(
     return f"\n{tbl}\n  {C.DIM}Tip: Type `/games` to browse games or `/games <week>` to inspect a matchup.{C.RESET}"
 
 
+# Every intent handle_nl_query_result can act on that writes or deletes (the rest only read and render).
+NL_MUTATION_INTENTS = {
+    "delete_stat": "delete a custom stat",
+    "create_stat": "create a custom stat",
+    "export_data": "write an export file",
+    "export_stats": "write an export file",
+}
+NL_MUTATIONS_DISABLE_ENV = "NFL_STAT_DISABLE_NL_MUTATIONS"
+
+
+def nl_mutations_allowed(explicit: Optional[bool] = None) -> bool:
+    """False when a caller passed allow_mutations=False or NFL_STAT_DISABLE_NL_MUTATIONS is set (e.g. for a web front end)."""
+    if explicit is not None:
+        return bool(explicit)
+    return os.environ.get(NL_MUTATIONS_DISABLE_ENV, "").strip().lower() not in ("1", "true", "yes", "on")
+
+
 _NL_NON_NAME_WORDS = frozenset("""
 a about above across after against all also am an and any are as at average avg be been before behind below best better between both but by
 can compare compared comparison could coverage did diagram do does down draw each early either epa every exactly explain fewer field first
@@ -7201,6 +7295,7 @@ def handle_nl_query_result(
     view_override: str = "auto",
     camera_override: Optional[str] = None,
     interactive: bool = False,
+    allow_mutations: Optional[bool] = None,
 ) -> str:
     intent = parsed.get("intent", "stat_query")
     if intent == "ambiguous":
@@ -7223,6 +7318,14 @@ def handle_nl_query_result(
     slm_tag = f" [SLM: {parsed['slm_model_used']}]" if parsed.get("slm_model_used") else " [Local Rule/AST Parser]"
     header = f"\n{C.BOLD}{C.CYAN}🤖 Query Interpretation{slm_tag}:{C.RESET} {parsed.get('explanation', '')}"
 
+    # Natural-language text must not change or write things on its own. A model-chosen mutation is refused outright;
+    # callers that serve untrusted text (e.g. a web front end) can switch every NL mutation off.
+    if intent in NL_MUTATION_INTENTS:
+        if parsed.get("slm_model_used"):
+            return header + f"\n  {C.RED}✖ The language model cannot {NL_MUTATION_INTENTS[intent]}.{C.RESET}"
+        if not nl_mutations_allowed(allow_mutations):
+            return header + f"\n  {C.YELLOW}⚠ Natural-language requests to {NL_MUTATION_INTENTS[intent]} are turned off here.{C.RESET}"
+
     if intent == "export_data":
         target = parsed.get("target_file") or "last_query_result.csv"
         ok, msg = export_last_result(target)
@@ -7238,7 +7341,7 @@ def handle_nl_query_result(
     if intent == "dataset_info":
         return header + "\n" + render_dataset_info_view(all_plays, parsed)
 
-    season = int(parsed.get("season") or CURRENT_SEASON)
+    season = _safe_int(parsed.get("season"), CURRENT_SEASON) or CURRENT_SEASON
     season_explicit = bool(re.search(r"\b20\d{2}\b", str(parsed.get("query", ""))))
     if not season_explicit and not plays_for_season(all_plays, season):
         avail = available_seasons(all_plays)
@@ -7318,7 +7421,21 @@ def handle_nl_query_result(
         return header + "\n" + render_stat_page(engine, all_plays)
 
     if intent == "delete_stat":
-        stat_to_del = parsed.get("stat_name", "")
+        stat_to_del = str(parsed.get("stat_name", ""))
+        shown_name = re.sub(r"[^\w.-]", "?", stat_to_del)[:64]
+        if shown_name != stat_to_del:
+            return header + f"\n  {C.YELLOW}⚠ That stat name contains characters a stat id cannot have, so nothing was deleted.{C.RESET}"
+        if not interactive:
+            return header + (
+                f"\n  {C.YELLOW}⚠ Deleting a stat from a typed sentence needs a yes/no confirmation, which is only available "
+                f"in the interactive prompt. Use `/delete {shown_name}` or the `delete-stat` command instead.{C.RESET}"
+            )
+        try:
+            answer = prompt_input(f"\n  {C.BOLD}{C.RED}? Permanently delete custom stat '{shown_name}'? [y/N]: {C.RESET}").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer not in ("y", "yes"):
+            return header + f"\n  {C.DIM}Nothing deleted.{C.RESET}"
         try:
             deleted = engine.delete_custom_stat(stat_to_del)
             return header + f"\n  {C.GREEN}✔ Successfully deleted custom stat `{deleted.name}` ({deleted.title}).{C.RESET}"
@@ -7430,7 +7547,7 @@ def handle_nl_query_result(
                 except (EOFError, KeyboardInterrupt):
                     save_stat = False
             else:
-                save_stat = True
+                save_stat = False  # without a prompt, a typed sentence never writes to the catalog
 
         sdef = engine.register_custom_stat(
             name=stat_name,
