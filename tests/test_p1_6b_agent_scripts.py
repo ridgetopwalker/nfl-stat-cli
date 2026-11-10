@@ -116,7 +116,7 @@ def test_resolve_usage_and_wsl_needs_config(tmp_path):
 
 
 def test_skill_files_have_no_personal_paths_or_old_ipc_layout():
-    personal = re.compile(r"(?i)c:\\users\\|/home/[a-z]|/users/[a-z]|/work" + "space/")
+    personal = re.compile(r"(?i)c:[\\]" + r"{1,2}users|/ho" + r"me/[a-z]|/us" + r"ers/[a-z]|/work" + "space/")
     for name in ("SKILL.md", "watch_errors.py", "resolve.py"):
         text = (SKILL / name).read_text(encoding="utf-8")
         assert not personal.search(text), name
