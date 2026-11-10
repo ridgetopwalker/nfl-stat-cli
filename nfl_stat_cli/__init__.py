@@ -10817,7 +10817,8 @@ def interactive_tui(
                             else:
                                 print(render_sportsbook_board_view(s_plays, season=active_season))
                     else:
-                        interactive_sportsbook_browser(plays, active_season=active_season)
+                        season_plays = plays_for_season(plays, active_season)
+                        interactive_sportsbook_browser(season_plays, active_season=active_season)
                 elif cmd_token in ("/contract", "/contracts", "/contrat", "/payroll", "/salary", "/salaries"):
                     if cmd_args:
                         arg_str = " ".join(cmd_args).strip()
