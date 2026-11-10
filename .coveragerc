@@ -1,0 +1,7 @@
+[run]
+source = nfl_stat_cli
+branch = True
+
+[report]
+show_missing = True
+skip_empty = True

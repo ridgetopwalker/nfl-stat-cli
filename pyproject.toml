@@ -8,7 +8,7 @@ version = "2.0.0"
 description = "Cross-platform (*nix & Windows) colorized ASCII art NFL analytics, play visualizer (behind-offense, behind-defense, sideline), & composable custom stat CLI powered by nflverse (R), sportsdataverse-py (Python), and optional local SLM (Ollama)."
 readme = {file = "README.md", content-type = "text/markdown"}
 license = {file = "LICENSE"}
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [
   {name = "Sean McClain", email = "dev@ridgetopwalker.com"}
 ]
@@ -28,7 +28,7 @@ keywords = [
   "play-by-play",
 ]
 classifiers = [
-  "Development Status :: 5 - Production/Stable",
+  "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Intended Audience :: End Users/Desktop",
@@ -36,8 +36,6 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
