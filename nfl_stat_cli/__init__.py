@@ -2103,6 +2103,25 @@ def _safe_div(a: float, b: float) -> float:
     return a / b
 
 
+def _safe_mod(a: float, b: float) -> float:
+    if b == 0.0:
+        _div_zero_events["count"] += 1
+        return 0.0
+    return a % b
+
+
+def zero_division_note(count: int) -> str:
+    """One-line warning for results in which `count` evaluations divided (or took a modulo) by zero and were counted as 0.0."""
+    if count <= 0:
+        return ""
+    plural = "s" if count != 1 else ""
+    return (
+        f"{C.YELLOW}[!] Warning: {count} evaluation{plural} divided (or took a modulo) by zero and "
+        f"{'were' if count != 1 else 'was'} counted as 0.0, so some values may be misleading. "
+        f"Guard the denominator with nz(denominator, default) or ifelse(denominator > 0, num / denominator, 0.0).{C.RESET}"
+    )
+
+
 def unguarded_division_warning(formula: str) -> Optional[str]:
     """Return a note when a formula divides without an nz()/ifelse() guard (a zero denominator yields 0.0)."""
     if "/" not in formula or re.search(r"\b(?:nz|ifelse)\s*\(", formula):
@@ -2118,7 +2137,7 @@ ALLOWED_AST_OPS: Dict[Any, Callable[..., Any]] = {
     ast.Sub: _safe_arith(operator.sub),
     ast.Mult: _safe_arith(operator.mul),
     ast.Div: _safe_arith(_safe_div),
-    ast.Mod: _safe_arith(lambda a, b: (a % b) if b != 0.0 else 0.0),
+    ast.Mod: _safe_arith(_safe_mod),
     ast.Pow: _safe_pow,
     ast.USub: lambda a: -float(a),
     ast.UAdd: lambda a: +float(a),
@@ -3063,6 +3082,11 @@ def calculate_passer_rating(
     return ((pr_a + pr_b + pr_c + pr_d) / 6.0) * 100.0
 
 
+def _printable_snippet(text: Any, limit: int = 160) -> str:
+    """Single-line, terminal-safe excerpt of untrusted text (control characters and newlines become '?')."""
+    return "".join(ch if ch.isprintable() else "?" for ch in strip_ansi(str(text)))[:limit]
+
+
 class StatEngine:
     """Manages custom stats, evaluates multi-scope composable formulas, and tracks the user's Stat Page."""
 
@@ -3072,6 +3096,9 @@ class StatEngine:
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
         self.stats: Dict[str, StatDefinition] = dict(DEFAULT_STATS)
+        self.load_warnings: List[str] = []
+        self.last_zero_division_events: int = 0
+        self._zero_div_by_stat: Dict[str, int] = {}
         self.ephemeral_stats: Set[str] = set()
         self.stat_page: Dict[str, Any] = {
             "title": "My NFL Analytics Stat Page",
@@ -3093,30 +3120,79 @@ class StatEngine:
             try:
                 data = json.loads(self.custom_stats_file.read_text(encoding="utf-8"))
                 stats_map = data.get("stats", {}) if isinstance(data, dict) else {}
+                if not isinstance(stats_map, dict):
+                    stats_map = {}
+                file_names = {str(k) for k in stats_map}
+                rejected = 0
                 for name, item in stats_map.items():
                     try:
+                        name = str(name)
                         if not isinstance(item, dict) or "formula" not in item:
-                            continue
+                            raise ValueError("entry is not a stat definition with a formula")
                         if name in DEFAULT_STATS:
-                            item.setdefault("scope", DEFAULT_STATS[name].scope)
-                            item.setdefault("agg", DEFAULT_STATS[name].agg)
-                        self.stats[name] = StatDefinition(
-                            name=item.get("name", name),
-                            title=strip_ansi(item.get("title", name)),
-                            category="traditional" if (name in DEFAULT_STATS and DEFAULT_STATS[name].category == "traditional") else "custom",
-                            group_by=item.get("group_by", "qb"),
-                            formula=item["formula"],
-                            description=strip_ansi(item.get("description", "")),
-                            calculation_explained=strip_ansi(item.get("calculation_explained", "")),
-                            unit=strip_ansi(item.get("unit", "")),
-                            filter_expr=item.get("filter_expr", ""),
-                            scope=item.get("scope", "season"),
-                            agg=item.get("agg", "formula"),
-                            dependencies=item.get("dependencies") or extract_formula_dependencies(item["formula"]),
-                            created_at=item.get("created_at", ""),
+                            # A saved entry may never replace a built-in stat; an identical copy is harmless.
+                            built_in = DEFAULT_STATS[name]
+                            if str(item.get("formula", "")).strip() != built_in.formula or str(item.get("filter_expr", "") or "") != built_in.filter_expr:
+                                rejected += 1
+                                self.load_warnings.append(
+                                    f"Ignored saved stat '{_printable_snippet(name, 64)}' in custom_stats.json: it would replace a built-in stat. Rename it to keep it."
+                                )
+                            continue
+                        item_name = item.get("name", name)
+                        if str(item_name) != name:
+                            raise ValueError("the stat name does not match its entry key")
+                        group_by = str(item.get("group_by", "qb"))
+                        formula = str(item["formula"]).strip()
+                        filter_expr = str(item.get("filter_expr", "") or "").strip()
+                        scope = str(item.get("scope", "season")).lower()
+                        agg = str(item.get("agg", "formula")).lower()
+                        deps = self._validate_stat_definition(
+                            name, group_by, formula, filter_expr, scope, agg, extra_known_stats=file_names,
                         )
+                        self.stats[name] = StatDefinition(
+                            name=name,
+                            title=strip_ansi(str(item.get("title", name))),
+                            category="custom",
+                            group_by=group_by,
+                            formula=formula,
+                            description=strip_ansi(str(item.get("description", ""))),
+                            calculation_explained=strip_ansi(str(item.get("calculation_explained", ""))),
+                            unit=strip_ansi(str(item.get("unit", ""))),
+                            filter_expr=filter_expr,
+                            scope=scope,
+                            agg=agg,
+                            dependencies=deps,
+                            created_at=str(item.get("created_at", "")),
+                        )
+                    except Exception as exc:
+                        rejected += 1
+                        self.load_warnings.append(
+                            f"Skipped saved stat '{_printable_snippet(name, 64)}' in custom_stats.json: {_printable_snippet(exc, 160)}"
+                        )
+                # Drop stats that depend on a file entry which was rejected (forward references were allowed above)
+                changed = True
+                while changed:
+                    changed = False
+                    for st_name in [n for n in file_names if n in self.stats and n not in DEFAULT_STATS]:
+                        missing = [d for d in self.stats[st_name].dependencies if d in file_names and d not in self.stats]
+                        if missing:
+                            del self.stats[st_name]
+                            rejected += 1
+                            changed = True
+                            self.load_warnings.append(
+                                f"Skipped saved stat '{_printable_snippet(st_name, 64)}' in custom_stats.json: it depends on a skipped stat ({_printable_snippet(missing[0], 64)})."
+                            )
+                if rejected:
+                    try:
+                        current = self.custom_stats_file.read_bytes()
+                        existing = sorted(self.custom_stats_file.parent.glob(self.custom_stats_file.name + ".rejected*"))
+                        if not any(b.read_bytes() == current for b in existing):
+                            backup_path = self.custom_stats_file.with_suffix(".json.rejected")
+                            if backup_path.exists():
+                                backup_path = self.custom_stats_file.with_suffix(f".json.rejected-{dt.datetime.now().strftime('%Y%m%d%H%M%S%f')}")
+                            shutil.copy2(self.custom_stats_file, backup_path)
                     except Exception:
-                        continue
+                        pass
             except Exception:
                 try:
                     backup = self.custom_stats_file.with_suffix(".json.corrupt")
@@ -3675,6 +3751,36 @@ class StatEngine:
             return min(finite_vals)
         return sum(finite_vals) / len(finite_vals)
 
+    def reset_zero_division_events(self) -> None:
+        """Start a new report: renderers call this before evaluating, then read last_zero_division_events (a running total)."""
+        self.last_zero_division_events = 0
+
+    def _eval_stat_formula(self, sdef: StatDefinition, ctx: Dict[str, Any]) -> float:
+        """Evaluate one stat's formula, attributing any zero-denominator events to that stat."""
+        before = div_zero_event_count()
+        try:
+            return safe_eval_formula(sdef.formula, ctx)
+        finally:
+            delta = div_zero_event_count() - before
+            if delta:
+                self._zero_div_by_stat[sdef.name] = self._zero_div_by_stat.get(sdef.name, 0) + delta
+
+    def _zero_division_events_for(self, stat_name: str) -> int:
+        """Zero-denominator events from `stat_name` and the stats it depends on (not unrelated stats evaluated alongside)."""
+        seen: Set[str] = set()
+        stack = [stat_name]
+        total = 0
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            total += self._zero_div_by_stat.get(cur, 0)
+            sd = self.stats.get(cur)
+            if sd is not None:
+                stack.extend(sd.dependencies)
+        return total
+
     def _resolve_season_formulas(
         self,
         ctx: Dict[str, float],
@@ -3697,7 +3803,7 @@ class StatEngine:
                             # Merge already-resolved stats with filtered base metrics
                             eval_ctx = dict(ctx)
                             eval_ctx.update(filtered_ctx_cache[f_key])
-                        val = safe_eval_formula(sdef.formula, eval_ctx)
+                        val = self._eval_stat_formula(sdef, eval_ctx)
                         if ctx.get(sdef.name) != val:
                             ctx[sdef.name] = val
                             progressed = True
@@ -3723,7 +3829,7 @@ class StatEngine:
             p_vals: List[float] = []
             for p in p_sub:
                 try:
-                    p_vals.append(safe_eval_formula(sdef.formula, p))
+                    p_vals.append(self._eval_stat_formula(sdef, p))
                 except Exception:
                     pass
             ctx[sdef.name] = self._aggregate_values(p_vals, sdef.agg)
@@ -3748,7 +3854,7 @@ class StatEngine:
                     gp_vals = []
                     for p in gp_sub:
                         try:
-                            gp_vals.append(safe_eval_formula(sdef.formula, p))
+                            gp_vals.append(self._eval_stat_formula(sdef, p))
                         except Exception:
                             pass
                     g_ctx[sdef.name] = self._aggregate_values(gp_vals, sdef.agg)
@@ -3762,7 +3868,7 @@ class StatEngine:
                                 gf_plays = self.apply_filter(gplays, gdef.filter_expr)
                                 eval_g_ctx = dict(g_ctx)
                                 eval_g_ctx.update(self._compute_base_metrics(gf_plays, entity=entity) if gf_plays else {k: 0.0 for k in BASE_METRIC_KEYS})
-                            g_ctx[gdef.name] = safe_eval_formula(gdef.formula, eval_g_ctx)
+                            g_ctx[gdef.name] = self._eval_stat_formula(gdef, eval_g_ctx)
                         except Exception:
                             pass
                 game_contexts.append(g_ctx)
@@ -3836,6 +3942,29 @@ class StatEngine:
         position: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Evaluate a traditional or custom stat across entities and return a sorted leaderboard."""
+        reset_div_zero_events()
+        self._zero_div_by_stat = {}
+        try:
+            return self._evaluate_stat_leaderboard(
+                stat_name, plays, conf=conf, team=team, group_override=group_override,
+                extra_filter=extra_filter, division=division, week=week, qtr=qtr, position=position,
+            )
+        finally:
+            self.last_zero_division_events += self._zero_division_events_for(stat_name)
+
+    def _evaluate_stat_leaderboard(
+        self,
+        stat_name: str,
+        plays: List[Dict[str, Any]],
+        conf: Optional[str] = None,
+        team: Optional[str] = None,
+        group_override: Optional[str] = None,
+        extra_filter: str = "",
+        division: Optional[str] = None,
+        week: Optional[int] = None,
+        qtr: Optional[int] = None,
+        position: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         if stat_name not in self.stats:
             matches = difflib.get_close_matches(stat_name, list(self.stats.keys()), n=3, cutoff=0.5)
             hint = f" Did you mean: {', '.join(matches)}?" if matches else " Run `list-stats` or `/stats` to see available stats."
@@ -6601,6 +6730,7 @@ def render_general_stat_view(
         raise KeyError(f"Unknown stat '{stat_name}'.{hint}")
     sdef = engine.stats[stat_name]
     group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
+    engine.reset_zero_division_events()
     board = engine.evaluate_stat_leaderboard(
         stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr, position=position
     )
@@ -6709,6 +6839,9 @@ def render_general_stat_view(
             limit=parsed.get("limit"),
             game_id=parsed.get("game_id"),
         ))
+    zd_note = zero_division_note(engine.last_zero_division_events)
+    if zd_note:
+        out.extend(["", zd_note])
     return "\n".join(out)
 
 
@@ -6815,6 +6948,7 @@ def render_qb_meaningful_wins_view(
         for k in needed_example_stats:
             eval_engine.stats[k] = EXAMPLE_CUSTOM_STATS[k]
 
+    eval_engine.reset_zero_division_events()
     board = eval_engine.evaluate_stat_leaderboard("qb_impact_score", plays, conf=conf, team=team, group_override="qb")
     sdef_win = eval_engine.stats["qb_meaningful_win"]
     sdef_loss = eval_engine.stats["qb_meaningful_loss"]
@@ -6867,6 +7001,9 @@ def render_qb_meaningful_wins_view(
             title=f"SIGNATURE WIN-IMPACT PLAY: {board[0]['entity']} ({board[0]['team']})",
             camera=camera,
         ))
+    zd_note = zero_division_note(eval_engine.last_zero_division_events)
+    if zd_note:
+        out.extend(["", zd_note])
     return "\n".join(out)
 
 
@@ -6960,6 +7097,7 @@ def render_play_efficiency_view(
     camera: str = "behind-offense",
     team: Optional[str] = None,
 ) -> str:
+    engine.reset_zero_division_events()
     board = engine.evaluate_stat_leaderboard("yards_per_play", plays, conf=conf, team=team, group_override="play_concept")
     sdef = engine.stats["yards_per_play"]
 
@@ -6999,6 +7137,9 @@ def render_play_efficiency_view(
             title=f"MOST EFFICIENT {conf} OFFENSIVE PLAY ON FIELD: {board[0]['entity'].upper()}",
             camera=camera,
         ))
+    zd_note = zero_division_note(engine.last_zero_division_events)
+    if zd_note:
+        out.extend(["", zd_note])
     return "\n".join(out)
 
 
@@ -8235,6 +8376,7 @@ def render_player_drilldown_view(
     Drill down into comprehensive individual player statistics for a season.
     Smart team detection: lists all teams played for; if only 1 team in the season, does not ask!
     """
+    engine.reset_zero_division_events()
     s_plays = plays_for_season(plays, season)
 
     # Generic Player Disambiguation:
@@ -8543,6 +8685,9 @@ def render_player_drilldown_view(
         out.append(f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
 
     out.append(f"\n  {C.DIM}💡 Tip: Run `/play` to diagram any of {canonical_name}'s signature plays on the ASCII gridiron.{C.RESET}")
+    zd_note = zero_division_note(engine.last_zero_division_events)
+    if zd_note:
+        out.extend(["", zd_note])
     return "\n".join(out)
 
 
@@ -11434,6 +11579,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     bridge = NFLDataBridge(engine=args.engine)
     engine = StatEngine()
+    for _warn in engine.load_warnings:
+        print(f"{C.YELLOW}[!] {_warn}{C.RESET}", file=sys.stderr)
     resolved_camera = args.camera or "behind-offense"
     cmd = args.command or "tui"
 
