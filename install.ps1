@@ -275,14 +275,16 @@ if ($WithSLM) {
 # 5. Ensure portable local folder launchers (nfl-stat.bat & nfl-stat-cli.bat) & verify
 $LauncherContent = @"
 @echo off
+setlocal
+if defined PYTHONPATH (set "PYTHONPATH=%~dp0;%PYTHONPATH%") else (set "PYTHONPATH=%~dp0")
 if exist "%~dp0.venv\Scripts\python.exe" (
-    "%~dp0.venv\Scripts\python.exe" "%~dp0nfl_stat_cli.py" %*
+    "%~dp0.venv\Scripts\python.exe" -m nfl_stat_cli %*
 ) else (
     where py >nul 2>nul
-    if %ERRORLEVEL% EQU 0 (
-        py -3 "%~dp0nfl_stat_cli.py" %*
+    if errorlevel 1 (
+        python -m nfl_stat_cli %*
     ) else (
-        python "%~dp0nfl_stat_cli.py" %*
+        py -3 -m nfl_stat_cli %*
     )
 )
 "@
