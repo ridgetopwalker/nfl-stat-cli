@@ -7,7 +7,7 @@ A cross-platform (`*nix`, WSL, macOS, and Windows) command-line interface and in
 - **One-Step Automated Installer (`install.sh` / `install.bat` / `install.ps1`)**:
   - **Compact Progress UI (Default)**: Displays the colorized `NFL-STAT-CLI` ASCII art banner, a full-width progress bar matched to the banner width, and a single overwriting status line showing the current installer command.
   - **Verbose Mode (`-v` / `--verbose`)**: Pass `-v` (`./install.sh -v` or `.\install.ps1 -v`) to view full step-by-step `pip` and environment logs.
-  - **Zero-Prerequisite Setup**: Automatically detects or installs **Python 3** (`>=3.8`), bootstraps **`pip`**, creates/updates `.venv`, installs required Python packages (`pandas`, `pyarrow`, `polars`, `nfl_data_py`), and installs R's `nflreadr` if `Rscript` is present.
+  - **Zero-Prerequisite Setup**: Automatically detects or installs **Python 3** (`>=3.10`), bootstraps **`pip`**, creates/updates `.venv`, installs required Python packages (`pandas`, `pyarrow`, `polars`, `nfl_data_py`), and installs R's `nflreadr` if `Rscript` is present.
   - **`nfl-stat` Command & Post-Install `PATH` Prompt**: Generates the `nfl-stat` launcher in the project folder (`./nfl-stat` on `*nix`/WSL and `.\nfl-stat` on Windows) and, once installation verification succeeds, asks if you want to add `nfl-stat` to your global `PATH` so you can run `nfl-stat` from any directory.
 - **General-Purpose Multi-Scope Composable Custom Stat Engine**:
   - Build custom stats across three evaluation scopes:
@@ -55,6 +55,10 @@ Once the installer finishes verifying `nfl-stat`, it will prompt:
 ```
 - Choose **`y`** to run `nfl-stat` from any directory.
 - Choose **`N`** to run `./nfl-stat` (`*nix`/WSL) or `.\nfl-stat` (Windows) directly inside the installed folder.
+
+### Live data vs. sample data
+
+The installers install the live NFL data packages listed in [`requirements-live.txt`](requirements-live.txt) (`pandas`, `pyarrow`, `polars`, `nflreadpy`; `nflreadpy` needs Python 3.10+). If that step fails, the installer **stops with an error** instead of leaving you on the small built-in sample dataset. To use the sample dataset on purpose, pass `--sample-only` (`./install.sh --sample-only`) or `-SkipLivePackages` (`.\install.ps1 -SkipLivePackages`). The deprecated `nfl_data_py` loader is no longer installed by default; add `--with-legacy-nfl-data-py` / `-WithLegacyNflDataPy` if you need the opt-in fallback. Steps that need administrator rights (`sudo` to install Python on Linux) ask first; pass `--yes` to allow them when running non-interactively.
 
 ## Quickstart Examples
 
@@ -127,4 +131,4 @@ pip install "nfl-stat-cli[live]"
 
 ## License
 
-Released under the [MIT License](LICENSE). Play-by-play data provided via [nflverse/nflverse-data](https://github.com/nflverse/nflverse-data) (CC-BY 4.0) and [sportsdataverse-py](https://github.com/sportsdataverse/sportsdataverse-py).
+Code: MIT (see LICENSE). Data: nflverse (https://github.com/nflverse/nflverse-data), CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); we aggregate and derive statistics from it. Optional Python backend: sportsdataverse-py (https://github.com/sportsdataverse/sportsdataverse-py, MIT). Contract and coaching-staff tables are compiled by us from public reports. See NOTICE. Not affiliated with or endorsed by the NFL, nflverse, sportsdataverse, Over The Cap, or Spotrac.
