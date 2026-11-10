@@ -47,7 +47,7 @@ LABEL_NFLREADPY = "nflreadpy (Python)"
 LABEL_NFL_DATA_PY = "nfl_data_py (Python)"
 LABEL_SPORTSDATAVERSE = "sportsdataverse-py (Python, not nflverse)"
 LABEL_NFLREADR = "nflverse / nflreadr (R)"
-LABEL_SAMPLE = "built-in sample data (not nflverse)"
+LABEL_SAMPLE = "SAMPLE DATA - built-in demo plays, NOT live NFL data"
 LABEL_PYTHON_UNIDENTIFIED = "python data backend (unidentified)"  # classified as not-nflverse: no credit claimed
 
 # --- NOTICE (repo-root NOTICE must equal ``render_notice()``) --------------------------

@@ -100,7 +100,7 @@ def test_tui_error_report_contains_repro_fields(tmp_path):
     reports = [p for p in (tmp_path / "ipc" / "pending").glob("err_*.json")]
     assert len(reports) == 1
     r = json.loads(reports[0].read_text())["repro"]
-    assert r["is_sample"] is True and "sample" in r["data_source"]
+    assert r["is_sample"] is True and "sample" in r["data_source"].lower()
     assert r["season"] == 2025 and r["plays_loaded"] > 0
     n, digest = r["snapshot_id"].split("-")
     assert int(n) > 0 and len(digest) == 16
