@@ -324,10 +324,34 @@ class CLICompleter:
     stat metric IDs, NFL teams, player names, and filenames, following
     the standard command-line autocompletion behavior when matching files in a folder.
     """
-    def __init__(self, engine: Optional[Any] = None):
+    def __init__(self, engine: Optional[Any] = None, plays: Optional[List[Dict[str, Any]]] = None):
         self.engine = engine
         self._context_override: Optional[str] = None
         self._matches: List[str] = []
+        self._plays: Optional[List[Dict[str, Any]]] = plays
+        self._play_names_src: Optional[List[Dict[str, Any]]] = None
+        self._play_names_len = -1
+        self._play_names: Set[str] = set()
+
+    def set_plays(self, plays: Optional[List[Dict[str, Any]]]) -> None:
+        """Bind player-name completion to the active dataset (live or sample)."""
+        self._plays = plays
+        self._play_names_src = None
+
+    def _names_from_active_plays(self) -> Set[str]:
+        plays = self._plays
+        if not plays:
+            return set()
+        if self._play_names_src is not plays or self._play_names_len != len(plays):
+            raw: Set[str] = set()
+            for p in plays:
+                for k in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name"):
+                    val = p.get(k)
+                    if val:
+                        raw.add(str(val))
+            self._play_names = {v.strip() for v in raw if v.strip()}
+            self._play_names_src, self._play_names_len = plays, len(plays)
+        return self._play_names
 
     def set_context(self, ctx: Optional[str]) -> None:
         self._context_override = ctx
@@ -365,12 +389,7 @@ class CLICompleter:
         except Exception:
             pass
         try:
-            sample_plays = globals().get("SAMPLE_PBP_PLAYS", [])
-            for p in sample_plays:
-                for k in ("player_name", "receiver_player_name", "rusher_player_name", "qb_name"):
-                    val = p.get(k)
-                    if val and str(val).strip():
-                        names.add(str(val).strip())
+            names |= self._names_from_active_plays()
         except Exception:
             pass
         return sorted(list(names))
@@ -1479,11 +1498,30 @@ class NFLDataBridge:
     """
 
     def __init__(self, cache_dir: Optional[Path] = None, engine: str = "auto") -> None:
-        self.cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache_dir = cache_dir or (Path.home() / ".nfl_stat_cli" / "cache")
+        self._cache_dir_ready = False
         self.engine = engine.lower()
         self.last_source_used = "built-in-nflverse-sample"
         self.last_error: Optional[str] = None
+
+    @property
+    def cache_dir(self) -> Path:
+        """
+        Cache directory, created the first time it is read (callers read it to write a cache file; use
+        ``_cache_dir`` to peek at the path without creating it). A mkdir failure is left for the write to report.
+        """
+        if not self._cache_dir_ready:
+            try:
+                self._cache_dir.mkdir(parents=True, exist_ok=True)
+                self._cache_dir_ready = True
+            except OSError:
+                pass
+        return self._cache_dir
+
+    @cache_dir.setter
+    def cache_dir(self, value: Path) -> None:
+        self._cache_dir = Path(value)
+        self._cache_dir_ready = False
 
     def load_pbp(self, seasons: List[int], spinner: Optional[Any] = None) -> List[Dict[str, Any]]:
         """Load play-by-play rows for the requested seasons using the selected engine."""
@@ -2916,8 +2954,8 @@ class StatEngine:
     """Manages custom stats, evaluates multi-scope composable formulas, and tracks the user's Stat Page."""
 
     def __init__(self, storage_dir: Optional[Path] = None) -> None:
+        # The state directory is created on the first save (_atomic_write_json), not when the engine is built.
         self.storage_dir = storage_dir or (Path.home() / ".nfl_stat_cli")
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.custom_stats_file = self.storage_dir / "custom_stats.json"
         self.stat_page_file = self.storage_dir / "stat_page.json"
         self.stats: Dict[str, StatDefinition] = dict(DEFAULT_STATS)
@@ -9648,18 +9686,26 @@ def sanitize_ipc_text(value: Any, limit: int = 500) -> str:
     return text[:limit]
 
 
-def get_ipc_dir() -> Path:
+def get_ipc_dir(create: bool = True) -> Path:
     """
-    Returns the error-report IPC directory (pending/resolved/history), creating it with owner-only
-    permissions. Lives in the user's private state dir; override with NFL_STAT_IPC_DIR.
+    Returns the error-report IPC directory (pending/resolved/history). With ``create=True`` (the default,
+    used before writing) it creates the directories with owner-only permissions; with ``create=False``
+    (used by read-only callers) nothing is created, and directories that already exist are still checked.
+    Lives in the user's private state dir; override with NFL_STAT_IPC_DIR.
     """
     override = os.environ.get("NFL_STAT_IPC_DIR", "").strip()
     ipc_path = Path(override) if override else Path.home() / ".nfl_stat_cli" / "error_ipc"
     for sub in ("", "pending", "resolved", "history"):
         d = ipc_path / sub if sub else ipc_path
-        d.mkdir(parents=True, exist_ok=True)
+        if create:
+            d.mkdir(parents=True, exist_ok=True)
         if os.name != "nt":
-            st = os.lstat(d)
+            try:
+                st = os.lstat(d)
+            except FileNotFoundError:
+                if create:
+                    raise
+                continue
             if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
                 raise PermissionError(f"Refusing to use IPC directory not owned by the current user or reached through a symlink: {d.name}")
             try:
@@ -9854,7 +9900,8 @@ def cleanup_error_reports(
     """
     result = {"skipped": 0, "deleted_age": 0, "deleted_cap": 0, "kept": 0, "examined": 0}
     try:
-        root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir()
+        # never create from cleanup: read-only path, consistent with get_ipc_dir(create=False)
+        root = Path(ipc_dir) if ipc_dir is not None else get_ipc_dir(create=False)
         try:
             root_st = os.lstat(root)
             if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
@@ -10129,12 +10176,13 @@ def wait_for_resolution(
     Returns the payload only; it never reloads code or acts on the payload.
     """
     validate_report_id(report_id)
-    ipc_dir = get_ipc_dir()
+    ipc_dir = get_ipc_dir(create=False)
     target_res = ipc_dir / "resolved" / f"{report_id}.json"
     latest_res = ipc_dir / "resolved" / "latest.json"
     deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
 
     while True:
+        get_ipc_dir(create=False)  # re-check ownership/symlinks of directories that appeared after the last poll
         for p in (target_res, latest_res):
             data = _read_ipc_json(p)
             if data is not None and data.get("id") == report_id and data.get("status") == "resolved":
@@ -10394,6 +10442,8 @@ def interactive_tui(
     last_result_table: Optional[Dict[str, Any]] = None  # table rendered by the last query, if any
 
     setup_readline_completer(engine)
+    if _GLOBAL_COMPLETER:
+        _GLOBAL_COMPLETER.set_plays(plays)
 
     while True:
         try:
@@ -10785,7 +10835,7 @@ def interactive_tui(
                         res_info = ""
                         if error_ipc_enabled():
                             try:
-                                r_data = _read_ipc_json(get_ipc_dir() / "resolved" / "latest.json")
+                                r_data = _read_ipc_json(get_ipc_dir(create=False) / "resolved" / "latest.json")
                             except Exception:
                                 r_data = None
                             if r_data and r_data.get("summary"):
