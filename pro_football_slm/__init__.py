@@ -2495,6 +2495,66 @@ LEADERBOARD_ROW_METRICS: Tuple[str, ...] = (
     "epa_per_play", "success_rate", "completion_pct",
 )
 
+# Minimum-volume qualifiers for rate-stat leaderboards grouped by a player (issue #74): without one, a backup with
+# two attempts tops "best passer rating". Stat -> the volume metric that qualifies a row.
+RATE_STAT_VOLUME_METRIC: Dict[str, str] = {
+    "passer_rating": "pass_attempts",
+    "completion_pct": "pass_attempts",
+    "yards_per_attempt": "pass_attempts",
+    "any_a": "pass_attempts",
+    "interception_rate": "pass_attempts",
+    "sack_rate": "pass_attempts",
+    "explosive_pass_rate": "pass_attempts",
+    "yards_per_rush": "rush_attempts",
+    "touchdown_rate": "plays",
+    "epa_per_play": "plays",
+    "success_rate_pct": "plays",
+    "yards_per_play": "plays",
+    "explosive_play_rate": "plays",
+    "first_down_rate": "plays",
+    "turnover_rate": "plays",
+}
+# NFL-style qualifiers per team game: 14 pass attempts (238 over 17 games), 6.25 carries (100 over 16 games).
+QUALIFIER_PER_GAME_BY_METRIC: Dict[str, float] = {"pass_attempts": 14.0, "rush_attempts": 6.25}
+# Per-play stats ("plays") qualify by the role being ranked; receivers use 1.875 receptions-per-game.
+QUALIFIER_PER_GAME_BY_GROUP: Dict[str, float] = {"qb": 14.0, "rusher": 6.25, "receiver": 1.875, "player": 1.875}
+QUALIFIER_SMALL_WINDOW_GAMES = 3      # below this many team games ...
+QUALIFIER_SMALL_WINDOW_FLOOR = 10     # ... still require at least this many attempts
+# A default qualifier never hides more than this share of the leader's volume, so sparse windows (a 3rd-down split,
+# a sample file) still show their busiest players instead of an empty board. Explicit min_attempts is exact.
+QUALIFIER_LEADER_SHARE = 0.5
+
+
+MIN_ATTEMPTS_PHRASE_RE = re.compile(
+    r"\b(?:min(?:imum)?\.?|at\s+least)\s+(?:of\s+)?(\d{1,4})\s+(?:pass(?:ing)?\s+)?"
+    r"(?:attempts?|atts?|carries|rushes|plays|snaps|dropbacks)\b",
+    re.I,
+)
+
+
+def rate_stat_qualifier_spec(stat_name: str, group_col: Optional[str]) -> Optional[Tuple[str, float]]:
+    """(volume metric, attempts per team game) when ``stat_name`` grouped by ``group_col`` needs a qualifier, else None.
+
+    Only per-attempt / per-play rate stats grouped by a player qualify; team/defense groupings and count stats
+    (passing_yards, takeaways, ...) never do.
+    """
+    if group_col not in QUALIFIER_PER_GAME_BY_GROUP:
+        return None
+    metric = RATE_STAT_VOLUME_METRIC.get(stat_name)
+    if not metric:
+        return None
+    return metric, QUALIFIER_PER_GAME_BY_METRIC.get(metric, QUALIFIER_PER_GAME_BY_GROUP[group_col])
+
+
+def default_min_attempts(per_game: float, team_games: int) -> int:
+    """NFL-style qualifier scaled to the games a team played in the window, with a small floor for tiny windows."""
+    games = max(0, int(team_games))
+    need = int(math.ceil(per_game * games - 1e-9))
+    if games < QUALIFIER_SMALL_WINDOW_GAMES:
+        need = max(need, QUALIFIER_SMALL_WINDOW_FLOOR)
+    return need
+
+
 ALLOWED_AST_OPS: Dict[Any, Callable[..., Any]] = {
     ast.Add: _safe_arith(operator.add),
     ast.Sub: _safe_arith(operator.sub),
@@ -3461,6 +3521,8 @@ class StatEngine:
         self.stats: Dict[str, StatDefinition] = dict(DEFAULT_STATS)
         self.load_warnings: List[str] = []
         self.last_zero_division_events: int = 0
+        # Qualifier applied by the last evaluate_stat_leaderboard() call (None when none applied); see issue #74.
+        self.last_leaderboard_qualifier: Optional[Dict[str, Any]] = None
         self._zero_div_by_stat: Dict[str, int] = {}
         self.ephemeral_stats: Set[str] = set()
         self.stat_page: Dict[str, Any] = {
@@ -4345,18 +4407,30 @@ class StatEngine:
         qtr: Optional[int] = None,
         position: Optional[str] = None,
         also: Iterable[str] = (),
+        min_attempts: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Evaluate a traditional or custom stat across entities and return a sorted leaderboard.
         Only the requested stat (and the stats it depends on) is evaluated per group; pass extra stat names in
         ``also`` when the caller reads their per-row fields (qb_impact_score / qb_meaningful_win / qb_meaningful_loss).
+
+        ``min_attempts`` qualifies per-attempt / per-play rate stats grouped by a player (see
+        ``rate_stat_qualifier_spec``) before ranking: None applies the NFL-style default scaled to each team's games
+        in the filtered plays, a positive number is an exact minimum of the stat's volume metric, and 0 disables it.
+        Callers that already narrowed ``plays`` to one named player should pass 0. The qualifier used is left in
+        ``last_leaderboard_qualifier``.
         """
+        if min_attempts is not None:
+            if isinstance(min_attempts, bool) or not isinstance(min_attempts, int) or min_attempts < 0:
+                raise ValueError("min_attempts must be a whole number >= 0")
         reset_div_zero_events()
         self._zero_div_by_stat = {}
+        self.last_leaderboard_qualifier = None
         try:
             return self._evaluate_stat_leaderboard(
                 stat_name, plays, conf=conf, team=team, group_override=group_override,
                 extra_filter=extra_filter, division=division, week=week, qtr=qtr, position=position, also=also,
+                min_attempts=min_attempts,
             )
         finally:
             self.last_zero_division_events += self._zero_division_events_for(stat_name)
@@ -4374,6 +4448,7 @@ class StatEngine:
         qtr: Optional[int] = None,
         position: Optional[str] = None,
         also: Iterable[str] = (),
+        min_attempts: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         if stat_name not in self.stats:
             matches = difflib.get_close_matches(stat_name, list(self.stats.keys()), n=3, cutoff=0.5)
@@ -4408,6 +4483,13 @@ class StatEngine:
             filtered = [p for p in filtered if int(p.get("timeout", 0)) == 1 and p.get(key_field)]
         else:
             key_field = GROUP_BY_COLUMN_MAP.get(group_col, "posteam")
+
+        qual_spec = rate_stat_qualifier_spec(stat_name, group_col) if min_attempts != 0 else None
+        team_games: Dict[str, Set[str]] = {}
+        if qual_spec:
+            for p in filtered:
+                team_games.setdefault(str(p.get("posteam") or ""), set()).add(str(p.get("game_id") or ""))
+            team_games.pop("", None)
 
         groups: Dict[str, List[Dict[str, Any]]] = {}
         role_aware_players = key_field == "player_name" and self._stat_needs_role_attribution(sdef)
@@ -4491,8 +4573,51 @@ class StatEngine:
                 "metrics": metrics,
             })
 
+        if qual_spec:
+            rows = self._apply_rate_qualifier(rows, stat_name, group_col, qual_spec, team_games, min_attempts)
         rows.sort(key=lambda r: (r["value"], r["epa_per_play"]), reverse=True)
         return rows
+
+    def _apply_rate_qualifier(
+        self,
+        rows: List[Dict[str, Any]],
+        stat_name: str,
+        group_col: str,
+        spec: Tuple[str, float],
+        team_games: Dict[str, Set[str]],
+        min_attempts: Optional[int],
+    ) -> List[Dict[str, Any]]:
+        """Drop player rows below the volume qualifier (issue #74) and record it in last_leaderboard_qualifier."""
+        metric, per_game = spec
+        league_games = max((len(g) for g in team_games.values()), default=0)
+        volumes = [float(r["metrics"].get(metric, 0.0)) for r in rows]
+        if min_attempts is None:
+            source = "default"
+            cap = int(math.ceil(QUALIFIER_LEADER_SHARE * max(volumes, default=0.0)))
+            league_min = min(default_min_attempts(per_game, league_games), cap)
+
+            def need_for(row: Dict[str, Any]) -> int:
+                games = len(team_games.get(str(row.get("team") or ""), ())) or league_games
+                return min(default_min_attempts(per_game, games), cap)
+        else:
+            source = "override"
+            league_min = int(min_attempts)
+
+            def need_for(row: Dict[str, Any]) -> int:
+                return int(min_attempts)
+
+        kept = [r for r, vol in zip(rows, volumes) if vol >= need_for(r)]
+        self.last_leaderboard_qualifier = {
+            "stat": stat_name,
+            "group_by": group_col,
+            "metric": metric,
+            "min_attempts": league_min,
+            "per_game": per_game if source == "default" else None,
+            "team_games": league_games,
+            "source": source,
+            "excluded": len(rows) - len(kept),
+        }
+        return kept
 
     def query_plays(
         self,
@@ -5959,7 +6084,7 @@ class NaturalLanguageStatAssistant:
         season = _int(parsed.get("season"), 1999, 2100)
         if season is not None:
             out["season"] = season
-        for key, lo, hi in (("week", 1, 30), ("qtr", 1, 5), ("limit", 1, 100)):
+        for key, lo, hi in (("week", 1, 30), ("qtr", 1, 5), ("limit", 1, 100), ("min_attempts", 0, 1000)):
             val = _int(parsed.get(key), lo, hi)
             if val is not None:
                 out[key] = val
@@ -7080,10 +7205,14 @@ class NaturalLanguageStatAssistant:
             limit_val = int(top_m.group(1))
         elif is_leader_query:
             limit_val = 5
+        # "min 100 attempts" / "at least 50 carries" overrides the rate-stat qualifier (issue #74); 0 shows everyone
+        min_m = MIN_ATTEMPTS_PHRASE_RE.search(ql)
+        extra: Dict[str, Any] = {"min_attempts": min(1000, int(min_m.group(1)))} if min_m else {}
 
         exp_prefix = f"Evaluated `{matched_stat}` leaders for {season}" if is_leader_query else f"Evaluated `{matched_stat}` across {season}"
 
         return {
+            **extra,
             "intent": "stat_query",
             "query": query,
             "stat_name": matched_stat,
@@ -7131,6 +7260,22 @@ def _should_show_text(view_mode: str, is_play_query: bool = False) -> bool:
     return vm in ("text", "table", "all")
 
 
+_QUALIFIER_METRIC_LABELS = {"pass_attempts": "pass attempts", "rush_attempts": "carries", "plays": "plays"}
+
+
+def qualifier_note(qualifier: Optional[Dict[str, Any]]) -> str:
+    """One-line description of a leaderboard qualifier, e.g. 'Qualifier: min 238 pass attempts (14 per team game) ...'."""
+    if not qualifier:
+        return ""
+    label = _QUALIFIER_METRIC_LABELS.get(str(qualifier.get("metric")), str(qualifier.get("metric")))
+    text = f"Qualifier: min {qualifier.get('min_attempts')} {label}"
+    if qualifier.get("source") == "default" and qualifier.get("per_game"):
+        text += f" ({qualifier['per_game']:g} per team game)"
+    if qualifier.get("excluded"):
+        text += f"; {qualifier['excluded']} below the minimum not ranked"
+    return text + " (--min-attempts N to change, 0 to show all)."
+
+
 def render_general_stat_view(
     engine: StatEngine,
     plays: List[Dict[str, Any]],
@@ -7148,6 +7293,7 @@ def render_general_stat_view(
     limit: Optional[int] = None,
     position: Optional[str] = None,
     board_sink: Optional[List[Dict[str, Any]]] = None,
+    min_attempts: Optional[int] = None,
 ) -> str:
     if stat_name not in engine.stats:
         matches = difflib.get_close_matches(stat_name, list(engine.stats.keys()), n=3, cutoff=0.5)
@@ -7157,8 +7303,10 @@ def render_general_stat_view(
     group_col = group_override if (group_override and group_override in GROUP_BY_COLUMN_MAP) else sdef.group_by
     engine.reset_zero_division_events()
     board = engine.evaluate_stat_leaderboard(
-        stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr, position=position
+        stat_name, plays, conf=conf, team=team, group_override=group_col, extra_filter=extra_filter, division=division, week=week, qtr=qtr, position=position,
+        min_attempts=min_attempts,
     )
+    qual_note = qualifier_note(getattr(engine, "last_leaderboard_qualifier", None))
     display_board = board[:limit] if (limit and limit > 0) else board
     if board_sink is not None:
         board_sink.extend(_leaderboard_record(r) for r in display_board)
@@ -7248,6 +7396,8 @@ def render_general_stat_view(
                 f"{C.GOLD}{overall_avg:.2f}{unit_sfx}{C.RESET}  │  "
                 f"{C.BOLD}Leader:{C.RESET} {C.CYAN}{board[0]['entity']}{C.RESET} ({board[0]['value']:.2f}{unit_sfx}){shown_note}"
             )
+        if qual_note:
+            out.append(f"  {C.DIM}{qual_note}{C.RESET}")
 
     if _should_show_text(view_mode, is_play_query=False):
         deps_str = ", ".join(sdef.dependencies) if sdef.dependencies else "base play-by-play metrics"
@@ -8209,6 +8359,7 @@ def _handle_nl_query_result_impl(
     _unknown_names = _unknown_name_tokens(str(parsed.get("query", "")), all_plays, engine)
     if _unknown_names:
         return _render_unanswered(parsed, f"I don't know a player or team named '{_unknown_names[0].title()}' in the loaded data; check the spelling or use the full name.", engine)
+    named_player = False
     if player:
         p_low = str(player).lower()
         player_filtered = [
@@ -8225,6 +8376,7 @@ def _handle_nl_query_result_impl(
             player_filtered = find_player_plays(s_plays, str(player))
         if player_filtered:
             s_plays = player_filtered
+            named_player = True
         elif all(w in _NL_NON_NAME_WORDS or w.rstrip("s") in _NL_NON_NAME_WORDS for w in str(player).strip().lower().split()) or resolve_team_abbr(str(player)):
             pass  # a position/team word the parser mislabeled as a player: keep the unfiltered stat
         else:
@@ -8253,6 +8405,8 @@ def _handle_nl_query_result_impl(
         limit=parsed.get("limit"),
         position=parsed.get("position"),
         board_sink=board_sink,
+        # one named player is never hidden by the rate-stat qualifier (issue #74)
+        min_attempts=0 if named_player else parsed.get("min_attempts"),
     )
 
 
@@ -12150,6 +12304,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     stat_p.add_argument("--filter", default="", help="Additional play filter expression (e.g. 'down == 3' or 'is_screen == 1')")
     stat_p.add_argument("--limit", type=int, default=None, help="Limit number of leaderboard rows to show (e.g. --limit 5)")
     stat_p.add_argument("--position", "--pos", default=None, help="Filter leaderboard to a specific player position (e.g. QB, RB, WR, TE, K, P)")
+    stat_p.add_argument("--min-attempts", dest="min_attempts", type=int, default=None,
+                        help="Minimum attempts/carries/plays for rate-stat player boards (default: NFL-style, 14 pass attempts or 6.25 carries per team game; 0 shows everyone)")
 
     play_p = sub.add_parser("play", parents=[common], help="Find and diagram a specific play on the ASCII gridiron (supports behind-offense, behind-defense, sideline)")
     play_p.add_argument("--play-id", type=int, default=None, help="Specific play_id to render")
@@ -12335,6 +12491,7 @@ def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
                 camera=resolved_camera,
                 limit=getattr(args, "limit", None),
                 position=getattr(args, "position", None),
+                min_attempts=getattr(args, "min_attempts", None),
             ))
         elif cmd == "team":
             # Pass the raw name so an ambiguous one ("New York") is listed instead of silently using the first match.
