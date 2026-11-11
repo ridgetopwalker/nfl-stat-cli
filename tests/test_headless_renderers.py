@@ -213,3 +213,17 @@ def test_player_interactive_default_still_prompts_on_a_tty(engine, plays, monkey
     assert asked and "Select player" in asked[0]
     assert "matches several players" not in out
     assert "Multiple players matched" in capsys.readouterr().out
+
+
+def test_unique_player_on_two_teams_returns_combined_without_prompt(headless, engine, plays, capsys, tmp_path):
+    rows = [dict(AMBIGUOUS_ROWS[0], posteam=team, rusher_player_name="T.Traded",
+                 play_id=9100 + i, game_id=f"2025_01_{team}_NYJ", yards_gained=7 + i)
+            for i, team in enumerate(("SF", "WAS"))]
+    bridge = cli.NFLDataBridge(cache_dir=tmp_path / "traded-cache", engine="offline")
+    normalized = [bridge._normalize_row(row, 9100 + i) for i, row in enumerate(rows)]
+    assert set(cli.get_player_teams(normalized, "T.Traded")) == {"SF", "WAS"}
+    out = headless(cli.render_player_drilldown_view, engine, plays + normalized,
+                   SEASON, "T.Traded", interactive=False)
+    _quiet(capsys)
+    assert "Combined All Teams" in out and "SF" in out and "WAS" in out
+    assert "I can't answer that" not in out
