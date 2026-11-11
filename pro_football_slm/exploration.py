@@ -62,8 +62,11 @@ def player_links(row, rosters=()):
         roster = next((r for r in candidates if r.get("team") == row.get("posteam")),
                       candidates[0] if candidates else {})
         name_column = column.replace("_id", "_name")
+        pbp_name = clean(row.get(name_column))
+        if column == "passer_player_id":
+            pbp_name = pbp_name or clean(row.get("qb_name"))
         links.append({"ref": f"player:{gsis_id}", "gsis_id": gsis_id,
-                      "role": column, "name": roster.get("full_name") or clean(row.get(name_column)) or gsis_id})
+                      "role": column, "name": roster.get("full_name") or pbp_name or gsis_id})
     return links
 
 
@@ -79,6 +82,8 @@ def row_refs(row, rosters=()):
 
 def extend_row(normalized, raw):
     for column in EXPLORATION_COLUMNS:
+        if column in normalized:
+            continue
         value = clean(raw.get(column))
         if column in PLAYER_NAME_COLUMNS and value is None:
             continue
@@ -112,15 +117,20 @@ def _number(value):
 
 
 def order_game_log(rows):
-    """Use numeric play_id within each game, with stable source order for ties.
+    """Sort by numeric order_sequence, falling back to numeric play_id.
 
-    play_id is the source event sequence. order_sequence is retained as metadata.
-    Missing play ids follow identified events in their original input order.
-    Clock corrections and untimed events make remaining-time sorting unsuitable.
+    The three complete games in tests/fixtures/ordering_2024.csv show corrected
+    event placement (including NE-CIN clock reversals under play_id ordering).
+    Keep source order for ties and place unidentified events last. Clocks are
+    evidence for the rule, not sort keys: corrections/untimed events are valid.
     """
-    return sorted(rows, key=lambda row: (str(row.get("game_id") or ""),
-                                        _number(row.get("play_id")) is None,
-                                        _number(row.get("play_id")) or 0))
+    def key(row):
+        sequence = _number(row.get("order_sequence"))
+        if sequence is None:
+            sequence = _number(row.get("play_id"))
+        return str(row.get("game_id") or ""), sequence is None, sequence or 0
+
+    return sorted(rows, key=key)
 
 
 def normalize_rosters(rows):

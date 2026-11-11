@@ -62,12 +62,12 @@ def test_refs_are_game_scoped_and_use_roster_names():
     assert "headshot_url" not in rows[0] and "birth_date" not in rows[0]
 
 
-def test_order_ignores_clock_corrections_and_lexical_sequence():
+def test_order_uses_numeric_sequence_over_clock_and_play_id():
     # Synthetic counterexample, not an extract of the BAL-KC game.
     rows = [event(100, "run", order_sequence="2", game_seconds_remaining=100),
             event(20, "timeout", order_sequence="10", game_seconds_remaining=90),
             event(30, "no_play", order_sequence="1", game_seconds_remaining=110)]
-    assert [r["play_id"] for r in order_game_log(rows)] == [20, 30, 100]
+    assert [r["play_id"] for r in order_game_log(rows)] == [30, 100, 20]
 
 
 def test_missing_order_fields_and_stable_ties():
@@ -121,3 +121,40 @@ def test_unknown_kick_facts_are_excluded(bridge, tmp_path):
 def test_legacy_sparse_rows_do_not_invent_special_teams_results(tmp_path, stat, kind):
     engine = StatEngine(storage_dir=tmp_path)
     assert engine.evaluate_stat_leaderboard(stat, [event(1, kind)], min_attempts=0) == []
+
+@pytest.mark.parametrize("game,count,disagreements,clock_reversals", [
+    ("2024_01_BAL_KC", 178, 20, 0),
+    ("2024_01_GB_PHI", 196, 26, 0),
+    ("2024_01_NE_CIN", 153, 22, 2),
+])
+def test_known_complete_games_order(game, count, disagreements, clock_reversals):
+    import csv
+    from pathlib import Path
+    with (Path(__file__).parent / "fixtures/ordering_2024.csv").open() as source:
+        rows = [row for row in csv.DictReader(source) if row["game_id"] == game]
+    assert len(rows) == count
+    assert set(rows[0]) == {"game_id", "play_id", "order_sequence",
+                            "game_seconds_remaining", "qtr", "time", "play_type"}
+    by_id = sorted(rows, key=lambda row: float(row["play_id"]))
+    expected = sorted(rows, key=lambda row: float(row["order_sequence"]))
+    assert sum(a["play_id"] != b["play_id"] for a, b in zip(by_id, expected)) == disagreements
+    def reversals(events):
+        clocks = [float(row["game_seconds_remaining"]) for row in events]
+        return sum(b > a for a, b in zip(clocks, clocks[1:]))
+    assert reversals(by_id) == clock_reversals
+    assert reversals(expected) == 0
+    assert order_game_log(list(reversed(rows))) == expected
+    assert float(expected[0]["game_seconds_remaining"]) == 3600
+    assert float(expected[-1]["game_seconds_remaining"]) == 0
+
+
+def test_stats_row_contract_and_extension_preserve_existing_values(bridge):
+    from pro_football_slm.exploration import extend_row
+    raw = event(1, "pass", return_touchdown=None)
+    row = bridge._normalize_row(raw)
+    assert len(row) == 78
+    assert row["return_touchdown"] == 0
+    assert "players" not in row and "order_sequence" not in row
+    extended = extend_row(dict(row), raw)
+    assert all(extended[key] == value for key, value in row.items())
+    assert type(extended["return_touchdown"]) is int

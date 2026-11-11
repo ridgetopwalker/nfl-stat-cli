@@ -2128,11 +2128,11 @@ class NFLDataBridge:
 
     def normalize_game_log(self, records: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Normalize every event, including rows without a possession team."""
-        from .exploration import clean, order_game_log
+        from .exploration import clean, extend_row, order_game_log
 
         rows = []
         for idx, raw in enumerate(records, 1):
-            row = self._normalize_row(raw, idx)
+            row = extend_row(self._normalize_row(raw, idx), raw)
             if clean(raw.get("play_id")) is None:
                 row["play_id"] = None
             rows.append(row)
@@ -2344,9 +2344,7 @@ class NFLDataBridge:
         posteam_timeouts_rem = _safe_int(r.get("posteam_timeouts_remaining"), 3)
         defteam_timeouts_rem = _safe_int(r.get("defteam_timeouts_remaining"), 3)
 
-        from .exploration import extend_row
-
-        return extend_row({
+        return {
             "play_id": _safe_int(r.get("play_id"), idx),
             "season": season_val,
             "week": _safe_int(r.get("week"), gid_week),
@@ -2425,7 +2423,7 @@ class NFLDataBridge:
             "score_differential": score_diff,
             "qtr": _safe_int(r.get("qtr"), 1),
             "desc": desc,
-        }, r)
+        }
 
 
 # ---------------------------------------------------------------------------
