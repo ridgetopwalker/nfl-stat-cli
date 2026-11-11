@@ -235,7 +235,7 @@ def test_installers_publish_primary_short_and_legacy_commands():
     assert {body for _, body in loops} == {'"$HOME/.local/bin" "$command"', '"/usr/local/bin" "$command"'}
     loop = re.search(r'foreach \(\$LauncherName in @\(([^)]+)\)\)\s*\{\s*Set-Content', INSTALL_PS1)
     assert loop
-    assert re.findall(r'"([^"]+)"', loop[1]) == ["pro-football-slm.bat", "pfslm.bat", "nfl-stat.bat", "pro-football-slm-cli.bat"]
+    assert re.findall(r'"([^"]+)"', loop[1]) == ["pro-football-slm.bat", "pfslm.bat", "nfl-stat.bat"]
     assert '"$SCRIPT_DIR/pro-football-slm" --version' in INSTALL_SH
     assert '"pro-football-slm.bat") --version' in INSTALL_PS1
 

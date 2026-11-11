@@ -288,7 +288,7 @@ if exist "%~dp0.venv\Scripts\python.exe" (
     )
 )
 "@
-foreach ($LauncherName in @("pro-football-slm.bat", "pfslm.bat", "nfl-stat.bat", "pro-football-slm-cli.bat")) {
+foreach ($LauncherName in @("pro-football-slm.bat", "pfslm.bat", "nfl-stat.bat")) {
     Set-Content -Path (Join-Path $ProjectRoot $LauncherName) -Value $LauncherContent -Encoding ASCII
 }
 

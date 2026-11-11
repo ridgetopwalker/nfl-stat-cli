@@ -63,7 +63,6 @@ PATH_MOVES: List[Tuple[str, str]] = [
     (".agents/skills/nfl-stat-error-triage", ".agents/skills/pro-football-slm-error-triage"),
     ("nfl_stat_cli", "pro_football_slm"),
     ("nfl_stat_cli.py", "pro_football_slm.py"),
-    ("nfl-stat-cli.bat", "pro-football-slm-cli.bat"),  # keep a Windows alias name
 ]
 
 # Placeholders so we never rewrite the GitHub repo URL.

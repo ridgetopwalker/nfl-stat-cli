@@ -35,7 +35,7 @@ def test_manifest_does_not_list_removed_files():
 def test_no_top_level_import_shim_or_launcher_references():
     assert not (ROOT / "pro_football_slm.py").exists(), "top-level shim next to the package makes imports ambiguous"
     assert "pro_football_slm.py" not in (ROOT / "MANIFEST.in").read_text()
-    for name in ("pro-football-slm", "pfslm", "nfl-stat", "nfl-stat.bat", "pro-football-slm.bat", "pfslm.bat", "pro-football-slm-cli.bat", "install.sh", "install.ps1"):
+    for name in ("pro-football-slm", "pfslm", "nfl-stat", "nfl-stat.bat", "pro-football-slm.bat", "pfslm.bat", "install.sh", "install.ps1"):
         text = (ROOT / name).read_text()
         assert "pro_football_slm.py" not in text, name
         assert "-m pro_football_slm" in text, name
@@ -81,7 +81,7 @@ def test_launcher_puts_project_dir_on_pythonpath(tmp_path, launcher):
 
 
 def test_windows_launchers_run_the_package_without_stale_errorlevel():
-    for name in ("nfl-stat.bat", "pro-football-slm.bat", "pfslm.bat", "pro-football-slm-cli.bat"):
+    for name in ("nfl-stat.bat", "pro-football-slm.bat", "pfslm.bat"):
         text = (ROOT / name).read_text()
         assert "-m pro_football_slm" in text and "PYTHONPATH" in text
         assert "if errorlevel 1" in text and "%ERRORLEVEL%" not in text, name
@@ -107,7 +107,7 @@ def test_metadata_is_honest_and_export_json_not_shipped():
 
 def test_windows_launcher_copies_do_not_drift():
     bat = (ROOT / "nfl-stat.bat").read_text().replace("\r\n", "\n").strip()
-    for name in ("pro-football-slm.bat", "pfslm.bat", "pro-football-slm-cli.bat"):
+    for name in ("pro-football-slm.bat", "pfslm.bat"):
         assert (ROOT / name).read_text().replace("\r\n", "\n").strip() == bat
     ps1 = (ROOT / "install.ps1").read_text().replace("\r\n", "\n")
     embedded = ps1.split('$LauncherContent = @"\n', 1)[1].split('\n"@', 1)[0].strip()
