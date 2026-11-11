@@ -2126,6 +2126,18 @@ class NFLDataBridge:
             out.append(self._normalize_row(r, idx))
         return out
 
+    def normalize_game_log(self, records: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normalize every event, including rows without a possession team."""
+        from .exploration import clean, order_game_log
+
+        rows = []
+        for idx, raw in enumerate(records, 1):
+            row = self._normalize_row(raw, idx)
+            if clean(raw.get("play_id")) is None:
+                row["play_id"] = None
+            rows.append(row)
+        return order_game_log(rows)
+
     def _normalize_row(self, r: Dict[str, Any], idx: int = 1) -> Dict[str, Any]:
         posteam = _safe_str(r.get("posteam"), "")
         defteam = _safe_str(r.get("defteam"), "")
@@ -2332,7 +2344,9 @@ class NFLDataBridge:
         posteam_timeouts_rem = _safe_int(r.get("posteam_timeouts_remaining"), 3)
         defteam_timeouts_rem = _safe_int(r.get("defteam_timeouts_remaining"), 3)
 
-        return {
+        from .exploration import extend_row
+
+        return extend_row({
             "play_id": _safe_int(r.get("play_id"), idx),
             "season": season_val,
             "week": _safe_int(r.get("week"), gid_week),
@@ -2411,7 +2425,7 @@ class NFLDataBridge:
             "score_differential": score_diff,
             "qtr": _safe_int(r.get("qtr"), 1),
             "desc": desc,
-        }
+        }, r)
 
 
 # ---------------------------------------------------------------------------
@@ -2816,6 +2830,42 @@ class StatDefinition:
 
 
 DEFAULT_STATS: Dict[str, StatDefinition] = {
+    "field_goal_pct": StatDefinition(
+        name="field_goal_pct", title="Field Goal Percentage", category="traditional", group_by="kicker",
+        formula="100 * (field_goal_result == 'made')", scope="play", agg="avg", unit="%",
+        filter_expr="play_type == 'field_goal' and (field_goal_result == 'made' or field_goal_result == 'missed' or field_goal_result == 'blocked')",
+        description="Made field goals per recorded attempt. Filter kick_distance for distance splits.",
+        calculation_explained="100 times made attempts divided by attempts with a made, missed or blocked result."),
+    "extra_point_pct": StatDefinition(
+        name="extra_point_pct", title="Extra Point Percentage", category="traditional", group_by="kicker",
+        formula="100 * (extra_point_result == 'good')", scope="play", agg="avg", unit="%",
+        filter_expr="play_type == 'extra_point' and (extra_point_result == 'good' or extra_point_result == 'failed' or extra_point_result == 'blocked')",
+        description="Successful extra-point kicks per recorded attempt.",
+        calculation_explained="100 times good kicks divided by kicks with a good, failed or blocked result."),
+    "punt_average": StatDefinition(
+        name="punt_average", title="Punt Average", category="traditional", group_by="punter",
+        formula="kick_distance", scope="play", agg="avg", unit="yds/punt",
+        filter_expr="play_type == 'punt' and punt_blocked == 0 and kick_distance_known == 1",
+        description="Average recorded distance of unblocked punts.",
+        calculation_explained="Mean kick_distance for unblocked punts with a recorded distance."),
+    "punt_net_average": StatDefinition(
+        name="punt_net_average", title="Net Punt Average", category="traditional", group_by="punter",
+        formula="punt_net_yards", scope="play", agg="avg", unit="yds/punt",
+        filter_expr="play_type == 'punt' and punt_blocked == 0 and kick_distance_known == 1 and return_yards_known == 1 and touchback_known == 1",
+        description="Recorded punt distance less return yards and 20 yards per touchback, on unblocked punts.",
+        calculation_explained="Mean of kick_distance minus return_yards minus 20 times touchback, requiring all three facts."),
+    "punt_return_average": StatDefinition(
+        name="punt_return_average", title="Punt Return Average", category="traditional", group_by="punt_returner",
+        formula="return_yards", scope="play", agg="avg", unit="yds/return",
+        filter_expr="play_type == 'punt' and punt_fair_catch == 0 and punt_downed == 0 and punt_out_of_bounds == 0 and punt_blocked == 0 and touchback == 0 and return_yards_known == 1",
+        description="Average recorded yards per punt return.",
+        calculation_explained="Mean recorded return_yards for identified returners, excluding fair catches, downed, out-of-bounds, blocked punts and touchbacks."),
+    "kickoff_return_average": StatDefinition(
+        name="kickoff_return_average", title="Kickoff Return Average", category="traditional", group_by="kickoff_returner",
+        formula="return_yards", scope="play", agg="avg", unit="yds/return",
+        filter_expr="play_type == 'kickoff' and kickoff_fair_catch == 0 and kickoff_downed == 0 and kickoff_out_of_bounds == 0 and touchback == 0 and return_yards_known == 1",
+        description="Average recorded yards per kickoff return.",
+        calculation_explained="Mean recorded return_yards for identified returners, excluding fair catches, downed, out-of-bounds kicks and touchbacks."),
     # Traditional stats (built-in baseline and advanced NFL rate/volume metrics)
     "yards_per_play": StatDefinition(
         name="yards_per_play",
@@ -3404,6 +3454,10 @@ CUSTOM_STAT_TEMPLATES: List[Dict[str, str]] = [
 # ---------------------------------------------------------------------------
 
 GROUP_BY_COLUMN_MAP: Dict[str, str] = {
+    "kicker": "kicker_player_id",
+    "punter": "punter_player_id",
+    "punt_returner": "punt_returner_player_id",
+    "kickoff_returner": "kickoff_returner_player_id",
     "qb": "qb_name",
     "team": "posteam",
     "defteam": "defteam",
@@ -3925,9 +3979,14 @@ class StatEngine:
         # Validate syntax and identifiers once before filtering rows
         _parse_and_validate_expr(filter_expr)
         filtered: List[Dict[str, Any]] = []
+        from .exploration import FACT_COLUMNS
+
+        # Legacy/synthetic rows may predate the optional kick facts. Missing facts
+        # stay unknown, as in normalized rows; unrelated unknown names still fail.
+        optional_facts = dict.fromkeys(FACT_COLUMNS)
         for p in result:
             try:
-                if safe_eval_formula(filter_expr, p) > 0:
+                if safe_eval_formula(filter_expr, {**optional_facts, **p}) > 0:
                     filtered.append(p)
             except ValueError as exc:
                 if "Unknown variable" in str(exc) or "Unsupported" in str(exc) or "Exponent" in str(exc):
