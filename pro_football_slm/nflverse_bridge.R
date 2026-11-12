@@ -71,6 +71,23 @@ pbp$qb_name <- ifelse(
 
 keep_cols <- intersect(
   c("play_id", "season", "week", "game_id", "posteam", "defteam", "home_team", "away_team", "result",
+    "drive", "fixed_drive", "old_game_id", "order_sequence", "game_seconds_remaining", "time",
+    "passer_player_id", "rusher_player_id", "receiver_player_id", "player_id", "penalty_player_id",
+    "kicker_player_id", "punter_player_id", "kickoff_returner_player_id", "punt_returner_player_id", "blocked_player_id",
+    "kicker_player_name", "punter_player_name", "kickoff_returner_player_name", "punt_returner_player_name", "blocked_player_name",
+    "sack_player_id", "sack_player_1_id", "sack_player_2_id", "interception_player_id",
+    "solo_tackle_1_player_id", "solo_tackle_2_player_id", "qb_hit_1_player_id", "qb_hit_2_player_id",
+    "pass_defense_1_player_id", "pass_defense_2_player_id",
+    "assist_tackle_1_player_id", "assist_tackle_2_player_id", "assist_tackle_3_player_id", "assist_tackle_4_player_id",
+    "tackle_with_assist_1_player_id", "tackle_with_assist_2_player_id",
+    "forced_fumble_player_1_player_id", "forced_fumble_player_2_player_id",
+    "fumbled_1_player_id", "fumbled_2_player_id", "fumble_recovery_1_player_id", "fumble_recovery_2_player_id",
+    "lateral_receiver_player_id", "lateral_rusher_player_id", "lateral_returner_player_id", "lateral_recovery_player_id",
+    "kick_distance", "return_yards", "field_goal_result", "extra_point_result", "field_goal_attempt", "extra_point_attempt",
+    "kickoff_attempt", "punt_attempt", "punt_blocked", "punt_inside_twenty", "punt_fair_catch",
+    "punt_in_endzone", "punt_out_of_bounds", "punt_downed", "kickoff_in_endzone", "kickoff_inside_twenty",
+    "kickoff_fair_catch", "kickoff_out_of_bounds", "kickoff_downed", "touchback",
+    "lateral_return", "lateral_reception", "lateral_rush", "lateral_recovery",
     "conf", "division", "qb_name", "passer_player_name", "receiver_player_name", "rusher_player_name",
     "play_type", "play_direction", "is_screen", "shotgun", "no_huddle", "qb_scramble",
     "air_yards", "yards_after_catch", "xyac_mean_yardage",
@@ -84,8 +101,8 @@ keep_cols <- intersect(
   names(pbp)
 )
 
-# Export every play with a possession team; the Python loader applies the shared
+# Export every event; the Python stats loader applies the shared
 # play-inclusion predicate (_pbp_row_is_playable) so all backends keep the same rows.
-out_df <- as.data.frame(pbp)[!is.na(pbp$posteam), keep_cols, drop = FALSE]
+out_df <- as.data.frame(pbp)[, keep_cols, drop = FALSE]
 write.csv(out_df, file = output_csv, row.names = FALSE, na = "")
 message(sprintf("[nflverse-bridge] Exported %d plays to %s", nrow(out_df), output_csv))
