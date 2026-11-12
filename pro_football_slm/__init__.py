@@ -11950,6 +11950,10 @@ def interactive_tui(
                         print(_nl_response)
                     else:
                         interactive_play_explorer(engine, bridge, plays, active_season=active_season, default_camera=default_camera)
+                elif cmd_token in ("/crew", "/ref", "/penalties"):
+                    from .officiating import command
+                    import shlex
+                    print(command(shlex.join([cmd_token, *cmd_args]), active_season, bridge.cache_dir)["text"])
                 elif cmd_token in ("/games", "/game", "/matchup", "/matchups", "/boxscore", "/pbp"):
                     init_team = None
                     init_week = None
@@ -12430,6 +12434,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     eff_p.add_argument("--conference", type=str.upper, choices=["AFC", "NFC"], default="AFC", help="Conference to rank (default: AFC)")
     sub.add_parser("demo-all", parents=[common], help="Run full showcase of custom stat engine, multi-angle play diagrams, and Stat Page")
 
+    for name in ("crew", "ref", "penalties"):
+        officiating_parser = sub.add_parser(name, parents=[common], help="nflverse officiating and recorded penalties")
+        officiating_parser.add_argument("value", nargs="?")
+        for flag in ("player", "type", "crew"):
+            officiating_parser.add_argument("--" + flag)
     return parser
 
 
@@ -12467,6 +12476,15 @@ def _main_impl(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         return 0
 
     try:
+        if cmd in ("crew", "ref", "penalties"):
+            from .officiating import command
+            import shlex
+            tokens = [cmd] + ([args.value] if args.value else [])
+            for key in ("player", "team", "type", "crew"):
+                if getattr(args, key, None):
+                    tokens.extend(["--" + key, getattr(args, key)])
+            print(command(shlex.join(tokens), args.season, bridge.cache_dir)["text"])
+            return 0
         if cmd == "tui":
             interactive_tui(
                 engine,
