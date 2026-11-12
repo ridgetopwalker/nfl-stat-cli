@@ -138,3 +138,18 @@ pip install "pro-football-slm[live]"
 ## License
 
 Code: MIT (see LICENSE). Data: nflverse (https://github.com/nflverse/nflverse-data), CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); we aggregate and derive statistics from it. Optional Python backend: sportsdataverse-py (https://github.com/sportsdataverse/sportsdataverse-py, MIT). Contract and coaching-staff tables are compiled by us from public reports. See NOTICE. Not affiliated with or endorsed by the NFL, nflverse, sportsdataverse, Over The Cap, or Spotrac.
+
+
+### Officiating and recorded penalties
+
+`crew <game_id>`, `ref "Official Name"`, and `penalties --player <id-or-name>
+--team <team> --type "Penalty Type" --crew <chief-id-or-name> --season <year>`
+are also available as `/crew`, `/ref`, and `/penalties` in the interactive shell.
+The `pro_football_slm.officiating` library returns rows, ASCII text and coverage.
+Officials and schedules come only from fixed nflverse assets; cached season rows
+use positive column allowlists. Betting fields, headshots and birth dates are excluded.
+Officials take precedence over schedule referee names; identities use official IDs.
+Reports describe first recorded flags, including possible declined or offsetting
+flags, rather than claiming accepted penalties. No individual flag thrower is known.
+Rates show recorded-game denominators and league denominators. Missing crews remain
+visible as unavailable; schedule-only referee names do not create new official IDs.
