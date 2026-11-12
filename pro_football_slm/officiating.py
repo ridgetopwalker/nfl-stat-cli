@@ -13,6 +13,7 @@ from .exploration import clean
 OFFICIAL_COLUMNS = tuple("game_id game_key official_id name position jersey_number season week season_type".split())
 SCHEDULE_COLUMNS = tuple("game_id old_game_id gsis season week game_type home_team away_team referee gameday weekday gametime home_score away_score".split())
 PENALTY_COLUMNS = tuple("game_id old_game_id play_id season week home_team away_team penalty penalty_player_id penalty_player_name penalty_type penalty_team penalty_yards down ydstogo desc".split())
+PARTICIPATION_COLUMNS = tuple("game_id play_id season offense_players defense_players offense_formation offense_personnel defense_personnel".split())
 URLS = {
     "officials": "https://github.com/nflverse/nflverse-data/releases/download/officials/officials.parquet",
     "schedules": "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
@@ -31,12 +32,17 @@ def normalize(rows, columns, season):
         result.append(row)
     return result
 
-def load_table(kind, season, cache_dir, ttl=86400, *, fixture_dir=None, max_bytes=64000000):
+def load_table(kind, season, cache_dir, ttl=86400, *, fixture_dir=None, max_bytes=64000000, units=False, units_seasons=(2023, 2024, 2025)):
     """Read only approved columns; atomically cache sanitized season rows like PBP.
 
     Fixed nflverse URLs only. Fixtures never trigger a network request.
     """
-    columns = {"officials": OFFICIAL_COLUMNS, "schedules": SCHEDULE_COLUMNS, "pbp": PENALTY_COLUMNS}[kind]
+    if kind == "participation":
+        if not units or int(season) not in units_seasons or int(season) == 2026:
+            raise ValueError("not available for this season")
+        if "learned" in {part.lower() for part in Path(cache_dir).resolve().parts}:
+            raise ValueError("participation cannot be cached in learned")
+    columns = {"participation": PARTICIPATION_COLUMNS, "officials": OFFICIAL_COLUMNS, "schedules": SCHEDULE_COLUMNS, "pbp": PENALTY_COLUMNS}[kind]
     if fixture_dir is not None:
         path = Path(fixture_dir) / f"{kind}_{int(season)}.json"
         payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
@@ -44,13 +50,17 @@ def load_table(kind, season, cache_dir, ttl=86400, *, fixture_dir=None, max_byte
     path = Path(cache_dir) / f"{kind}_{int(season)}.json"
     if path.exists() and time.time() - path.stat().st_mtime < ttl:
         return normalize(json.loads(path.read_text(encoding="utf-8")), columns, season)
-    url = f"https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{int(season)}.parquet" if kind == "pbp" else URLS[kind]
+    if kind in ("pbp", "participation"):
+        release, filename = ("pbp", "play_by_play") if kind == "pbp" else ("pbp_participation", "pbp_participation")
+        url = f"https://github.com/nflverse/nflverse-data/releases/download/{release}/{filename}_{int(season)}.parquet"
+    else:
+        url = URLS[kind]
     opener = urllib.request.build_opener(_NflverseRedirect())
     with opener.open(url, timeout=30) as response:
         data = response.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise ValueError("nflverse asset exceeds size cap")
-    if kind in ("officials", "pbp"):
+    if kind in ("officials", "pbp", "participation"):
         import pyarrow.parquet as pq
         stream = io.BytesIO(data)
         names = pq.read_schema(stream).names
