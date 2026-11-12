@@ -138,3 +138,12 @@ def test_cli_parser_registers_officiating_commands():
     for tokens in (("crew", G), ("ref", "Example Chief"), ("penalties", "--player", "dummy-player", "--type", "False Start", "--crew", "dummy-chief", "--season", "2026")):
         args = cli.build_arg_parser().parse_args(tokens)
         assert args.command == tokens[0]
+
+
+def test_non_chief_official_has_assignments_only():
+    graph = Officiating(*fixture(), 2024)
+    answer = graph.answer("ref", "dummy-dj")
+    assert answer["view"]["rates"] == []
+    assert answer["view"]["gamesOfficiated"] == 0
+    assert answer["rows"] == [{"game_id": G}]
+    assert G in answer["text"]

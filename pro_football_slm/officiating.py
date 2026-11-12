@@ -163,7 +163,7 @@ class Officiating:
             "rates": [{"type": t, "count": counts[t], "games": denominator,
                        "perGame": counts[t] / denominator if denominator else None,
                        "leagueCount": league[t], "leagueGames": len(played),
-                       "leaguePerGame": league[t] / len(played) if played else None} for t in sorted(league, key=str)],
+                       "leaguePerGame": league[t] / len(played) if played else None} for t in sorted(league, key=str) if games],
             "players": dict(Counter(r["penalty_player_id"] or "team foul, no player recorded" for r in selected)),
             "teams": dict(Counter(r["penalty_team"] for r in selected)),
             "wording": "games officiated by crew chief; no individual flag attribution"}
@@ -176,7 +176,7 @@ class Officiating:
             rows = view["officials"]
         elif kind == "ref":
             view.update(self.profile(value))
-            rows = view["rates"]
+            rows = view["rates"] if view["games"] else [{"game_id": g} for g in view["assignments"]]
         elif kind == "schedule":
             rows = [r for r in self.schedules if value in (r.get("home_team"), r.get("away_team"))]
             played = {p["game_id"] for p in self.plays}
@@ -193,6 +193,9 @@ class Officiating:
         text = kind.upper() + "\n" + view.get("message", "") + "\n"
         text += " | ".join(columns) + "\n"
         text += "\n".join(" | ".join(str(row.get(key, "")) for key in columns) for row in rows)
+        if kind == "ref":
+            text += "\nAssignments: " + ", ".join(view["assignments"])
+            text += "\nGames officiated as crew chief: " + str(view["gamesOfficiated"])
         text += "\nGames covered: " + str(view["availability"]["gamesCovered"]) + "/" + str(view["availability"]["gamesInSeason"])
         text += "\nAvailable through: " + str(view["availability"]["through"] or "not yet available")
         text = text.encode("ascii", "backslashreplace").decode("ascii")
