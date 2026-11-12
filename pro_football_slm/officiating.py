@@ -131,6 +131,7 @@ class Officiating:
     def penalties(self, *, player=None, team=None, type=None, crew=None, game=None):
         rows = []
         for p in self.plays:
+            p = {**p, **p.get("_source_penalty", {})}
             if not p.get("penalty_type") and p.get("penalty") not in (1, True, "1"):
                 continue
             c = self.crews.get(p["game_id"], {})
@@ -159,14 +160,16 @@ class Officiating:
         selected = [r for r in flags if r["game_id"] in games]
         counts = Counter(r["penalty_type"] for r in selected)
         league = Counter(r["penalty_type"] for r in flags)
-        return {"assignments": sorted(set(assignments + games)), "games": games, "gamesOfficiated": len(games), "gamesWithPbp": denominator,
+        return {"assignments": sorted(set(assignments + games)), "games": games,
+            "assignmentCount": len(set(assignments + games)), "profileKind": "chief" if games else "assignments",
+            "gamesOfficiated": len(games), "gamesWithPbp": denominator,
             "rates": [{"type": t, "count": counts[t], "games": denominator,
                        "perGame": counts[t] / denominator if denominator else None,
                        "leagueCount": league[t], "leagueGames": len(played),
                        "leaguePerGame": league[t] / len(played) if played else None} for t in sorted(league, key=str) if games],
             "players": dict(Counter(r["penalty_player_id"] or "team foul, no player recorded" for r in selected)),
             "teams": dict(Counter(r["penalty_team"] for r in selected)),
-            "wording": "games officiated by crew chief; no individual flag attribution"}
+            "wording": "games officiated by crew chief; no individual flag attribution" if games else "Recorded official assignments; no individual flag attribution"}
 
     def answer(self, kind, value=None, **filters):
         view = {"type": kind}
@@ -195,7 +198,9 @@ class Officiating:
         text += "\n".join(" | ".join(str(row.get(key, "")) for key in columns) for row in rows)
         if kind == "ref":
             text += "\nAssignments: " + ", ".join(view["assignments"])
-            text += "\nGames officiated as crew chief: " + str(view["gamesOfficiated"])
+            text += "\nAssignment count: " + str(view["assignmentCount"])
+            if view["profileKind"] == "chief":
+                text += "\nGames officiated as crew chief: " + str(view["gamesOfficiated"])
         text += "\nGames covered: " + str(view["availability"]["gamesCovered"]) + "/" + str(view["availability"]["gamesInSeason"])
         text += "\nAvailable through: " + str(view["availability"]["through"] or "not yet available")
         text = text.encode("ascii", "backslashreplace").decode("ascii")

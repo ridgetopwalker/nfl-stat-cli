@@ -147,3 +147,30 @@ def test_non_chief_official_has_assignments_only():
     assert answer["view"]["gamesOfficiated"] == 0
     assert answer["rows"] == [{"game_id": G}]
     assert G in answer["text"]
+
+
+@pytest.mark.parametrize("ending", ["declined", "offsetting"])
+def test_game_log_and_cli_preserve_raw_penalty_fields(tmp_path, ending):
+    from pro_football_slm import NFLDataBridge
+    plays, officials, schedules = fixture()
+    plays[0].update(penalty_team=None, penalty_player_name=None, penalty_player_id=None,
+                    posteam="KC", defteam="BAL",
+                    desc=f"Synthetic completion for 12 yards. PENALTY on KC-E.Player, Holding {ending}")
+    normalized = NFLDataBridge(cache_dir=tmp_path / "cache", engine="offline").normalize_game_log(plays)
+    rows = Officiating(normalized, officials, schedules, 2024).penalties()
+    for kind, data in (("pbp", plays), ("officials", officials), ("schedules", schedules)):
+        (tmp_path / f"{kind}_2024.json").write_text(json.dumps(data), encoding="utf-8")
+    public = command("/penalties --season 2024", 2024, tmp_path, fixture_dir=tmp_path)
+    for key in ("penalty_yards", "penalty_team", "penalty_player_id", "penalty_player_name", "penalty_type"):
+        assert rows[0][key] == plays[0][key]
+        assert public["rows"][0][key] == plays[0][key]
+
+
+def test_assignment_only_profile_copy():
+    graph = Officiating(*fixture(), 2024)
+    profile = graph.profile("dummy-dj")
+    assert profile["assignmentCount"] == 1
+    assert profile["profileKind"] == "assignments"
+    assert "crew chief" not in profile["wording"]
+    assert profile["rates"] == []
+    assert "Assignment count: 1" in graph.answer("ref", "dummy-dj")["text"]

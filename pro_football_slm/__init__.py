@@ -2133,6 +2133,12 @@ class NFLDataBridge:
         rows = []
         for idx, raw in enumerate(records, 1):
             row = extend_row(self._normalize_row(raw, idx), raw)
+            # Keep source penalty facts for officiating alongside legacy stats normalization.
+            row["_source_penalty"] = {
+                key: clean(raw.get(key)) for key in
+                ("penalty", "penalty_type", "penalty_yards", "penalty_team",
+                 "penalty_player_id", "penalty_player_name")
+            }
             if clean(raw.get("play_id")) is None:
                 row["play_id"] = None
             rows.append(row)
