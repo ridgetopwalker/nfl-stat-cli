@@ -47,6 +47,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
+from .output_width import bounded, chunks, columns, fit as fit_output
+
 from .legacy_compat import OLD_ENV_PREFIX, default_data_dir, env_get, env_truthy
 
 from .fantasy import (
@@ -4814,6 +4816,7 @@ class AsciiArtRenderer:
         return "\n".join(lines)
 
     @staticmethod
+    @bounded
     def render_table(title: str, headers: List[str], rows: List[List[Any]], alignments: Optional[List[str]] = None) -> str:
         global LAST_RENDERED_TABLE, LAST_RAW_OUTPUT
         if not rows:
@@ -4825,6 +4828,15 @@ class AsciiArtRenderer:
         str_rows = [[str(cell) for cell in r] for r in rows]
         widths = [max([visible_len(h)] + [visible_len(r[i]) for r in str_rows]) for i, h in enumerate(headers)]
 
+        min_widths = [max(visible_len(h), 4) for h in headers]
+        while sum(widths) + 3 * len(widths) + 1 > columns():
+            idx = max(range(len(widths)), key=lambda i: widths[i] - min_widths[i])
+            if widths[idx] <= min_widths[idx]:
+                # A narrow terminal gets complete labelled records, including long cells.
+                return fit_output(title + "\n" + "\n\n".join(
+                    "\n".join(f"{h}: {cell}" for h, cell in zip(headers, row))
+                    for row in str_rows), columns())
+            widths[idx] -= 1
         top = "┌─" + "─┬─".join("─" * w for w in widths) + "─┐"
         sep = "├─" + "─┼─".join("─" * w for w in widths) + "─┤"
         bot = "└─" + "─┴─".join("─" * w for w in widths) + "─┘"
@@ -4834,7 +4846,7 @@ class AsciiArtRenderer:
 
         out = [f"\n{C.BOLD}{C.GOLD}▶ {title}{C.RESET}", top, header_line, sep]
         for r in str_rows:
-            cells = [pad_ansi(r[i], widths[i], alignments[i]) for i in range(len(headers))]
+            cells = [pad_ansi(r[i] if visible_len(r[i]) <= widths[i] else next(chunks(strip_ansi(r[i]), widths[i]), ""), widths[i], alignments[i]) for i in range(len(headers))]
             out.append("│ " + " │ ".join(cells) + " │")
         out.append(bot)
         rendered = "\n".join(out)
@@ -4860,6 +4872,7 @@ class AsciiArtRenderer:
                 row_chars[start + i] = f"{color}{ch}{C.RESET}"
 
     @classmethod
+    @bounded
     def render_situation_hud(cls, play: Dict[str, Any]) -> str:
         """
         Render a prominent, high-visibility Game Situation & Field Context HUD box
@@ -4924,6 +4937,7 @@ class AsciiArtRenderer:
         return "\n".join(lines)
 
     @classmethod
+    @bounded
     def render_field_and_play(
         cls,
         play: Dict[str, Any],
@@ -4964,6 +4978,7 @@ class AsciiArtRenderer:
         return f"Opp {yardline_100}"
 
     @classmethod
+    @bounded
     def render_behind_offense(cls, play: Dict[str, Any], title: str = "BEHIND THE OFFENSE PLAY VIEW") -> str:
         """
         All-22 Behind-the-Offense View:
@@ -5123,6 +5138,7 @@ class AsciiArtRenderer:
         return "\n".join(out)
 
     @classmethod
+    @bounded
     def render_behind_defense(cls, play: Dict[str, Any], title: str = "BEHIND THE DEFENSE PLAY VIEW") -> str:
         """
         All-22 Behind-the-Defense View:
@@ -5282,6 +5298,7 @@ class AsciiArtRenderer:
         return "\n".join(out)
 
     @classmethod
+    @bounded
     def render_sideline(cls, play: Dict[str, Any], title: str = "SIDELINE BROADCAST PLAY VIEW") -> str:
         """Render a colorized 100-yard sideline view (left-to-right) with lateral direction awareness."""
         posteam = str(play.get("posteam", "OFF"))
@@ -5420,6 +5437,7 @@ class AsciiArtRenderer:
         return legend + "\n" + summary_box
 
     @classmethod
+    @bounded
     def render_generic_play_concept_diagram(cls, concept_key: str, title: Optional[str] = None) -> str:
         """
         Render a generic playbook chalkboard diagram for a play concept/sub-type
@@ -7339,6 +7357,7 @@ def qualifier_note(qualifier: Optional[Dict[str, Any]]) -> str:
     return text + " (--min-attempts N to change, 0 to show all)."
 
 
+@bounded
 def render_general_stat_view(
     engine: StatEngine,
     plays: List[Dict[str, Any]],
@@ -8661,6 +8680,7 @@ def get_play_key_players(play: Dict[str, Any]) -> List[str]:
     return names
 
 
+@bounded
 def render_single_play_deep_dive(play: Dict[str, Any]) -> str:
     """Render an in-depth analytics card for an individual play (EPA, WPA, Air Yards, YAC, Situation)."""
     pid = play.get("play_id", "N/A")
@@ -9151,6 +9171,7 @@ def find_matching_player_candidates(
     return sorted(results, key=lambda c: c["play_count"], reverse=True)
 
 
+@bounded
 def render_player_drilldown_view(
     engine: StatEngine,
     plays: List[Dict[str, Any]],
@@ -9556,6 +9577,7 @@ def render_coaching_staff_view(team_abbr: str, role_filter: Optional[str] = None
     return summary + table + footer
 
 
+@bounded
 def render_team_drilldown_view(
     engine: StatEngine,
     plays: List[Dict[str, Any]],
@@ -9867,6 +9889,7 @@ def extract_games_summary(plays: List[Dict[str, Any]], season: Optional[int] = N
     return summaries
 
 
+@bounded
 def render_game_plays_table(
     game_plays: List[Dict[str, Any]],
     title: str = "GAME PLAYS",
@@ -9876,12 +9899,20 @@ def render_game_plays_table(
     Renders an ASCII table of plays for a game / quarter with:
     # | Play | Qtr | Team | Dn&Dist | Yardline | Concept / Scheme | Gain | EPA | Score | Key Description
     """
-    clean_title = title.upper()
-    lines = [
-        f"{C.BOLD}{C.CYAN}┌─ {clean_title} " + "─" * max(0, 108 - len(clean_title)) + f"┐{C.RESET}",
-        f"{C.BOLD}│ #  │ Play │ Qtr │ Team │ Dn&Dist  │ Yardline │ Concept / Scheme │ Gain       │ EPA    │ Score      │ Key Description            │{C.RESET}",
-        f"{C.BOLD}├────┼──────┼─────┼──────┼──────────┼──────────┼──────────────────┼────────────┼────────┼────────────┼────────────────────────────┤{C.RESET}",
-    ]
+    widths = [3, 5, 2, 3, 8, 6, 16, 10, 6, 5, 26]
+    headers = ["#", "Play", "Q", "Tm", "Dn&Dist", "Yard", "Concept / Scheme", "Gain", "EPA", "Score", "Key Description"]
+    def row(values):
+        return "│" + " │ ".join(str(v)[:w].ljust(w) for v, w in zip(values, widths)) + " │"
+    def rule(left, join, right):
+        return left + join.join("─" * (w + (1 if i == 0 else 2)) for i, w in enumerate(widths)) + right
+    if columns() < 123:
+        records = []
+        for p in game_plays:
+            records.append("\n".join(f"{k}: {v}" for k, v in p.items()))
+        return fit_output(title + "\n" + "\n\n".join(records), columns())
+    clean_title = title.upper()[:max(0, columns() - 5)]
+    lines = ["┌─ " + clean_title + " " + "─" * max(0, columns() - len(clean_title) - 5) + "┐",
+             row(headers), rule("├", "┼", "┤")]
     for idx, p in enumerate(game_plays, 1):
         pid_num = p.get("play_id", 0)
         pid_str = f"#{pid_num}"
@@ -9905,10 +9936,8 @@ def render_game_plays_table(
 
         hl_on = f"{C.BOLD}{C.GOLD}" if highlight_play_id and pid_num == highlight_play_id else ""
         hl_off = C.RESET if hl_on else ""
-        lines.append(
-            f"│{hl_on}{idx:3d} │ {pid_str:<4} │ {q:<3} │ {tm:<4} │ {dnd:<8} │ {ydl:<8} │ {conc:<16} │ {gain:<10} │ {epa:<6} │ {sc:<10} │ {desc:<26}{hl_off} │"
-        )
-    lines.append(f"{C.BOLD}{C.CYAN}└────┴──────┴─────┴──────┴──────────┴──────────┴──────────────────┴────────────┴────────┴────────────┴────────────────────────────┘{C.RESET}")
+        lines.append(row([f"{idx:3d}", pid_str, q, tm, dnd, ydl, conc, gain, epa, sc, desc]))
+    lines.append(rule("└", "┴", "┘"))
     return "\n".join(lines)
 
 
