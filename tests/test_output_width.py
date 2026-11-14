@@ -109,3 +109,36 @@ def test_feed_marks_shortened_descriptions_and_preserves_large_ids():
 def test_prose_wrapper_never_slices_finished_frames():
     drawing = '┌' + '─' * 60 + '┐\n│ ' + 'x' * 58 + ' │\n└' + '─' * 60 + '┘'
     assert fit(drawing, 20) == drawing
+
+
+@pytest.mark.parametrize('cols', [123, 80, 20, 79, 21])
+def test_table_keeps_emoji_selectors_and_complete_cells(cols):
+    emoji = '\u26a0\ufe0f' * 60
+    value = '123456789.12345679'
+    text = cli.strip_ansi(cli.AsciiArtRenderer.render_table(
+        'Synthetic', ['Name', 'Value'], [[emoji, value]], cols=cols))
+    rows = [line.split('\u2502')[1:-1] for line in text.splitlines() if line.startswith('\u2502')][1:]
+    if cols == 80:
+        assert width(rows[0][0]) % 2 == 1  # Exercise an odd cell interior.
+    assert ''.join(row[0].strip() for row in rows) == emoji
+    assert ''.join(row[1].strip() for row in rows) == value
+    for row in rows:
+        cell = row[0].strip()
+        assert not cell.startswith('\ufe0f')
+        assert cell == '\u26a0\ufe0f' * (len(cell) // 2)
+    assert max(map(width, text.splitlines())) <= cols
+    assert all(width(line) == cols for line in text.splitlines() if line.startswith('\u2502'))
+
+
+@pytest.mark.parametrize('cols', [123, 80, 20])
+def test_long_chalkboard_title_preserved_in_complete_frame(cols):
+    title = 'Synthetic title ' * 12
+    text = cli.strip_ansi(cli.AsciiArtRenderer.render_generic_play_concept_diagram(
+        'screen', title=title, cols=cols))
+    lines = text.splitlines()
+    assert lines[0] == '\u250c' + '\u2500' * (cols - 2) + '\u2510'
+    assert lines[-1] == '\u2514' + '\u2500' * (cols - 2) + '\u2518'
+    assert all(width(line) == cols and line.startswith('\u2502 ') and line.endswith(' \u2502')
+               for line in lines[1:-1])
+    content = ''.join(line[2:-2].strip() for line in lines[1:-1])
+    assert title.replace(' ', '') in content.replace(' ', '')

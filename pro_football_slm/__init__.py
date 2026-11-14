@@ -47,7 +47,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from .output_width import bounded, chunks, columns, panel, fit as fit_output
+from .output_width import bounded, chunks, columns, panel, width as output_width, fit as fit_output
 
 from .legacy_compat import OLD_ENV_PREFIX, default_data_dir, env_get, env_truthy
 
@@ -4825,10 +4825,15 @@ class AsciiArtRenderer:
             return msg
         if not alignments:
             alignments = ["left"] + ["right"] * (len(headers) - 1)
-        str_rows = [[str(cell) for cell in r] for r in rows]
-        widths = [max([visible_len(h)] + [visible_len(r[i]) for r in str_rows]) for i, h in enumerate(headers)]
+        def pad_cell(text, cell_width, align):
+            padding = max(0, cell_width - output_width(strip_ansi(text)))
+            left = padding if align == "right" else padding // 2 if align == "center" else 0
+            return " " * left + text + " " * (padding - left)
 
-        min_widths = [max(visible_len(h), 4) for h in headers]
+        str_rows = [[str(cell) for cell in r] for r in rows]
+        widths = [max([output_width(strip_ansi(h))] + [output_width(strip_ansi(r[i])) for r in str_rows]) for i, h in enumerate(headers)]
+
+        min_widths = [max(output_width(strip_ansi(h)), 4) for h in headers]
         while sum(widths) + 3 * len(widths) + 1 > columns():
             idx = max(range(len(widths)), key=lambda i: widths[i] - min_widths[i])
             if widths[idx] <= min_widths[idx]:
@@ -4841,14 +4846,14 @@ class AsciiArtRenderer:
         sep = "├─" + "─┼─".join("─" * w for w in widths) + "─┤"
         bot = "└─" + "─┴─".join("─" * w for w in widths) + "─┘"
 
-        header_cells = [f"{C.BOLD}{C.CYAN}{pad_ansi(h, widths[i], alignments[i])}{C.RESET}" for i, h in enumerate(headers)]
+        header_cells = [f"{C.BOLD}{C.CYAN}{pad_cell(h, widths[i], alignments[i])}{C.RESET}" for i, h in enumerate(headers)]
         header_line = "│ " + " │ ".join(header_cells) + " │"
 
         out = [f"\n{C.BOLD}{C.GOLD}▶ {title}{C.RESET}", top, header_line, sep]
         for r in str_rows:
             wrapped = [list(chunks(strip_ansi(r[i]), widths[i])) or [""] for i in range(len(headers))]
             for line_no in range(max(map(len, wrapped))):
-                cells = [pad_ansi(parts[line_no] if line_no < len(parts) else "", widths[i], alignments[i])
+                cells = [pad_cell(parts[line_no] if line_no < len(parts) else "", widths[i], alignments[i])
                          for i, parts in enumerate(wrapped)]
                 out.append("│ " + " │ ".join(cells) + " │")
         out.append(bot)
@@ -5773,7 +5778,8 @@ class AsciiArtRenderer:
 
         scheme = schemes.get(resolved, schemes["screen"])
         display_title = title or scheme["title"]
-        if columns() < 123:
+        title_row = f"\u2551  \U0001f3c8 PLAYBOOK CHALKBOARD: {display_title} \u2551"
+        if columns() < 123 or output_width(strip_ansi(title_row)) > columns():
             return panel([display_title, "Compact playbook", "Tactical Playbook Breakdown:"] + scheme["notes"])
         header = [
             f"\n{C.BOLD}{C.GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗",

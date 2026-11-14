@@ -15,15 +15,30 @@ def width(text):
                2 if unicodedata.east_asian_width(c) in "WF" or text[i+1:i+2] == "\ufe0f" else 1
                for i, c in enumerate(text))
 
-def chunks(text, cols):
+def display_sequences(text):
+    """Keep bases with selectors, combining marks and joined continuations."""
     part = ""
     for c in text:
-        if width(part + c) > cols:
+        if part and not (unicodedata.combining(c) or
+                         c in "\u200b\u200c\u200d\ufe0e\ufe0f" or
+                         0x1F3FB <= ord(c) <= 0x1F3FF or part.endswith("\u200d")):
             yield part
             part = ""
         part += c
     if part:
         yield part
+
+
+def chunks(text, cols):
+    part = ""
+    for sequence in display_sequences(text):
+        if part and width(part + sequence) > cols:
+            yield part
+            part = ""
+        part += sequence
+    if part:
+        yield part
+
 
 def fit(text, cols=123):
     """Wrap prose only; renderers must construct drawings within their budget."""
