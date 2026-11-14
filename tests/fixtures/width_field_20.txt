@@ -1,0 +1,36 @@
+┌──────────────────┐
+│ GAME SITUATION & │
+│ SNAP CONTEXT     │
+│ GAME CLOCK:      │
+│ Quarter 1 (Q1)   │
+│ FIELD LOCATION:  │
+│ BBB 26 (Opponent │
+│ 26 • 26 yds to   │
+│ Opponent End     │
+│ Zone)            │
+│ DOWN & DISTANCE: │
+│ 2nd & 4 (4 yards │
+│ to first down)   │
+│ POSSESSION: AAA  │
+│ Offense vs BBB   │
+│ Defense          │
+│ Score: BBB 0 -   │
+│ AAA 0            │
+└──────────────────┘
+┌──────────────────┐
+│ PLAY VISUALIZER  │
+│ Compact field    │
+│ view             │
+│ play_id: 1000    │
+│ game_id:         │
+│ SYNTHETIC        │
+│ qtr: 1           │
+│ posteam: AAA     │
+│ defteam: BBB     │
+│ down: 2          │
+│ ydstogo: 4       │
+│ yardline_100: 26 │
+│ play_type: run   │
+│ desc: Synthetic  │
+│ description      │
+└──────────────────┘

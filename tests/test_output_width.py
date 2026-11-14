@@ -42,7 +42,7 @@ def test_feed_golden_123():
     assert all(width(line) == 123 for line in actual.splitlines())
     assert '│ Play  │ Q  │ Tm  │ Dn&Dist  │ Yard   │' in actual
     assert '#1000' in actual
-    assert 'Synthetic runner advances ' in actual
+    assert 'Synthetic runner advances…' in actual
 
 def test_narrow_feed_keeps_every_field():
     text = cli.render_game_plays_table([PLAY], cols=80)
@@ -52,3 +52,60 @@ def test_narrow_feed_keeps_every_field():
 def test_wide_unicode_and_combining_prose():
     for line in fit('漢字 e\u0301 ⚠️ ' * 100, 20).splitlines():
         assert width(line) <= 20
+
+@pytest.mark.parametrize('cols', [123, 80, 20])
+def test_table_preserves_complete_cells(cols):
+    value = '123456789.12345679'
+    identifier = 'SYNTHETIC_IDENTIFIER_98765432101234567890'
+    text = cli.strip_ansi(cli.AsciiArtRenderer.render_table(
+        'Synthetic', ['Entity', 'Value'], [[identifier, value]], cols=cols))
+    rows = [line.split('│')[1:-1] for line in text.splitlines() if line.startswith('│')][1:]
+    assert ''.join(row[0].strip() for row in rows) == identifier
+    assert ''.join(row[1].strip() for row in rows) == value
+    assert max(map(width, text.splitlines())) <= cols
+
+@pytest.mark.parametrize('cols', [80, 20])
+def test_compact_structure_goldens(cols):
+    play = dict(play_id=1000, game_id='SYNTHETIC', qtr=1, posteam='AAA', defteam='BBB',
+                down=2, ydstogo=4, yardline_100=26, play_type='run', desc='Synthetic description')
+    outputs = {
+        'card': cli.render_single_play_deep_dive(play, cols=cols),
+        'hud': cli.AsciiArtRenderer.render_situation_hud(play, cols=cols),
+        'chalkboard': cli.AsciiArtRenderer.render_generic_play_concept_diagram('screen', cols=cols),
+        'field': cli.AsciiArtRenderer.render_field_and_play(play, cols=cols),
+    }
+    for name, text in outputs.items():
+        text = cli.strip_ansi(text)
+        expected = (Path(__file__).parent / f'fixtures/width_{name}_{cols}.txt').read_text(encoding='utf-8')
+        assert text + '\n' == expected
+        for line in text.splitlines():
+            assert width(line) == cols
+            assert (line.startswith('┌') and line.endswith('┐') or
+                    line.startswith('│ ') and line.endswith(' │') or
+                    line.startswith('└') and line.endswith('┘'))
+        assert 'Compact' in outputs['field']
+    content = ''.join(line[2:-2].strip() for line in cli.strip_ansi(outputs['card']).splitlines()[1:-1])
+    assert 'AAAvsBBB(0-0)' in content.replace(' ', '')
+    assert 'SYNTHETIC' in content
+
+
+def test_highlight_keeps_display_widths(monkeypatch):
+    monkeypatch.setattr(cli.C, "BOLD", "\x1b[1m")
+    monkeypatch.setattr(cli.C, "GOLD", "\x1b[33m")
+    monkeypatch.setattr(cli.C, "RESET", "\x1b[0m")
+    plain = cli.render_game_plays_table([PLAY])
+    highlighted = cli.render_game_plays_table([PLAY], highlight_play_id=1000)
+    assert highlighted != plain
+    assert cli.strip_ansi(highlighted) == cli.strip_ansi(plain)
+    assert f'{cli.C.BOLD}{cli.C.GOLD}│' in highlighted
+
+
+def test_feed_marks_shortened_descriptions_and_preserves_large_ids():
+    assert '…' in cli.render_game_plays_table([PLAY])
+    play = dict(PLAY, play_id=1234567890123456789)
+    assert '1234567890123456789' in cli.render_game_plays_table([play])
+
+
+def test_prose_wrapper_never_slices_finished_frames():
+    drawing = '┌' + '─' * 60 + '┐\n│ ' + 'x' * 58 + ' │\n└' + '─' * 60 + '┘'
+    assert fit(drawing, 20) == drawing

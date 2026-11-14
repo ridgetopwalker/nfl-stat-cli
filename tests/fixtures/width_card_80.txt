@@ -1,0 +1,21 @@
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 🏈 IN-DEPTH PLAY ANALYTICS & SITUATION                                       │
+│ Play ID: #1000 | Game: SYNTHETIC | Quarter: Q1 | Matchup: AAA vs BBB (0-0)   │
+│ Situation: 2 & 4 at Opp 26 (26 yds to endzone)  |  Red Zone: NO              │
+│ Formation: Shotgun=NO • No-Huddle=NO                                         │
+│                                                                              │
+│ Concept & Execution:                                                         │
+│ • Type: RUN • Concept: `standard` • Direction: `middle`                      │
+│ • Play-Action: NO • Screen Pass: NO                                          │
+│ • Passer: N/A  |  Target/Rusher: N/A                                         │
+│                                                                              │
+│ Outcome & Advanced Metrics:                                                  │
+│ • Yards Gained: +0.0 yds | Air Yards: 0.0 yds | YAC: 0.0 yds (Expected: 0.0) │
+│ • Expected Points Added (EPA): +0.000 EPA                                    │
+│ • Win Probability Added (WPA): +0.000%                                       │
+│ • CPOE (Pass Accuracy): +0.0%  |  Series Success: FAILED                     │
+│ • Result Flags:                                                              │
+│                                                                              │
+│ Official Play Call:                                                          │
+│ "Synthetic description"                                                      │
+└──────────────────────────────────────────────────────────────────────────────┘

@@ -26,32 +26,15 @@ def chunks(text, cols):
         yield part
 
 def fit(text, cols=123):
-    """Wrap prose; show oversized drawings in successive horizontal panels.
-
-    Panels preserve every drawing character without wrapping individual drawing rows.
-    Normal-width drawings pass through unchanged. ANSI is removed only when resizing.
-    """
-    cols = max(20, int(cols))
+    """Wrap prose only; renderers must construct drawings within their budget."""
+    cols = max(1, int(cols))
     if all(width(_ANSI.sub("", line)) <= cols for line in text.splitlines()):
         return text
     lines = _ANSI.sub("", text).split("\n")
     out = []
-    drawing = []
-    def flush():
-        if not drawing:
-            return
-        panels = [list(chunks(line, cols)) or [""] for line in drawing]
-        for i in range(max(map(len, panels))):
-            if i:
-                out.append("")
-            out.extend(p[i] if i < len(p) else "" for p in panels)
-        drawing.clear()
     for line in lines:
-        if any("\u2500" <= c <= "\u259f" or c == "|" for c in line):
-            drawing.append(line)
-            continue
-        flush()
-        if width(line) <= cols:
+        # Structural rows belong to their renderer; never slice or reflow them.
+        if line.lstrip().startswith(tuple("┌┐└┘├┤┬┴┼│╔╗╚╝║╠╣")) or width(line) <= cols:
             out.append(line)
             continue
         current = ""
@@ -66,8 +49,18 @@ def fit(text, cols=123):
             current = current + " " + word if current else word
         if current:
             out.append(current)
-    flush()
     return "\n".join(out)
+
+def panel(lines, cols=None):
+    """Wrap semantic content before constructing a complete, budget-sized frame."""
+    budget = max(20, int(cols if cols is not None else columns()))
+    inner = budget - 4
+    body = fit("\n".join(str(line).strip() for line in lines), inner)
+    rows = _ANSI.sub("", body).splitlines()
+    return "\n".join(["┌" + "─" * (budget - 2) + "┐"] +
+                     ["│ " + row + " " * (inner - width(row)) + " │" for row in rows] +
+                     ["└" + "─" * (budget - 2) + "┘"])
+
 
 def bounded(fn):
     """Render with keyword-only cols=123; nested renderers inherit that budget."""

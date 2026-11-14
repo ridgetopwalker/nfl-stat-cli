@@ -47,7 +47,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from .output_width import bounded, chunks, columns, fit as fit_output
+from .output_width import bounded, chunks, columns, panel, fit as fit_output
 
 from .legacy_compat import OLD_ENV_PREFIX, default_data_dir, env_get, env_truthy
 
@@ -4846,8 +4846,11 @@ class AsciiArtRenderer:
 
         out = [f"\n{C.BOLD}{C.GOLD}▶ {title}{C.RESET}", top, header_line, sep]
         for r in str_rows:
-            cells = [pad_ansi(r[i] if visible_len(r[i]) <= widths[i] else next(chunks(strip_ansi(r[i]), widths[i]), ""), widths[i], alignments[i]) for i in range(len(headers))]
-            out.append("│ " + " │ ".join(cells) + " │")
+            wrapped = [list(chunks(strip_ansi(r[i]), widths[i])) or [""] for i in range(len(headers))]
+            for line_no in range(max(map(len, wrapped))):
+                cells = [pad_ansi(parts[line_no] if line_no < len(parts) else "", widths[i], alignments[i])
+                         for i, parts in enumerate(wrapped)]
+                out.append("│ " + " │ ".join(cells) + " │")
         out.append(bot)
         rendered = "\n".join(out)
         try:
@@ -4925,16 +4928,10 @@ class AsciiArtRenderer:
         a_score = play.get("away_score", 0)
         score_display = f"{defteam} {a_score} - {posteam} {h_score}"
 
-        w = 87
-        lines = [
-            f"{C.BOLD}{C.GOLD}╔═ 🏈 GAME SITUATION & SNAP CONTEXT " + "═" * (w - 38) + f"╗{C.RESET}",
-            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.CYAN}⏱️  GAME CLOCK:{C.RESET}       {C.BOLD}{pad_ansi(time_display, w - 24, 'left')}{C.RESET} {C.BOLD}║{C.RESET}",
-            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.YELLOW}📍 FIELD LOCATION:{C.RESET}    {C.BOLD}{pad_ansi(loc_display, w - 24, 'left')}{C.RESET} {C.BOLD}║{C.RESET}",
-            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.GREEN}🎯 DOWN & DISTANCE:{C.RESET}   {C.BOLD}{pad_ansi(dnd_display, w - 24, 'left')}{C.RESET} {C.BOLD}║{C.RESET}",
-            f"{C.BOLD}║{C.RESET}  {C.BOLD}{C.WHITE}🛡️  POSSESSION:{C.RESET}        {pad_ansi(f'{posteam} Offense vs {defteam} Defense  │  Score: {score_display}', w - 24, 'left')} {C.BOLD}║{C.RESET}",
-            f"{C.BOLD}{C.GOLD}╚" + "═" * (w - 2) + f"╝{C.RESET}",
-        ]
-        return "\n".join(lines)
+        return panel(["GAME SITUATION & SNAP CONTEXT", f"GAME CLOCK: {time_display}",
+                      f"FIELD LOCATION: {loc_display}", f"DOWN & DISTANCE: {dnd_display}",
+                      f"POSSESSION: {posteam} Offense vs {defteam} Defense",
+                      f"Score: {score_display}"])
 
     @classmethod
     @bounded
@@ -4985,6 +4982,8 @@ class AsciiArtRenderer:
         Viewer is behind the QB looking UPFIELD (▲) toward the Defense and Opponent End Zone.
         Left of screen = Offense Left; Right of screen = Offense Right.
         """
+        if columns() < 123:
+            return panel([title, "Compact field view"] + [f"{key}: {value}" for key, value in play.items()])
         posteam = str(play.get("posteam", "OFF"))
         defteam = str(play.get("defteam", "DEF"))
         conf = str(play.get("conf", "NFL"))
@@ -5145,6 +5144,8 @@ class AsciiArtRenderer:
         Viewer is behind the Defensive Secondary (Safeties) looking at the Offense driving DOWNWARD (▼) toward the Defense.
         Perspective is mirrored laterally: Left of screen = Offense Right / Defense Left; Right of screen = Offense Left / Defense Right.
         """
+        if columns() < 123:
+            return panel([title, "Compact field view"] + [f"{key}: {value}" for key, value in play.items()])
         posteam = str(play.get("posteam", "OFF"))
         defteam = str(play.get("defteam", "DEF"))
         conf = str(play.get("conf", "NFL"))
@@ -5301,6 +5302,8 @@ class AsciiArtRenderer:
     @bounded
     def render_sideline(cls, play: Dict[str, Any], title: str = "SIDELINE BROADCAST PLAY VIEW") -> str:
         """Render a colorized 100-yard sideline view (left-to-right) with lateral direction awareness."""
+        if columns() < 123:
+            return panel([title, "Compact field view"] + [f"{key}: {value}" for key, value in play.items()])
         posteam = str(play.get("posteam", "OFF"))
         defteam = str(play.get("defteam", "DEF"))
         conf = str(play.get("conf", "NFL"))
@@ -5770,6 +5773,8 @@ class AsciiArtRenderer:
 
         scheme = schemes.get(resolved, schemes["screen"])
         display_title = title or scheme["title"]
+        if columns() < 123:
+            return panel([display_title, "Compact playbook", "Tactical Playbook Breakdown:"] + scheme["notes"])
         header = [
             f"\n{C.BOLD}{C.GOLD}╔═══════════════════════════════════════════════════════════════════════════════════════╗",
             f"║  🏈 PLAYBOOK CHALKBOARD: {pad_ansi(display_title, 76, 'left')} ║",
@@ -8713,9 +8718,7 @@ def render_single_play_deep_dive(play: Dict[str, Any]) -> str:
     desc = play.get("desc", "No description available.")
 
     lines = [
-        f"\n{C.BOLD}{C.CYAN}┌────────────────────────────────────────────────────────────────────────────────────────┐",
-        f"│                     🏈 IN-DEPTH PLAY ANALYTICS & SITUATION                             │",
-        f"├────────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}",
+        f"                     🏈 IN-DEPTH PLAY ANALYTICS & SITUATION                             ",
         f"  Play ID: {C.BOLD}#{pid}{C.RESET}  |  Game: {gid}  |  Quarter: Q{qtr}  |  Matchup: {post} vs {defe} ({h_score}-{a_score})",
         f"  Situation: {C.BOLD}{down} & {ydstogo}{C.RESET} at {spot} ({ydline} yds to endzone)  |  Red Zone: {'YES' if play.get('red_zone') else 'NO'}",
         f"  Formation: Shotgun={'YES' if play.get('shotgun') else 'NO'} • No-Huddle={'YES' if play.get('no_huddle') else 'NO'}",
@@ -8734,9 +8737,8 @@ def render_single_play_deep_dive(play: Dict[str, Any]) -> str:
         "",
         f"  {C.BOLD}{C.GOLD}Official Play Call:{C.RESET}",
         f"    {C.DIM}\"{desc}\"{C.RESET}",
-        f"{C.BOLD}{C.CYAN}└────────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
     ]
-    return "\n".join(lines)
+    return panel(lines)
 
 
 COMMON_NICKNAMES: Dict[str, Set[str]] = {
@@ -9343,9 +9345,7 @@ def render_player_drilldown_view(
     )
 
     out = [
-        f"\n{C.BOLD}{C.CYAN}┌────────────────────────────────────────────────────────────────────────────────────────┐",
-        f"│                     PLAYER DRILL-DOWN : {canonical_name.upper():<46} │",
-        f"├────────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}",
+        f"                     PLAYER DRILL-DOWN : {canonical_name.upper():<46} ",
         f"  Player: {C.BOLD}{canonical_name}{C.RESET}  |  Primary Role: {C.BOLD}{role_str}{C.RESET}",
         f"  Team: {C.BOLD}{team_selection_note}{C.RESET}  |  Season: {season}  |  Total Plays Involved: {len(active_plays)}",
         "",
@@ -9384,17 +9384,16 @@ def render_player_drilldown_view(
                 pass
 
         out.extend([
-            f"  {C.BOLD}{C.GOLD}┌─ PASSING STATISTICS ─────────────────────────────────────────────────────────────────┐{C.RESET}",
-            f"  │ Pass Attempts:       {p_att:<14} Completions:             {p_comp:<22} │",
-            f"  │ Completion %:        {p_pct:<13.1f}% Passing Yards:           {p_yds:<10.1f} yds       │",
-            f"  │ Yards / Attempt:     {p_ypa:<13.2f} ypa Passing Touchdowns:      {p_tds:<22} │",
-            f"  │ Interceptions:       {p_ints:<14} Sacks Taken:             {p_sacks} ({p_sack_yds:.1f} yds lost)        │",
-            f"  │ NFL Passer Rating:   {p_rating:<14.1f} Avg CPOE:                {p_cpoe:<+6.1f}%                 │",
-            f"  │ Total Passing EPA:   {p_epa:<+14.2f} EPA / Pass Attempt:      {p_epa_att:<+10.2f} EPA/att   │",
+            f"  {C.BOLD}{C.GOLD} PASSING STATISTICS {C.RESET}",
+            f"   Pass Attempts:       {p_att:<14} Completions:             {p_comp:<22} ",
+            f"   Completion %:        {p_pct:<13.1f}% Passing Yards:           {p_yds:<10.1f} yds       ",
+            f"   Yards / Attempt:     {p_ypa:<13.2f} ypa Passing Touchdowns:      {p_tds:<22} ",
+            f"   Interceptions:       {p_ints:<14} Sacks Taken:             {p_sacks} ({p_sack_yds:.1f} yds lost)        ",
+            f"   NFL Passer Rating:   {p_rating:<14.1f} Avg CPOE:                {p_cpoe:<+6.1f}%                 ",
+            f"   Total Passing EPA:   {p_epa:<+14.2f} EPA / Pass Attempt:      {p_epa_att:<+10.2f} EPA/att   ",
         ])
         if impact_score_val is not None:
-            out.append(f"  │ QB Impact Score:     {impact_score_val:<6.1f} / 100   QB Meaningful Record:    {mw_val} MW - {ml_val} ML         │")
-        out.append(f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
+            out.append(f"   QB Impact Score:     {impact_score_val:<6.1f} / 100   QB Meaningful Record:    {mw_val} MW - {ml_val} ML         ")
         out.append("")
 
     # Rushing Section
@@ -9408,12 +9407,11 @@ def render_player_drilldown_view(
         r_epa_car = (r_epa / r_car) if r_car else 0.0
         r_fd = sum(int(p.get("first_down", 0)) for p in rush_plays)
         out.extend([
-            f"  {C.BOLD}{C.GREEN}┌─ RUSHING STATISTICS ─────────────────────────────────────────────────────────────────┐{C.RESET}",
-            f"  │ Rushing Carries:     {r_car:<14} Rushing Yards:           {r_yds:<10.1f} yds       │",
-            f"  │ Yards / Carry (YPC): {r_ypc:<14.2f} Rushing Touchdowns:     {r_tds:<22} │",
-            f"  │ Longest Rush:        {r_long:<10.0f} yds   First Downs Gained:      {r_fd:<22} │",
-            f"  │ Total Rushing EPA:   {r_epa:<+14.2f} EPA / Carry:             {r_epa_car:<+10.2f} EPA/car   │",
-            f"  {C.BOLD}{C.GREEN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            f"  {C.BOLD}{C.GREEN} RUSHING STATISTICS {C.RESET}",
+            f"   Rushing Carries:     {r_car:<14} Rushing Yards:           {r_yds:<10.1f} yds       ",
+            f"   Yards / Carry (YPC): {r_ypc:<14.2f} Rushing Touchdowns:     {r_tds:<22} ",
+            f"   Longest Rush:        {r_long:<10.0f} yds   First Downs Gained:      {r_fd:<22} ",
+            f"   Total Rushing EPA:   {r_epa:<+14.2f} EPA / Carry:             {r_epa_car:<+10.2f} EPA/car   ",
             "",
         ])
 
@@ -9430,13 +9428,12 @@ def render_player_drilldown_view(
         rc_screen = sum(1 for p in rec_plays if int(p.get("is_screen", 0)) == 1)
         rc_screen_yac = sum(float(p.get("yards_after_catch", 0.0)) for p in rec_plays if int(p.get("is_screen", 0)) == 1 and int(p.get("complete_pass", 0)) == 1)
         out.extend([
-            f"  {C.BOLD}{C.BLUE}┌─ RECEIVING & YAC STATISTICS ─────────────────────────────────────────────────────────┐{C.RESET}",
-            f"  │ Targets:             {rc_tgt:<14} Receptions (Catches):    {rc_cat:<22} │",
-            f"  │ Catch %:             {rc_pct:<13.1f}% Receiving Yards:         {rc_yds:<10.1f} yds       │",
-            f"  │ Yards / Catch (YPR): {rc_ypr:<13.2f} yds Receiving Touchdowns:    {rc_tds:<22} │",
-            f"  │ Total YAC:           {rc_yac:<10.1f} yds   YAC / Reception:         {rc_yac_cat:<10.2f} yds/rec   │",
-            f"  │ Screen Targets:      {rc_screen:<14} Screen YAC:              {rc_screen_yac:<10.1f} yds       │",
-            f"  {C.BOLD}{C.BLUE}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            f"  {C.BOLD}{C.BLUE} RECEIVING & YAC STATISTICS {C.RESET}",
+            f"   Targets:             {rc_tgt:<14} Receptions (Catches):    {rc_cat:<22} ",
+            f"   Catch %:             {rc_pct:<13.1f}% Receiving Yards:         {rc_yds:<10.1f} yds       ",
+            f"   Yards / Catch (YPR): {rc_ypr:<13.2f} yds Receiving Touchdowns:    {rc_tds:<22} ",
+            f"   Total YAC:           {rc_yac:<10.1f} yds   YAC / Reception:         {rc_yac_cat:<10.2f} yds/rec   ",
+            f"   Screen Targets:      {rc_screen:<14} Screen YAC:              {rc_screen_yac:<10.1f} yds       ",
             "",
         ])
 
@@ -9444,18 +9441,16 @@ def render_player_drilldown_view(
     if kick_plays:
         fg_yds = sum(float(p.get("yards_gained", 0.0)) for p in kick_plays)
         out.extend([
-            f"  {C.BOLD}{C.GOLD}┌─ SPECIAL TEAMS (KICKING) ────────────────────────────────────────────────────────────┐{C.RESET}",
-            f"  │ Field Goals Made:    {len(kick_plays):<14} Longest Field Goal:      {fg_yds:<10.0f} yds       │",
-            f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            f"  {C.BOLD}{C.GOLD} SPECIAL TEAMS (KICKING) {C.RESET}",
+            f"   Field Goals Made:    {len(kick_plays):<14} Longest Field Goal:      {fg_yds:<10.0f} yds       ",
             "",
         ])
     if punt_plays:
         punt_yds = sum(float(p.get("yards_gained", 0.0)) for p in punt_plays)
         avg_punt = (punt_yds / len(punt_plays)) if punt_plays else 0.0
         out.extend([
-            f"  {C.BOLD}{C.GOLD}┌─ SPECIAL TEAMS (PUNTING) ────────────────────────────────────────────────────────────┐{C.RESET}",
-            f"  │ Punts Attempted:     {len(punt_plays):<14} Average Punt Distance:   {avg_punt:<10.1f} yds       │",
-            f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+            f"  {C.BOLD}{C.GOLD} SPECIAL TEAMS (PUNTING) {C.RESET}",
+            f"   Punts Attempted:     {len(punt_plays):<14} Average Punt Distance:   {avg_punt:<10.1f} yds       ",
             "",
         ])
 
@@ -9468,16 +9463,15 @@ def render_player_drilldown_view(
     rz_rate = (100.0 * rz_tds / len(rz_plays)) if rz_plays else 0.0
 
     out.extend([
-        f"  {C.BOLD}{C.MAGENTA}┌─ SITUATIONAL BREAKDOWN ──────────────────────────────────────────────────────────────┐{C.RESET}",
-        f"  │ 3rd Down Conversions: {t_conv}/{len(t_downs)} ({t_rate:.1f}%)     Red Zone Touchdowns:     {rz_tds}/{len(rz_plays)} ({rz_rate:.1f}%)          │",
-        f"  {C.BOLD}{C.MAGENTA}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+        f"  {C.BOLD}{C.MAGENTA} SITUATIONAL BREAKDOWN {C.RESET}",
+        f"   3rd Down Conversions: {t_conv}/{len(t_downs)} ({t_rate:.1f}%)     Red Zone Touchdowns:     {rz_tds}/{len(rz_plays)} ({rz_rate:.1f}%)          ",
     ])
 
     # Top Signature Plays for player
     top_plays = sorted(active_plays, key=lambda p: (float(p.get("epa", 0.0)), float(p.get("yards_gained", 0.0))), reverse=True)[:3]
     if top_plays:
         out.append("")
-        out.append(f"  {C.BOLD}{C.GOLD}┌─ SIGNATURE PLAYS FOR {canonical_name.upper()} ───────────────────────────────────────────┐{C.RESET}")
+        out.append(f"  {C.BOLD}{C.GOLD} SIGNATURE PLAYS FOR {canonical_name.upper()} {C.RESET}")
         for s_idx, sp in enumerate(top_plays, 1):
             pid = sp.get("play_id", "N/A")
             opp = sp.get("defteam") if sp.get("posteam") == (selected_team or (teams_played_for[0] if teams_played_for else "")) else sp.get("posteam")
@@ -9487,16 +9481,15 @@ def render_player_drilldown_view(
             yds = float(sp.get("yards_gained", 0.0))
             epa = float(sp.get("epa", 0.0))
             td_str = " (TD)" if sp.get("touchdown") else ""
-            desc = sp.get("desc", "")[:76]
-            out.append(f"  │ [{s_idx}] Play #{pid} vs {opp} (Q{qtr} {dn}&{dist}): {yds:+.1f} yds, {epa:+.2f} EPA{td_str}")
-            out.append(f"  │     {C.DIM}\"{desc}\"{C.RESET}")
-        out.append(f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
+            desc = sp.get("desc", "")
+            out.append(f"   [{s_idx}] Play #{pid} vs {opp} (Q{qtr} {dn}&{dist}): {yds:+.1f} yds, {epa:+.2f} EPA{td_str}")
+            out.append(f"       {C.DIM}\"{desc}\"{C.RESET}")
 
     out.append(f"\n  {C.DIM}💡 Tip: Run `/play` to diagram any of {canonical_name}'s signature plays on the ASCII gridiron.{C.RESET}")
     zd_note = zero_division_note(engine.last_zero_division_events)
     if zd_note:
         out.extend(["", zd_note])
-    return "\n".join(out)
+    return panel(out)
 
 
 _CONTRACT_STAT_NAMES = frozenset({
@@ -9724,49 +9717,44 @@ def render_team_drilldown_view(
     pos_str = " • ".join([p for p in pos_coaches if p])
 
     out = [
-        f"\n{C.BOLD}{C.CYAN}┌────────────────────────────────────────────────────────────────────────────────────────┐",
-        f"│                     TEAM DRILL-DOWN : {full_name.upper():<48} │",
-        f"├────────────────────────────────────────────────────────────────────────────────────────┤{C.RESET}",
+        f"                     TEAM DRILL-DOWN : {full_name.upper():<48} ",
         f"  Season: {C.BOLD}{season}{C.RESET}  |  Abbreviation: {C.BOLD}{team_abbr}{C.RESET}  |  Conference: {conf}  |  Division: {division}",
         f"  Team Record: {C.BOLD}{record_str}{C.RESET} {win_pct_str}  |  Offensive Plays Tracked: {tot_off}  |  Defensive Plays: {tot_def}",
         "",
-        f"  {C.BOLD}{C.MAGENTA}┌─ COACHING STAFF & LEADERSHIP ────────────────────────────────────────────────────────┐{C.RESET}",
-        f"  │ Head Coach (HC):            {C.BOLD}{staff.get('hc', staff_missing or 'N/A'):<56}{C.RESET}│",
-        f"  │ Offensive Coordinator (OC): {staff.get('oc', staff_missing or 'N/A'):<56}│",
-        f"  │ Defensive Coordinator (DC): {staff.get('dc', staff_missing or 'N/A'):<56}│",
-        f"  │ Key Position Coaches:       {pos_str:<56}│",
-        f"  {C.BOLD}{C.MAGENTA}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+        f"  {C.BOLD}{C.MAGENTA} COACHING STAFF & LEADERSHIP {C.RESET}",
+        f"   Head Coach (HC):            {C.BOLD}{staff.get('hc', staff_missing or 'N/A'):<56}{C.RESET}",
+        f"   Offensive Coordinator (OC): {staff.get('oc', staff_missing or 'N/A'):<56}",
+        f"   Defensive Coordinator (DC): {staff.get('dc', staff_missing or 'N/A'):<56}",
+        f"   Key Position Coaches:       {pos_str:<56}",
         "",
-        f"  {C.BOLD}{C.GOLD}┌─ OFFENSIVE EFFICIENCY & PLAY CALLING ────────────────────────────────────────────────┐{C.RESET}",
-        f"  │ Total Plays:         {tot_off:<14} Total Yards Gained:      {tot_off_yds:<10.1f} yds       │",
-        f"  │ Yards Per Play (YPP): {off_ypp:<13.2f} EPA / Play:             {off_epa_play:<+10.2f} EPA/play   │",
-        f"  │ Total Offensive EPA: {tot_off_epa:<+14.2f} Offensive Success Rate:  {off_succ_rate:<6.1f}%                 │",
-        f"  │ Penalties Committed: {off_pens:<14} Penalty Yards Conceded: {off_pen_yds:<10.1f} yds       │",
-        f"  │ Play-Calling Split:  {call_pass_pct:4.1f}% Pass / {call_rush_pct:4.1f}% Rush ({pass_att} pass, {rush_att} rush)                │",
-        f"  │ Passing Comp/Att:    {pass_comp}/{pass_att} ({pass_pct:.1f}%)    Passing Yards:           {pass_yds:<10.1f} yds       │",
-        f"  │ Passing Touchdowns:  {pass_tds:<14} Passing Interceptions:   {pass_ints:<22} │",
-        f"  │ Sacks Allowed:       {sacks_all:<14} Sack Yards Lost:         {sack_yds:<10.1f} yds       │",
-        f"  │ Rushing Carries:     {rush_att:<14} Rushing Yards:           {rush_yds:<10.1f} yds       │",
-        f"  │ Yards / Carry (YPC): {rush_ypc:<14.2f} Rushing Touchdowns:     {rush_tds:<22} │",
-        f"  │ Explosive Plays:     {exp_pass + exp_rush:<14} (20+ Pass: {exp_pass}, 10+ Rush: {exp_rush})                   │",
-        f"  │ 3rd Down Efficiency: {t_conv}/{len(t_downs)} ({t_rate:.1f}%)     Red Zone TD Rate:        {rz_tds}/{len(rz_plays)} ({rz_rate:.1f}%)          │",
-        f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+        f"  {C.BOLD}{C.GOLD} OFFENSIVE EFFICIENCY & PLAY CALLING {C.RESET}",
+        f"   Total Plays:         {tot_off:<14} Total Yards Gained:      {tot_off_yds:<10.1f} yds       ",
+        f"   Yards Per Play (YPP): {off_ypp:<13.2f} EPA / Play:             {off_epa_play:<+10.2f} EPA/play   ",
+        f"   Total Offensive EPA: {tot_off_epa:<+14.2f} Offensive Success Rate:  {off_succ_rate:<6.1f}%                 ",
+        f"   Penalties Committed: {off_pens:<14} Penalty Yards Conceded: {off_pen_yds:<10.1f} yds       ",
+        f"   Play-Calling Split:  {call_pass_pct:4.1f}% Pass / {call_rush_pct:4.1f}% Rush ({pass_att} pass, {rush_att} rush)                ",
+        f"   Passing Comp/Att:    {pass_comp}/{pass_att} ({pass_pct:.1f}%)    Passing Yards:           {pass_yds:<10.1f} yds       ",
+        f"   Passing Touchdowns:  {pass_tds:<14} Passing Interceptions:   {pass_ints:<22} ",
+        f"   Sacks Allowed:       {sacks_all:<14} Sack Yards Lost:         {sack_yds:<10.1f} yds       ",
+        f"   Rushing Carries:     {rush_att:<14} Rushing Yards:           {rush_yds:<10.1f} yds       ",
+        f"   Yards / Carry (YPC): {rush_ypc:<14.2f} Rushing Touchdowns:     {rush_tds:<22} ",
+        f"   Explosive Plays:     {exp_pass + exp_rush:<14} (20+ Pass: {exp_pass}, 10+ Rush: {exp_rush})                   ",
+        f"   3rd Down Efficiency: {t_conv}/{len(t_downs)} ({t_rate:.1f}%)     Red Zone TD Rate:        {rz_tds}/{len(rz_plays)} ({rz_rate:.1f}%)          ",
         "",
-        f"  {C.BOLD}{C.GREEN}┌─ DEFENSIVE PROFILE (OPPONENT SCRIMMAGE FACED) ───────────────────────────────────────┐{C.RESET}",
-        f"  │ Opponent Plays:      {tot_def:<14} Yards Allowed:           {def_yds:<10.1f} yds       │",
-        f"  │ Yards / Play Allowed:{def_ypp:<14.2f} Defensive EPA / Play:   {def_epa_play:<+10.2f} EPA/play   │",
-        f"  │ Sacks Generated:     {def_sacks:<14} Interceptions Caught:    {def_ints:<22} │",
-        f"  │ Turnovers Forced:    {def_to:<14} Defensive Stop Rate:    {def_stops}/{tot_def} ({def_stop_rate:.1f}%)           │",
-        f"  │ Penalties Committed: {pens_committed:<14} Penalty Yds Conceded:   {pen_yds_committed:<10.1f} yds       │",
-        f"  │ Penalties in Favor:  {pens_drawn:<14} Penalty Yds in Favor:  {pen_yds_drawn:<10.1f} yds       │",
-        f"  │ Timeouts Charged:    {timeouts_called:<14} Net Penalty Margin:     {pens_drawn - pens_committed:<+6} ({pen_yds_drawn - pen_yds_committed:+.1f} yds)  │",
-        f"  {C.BOLD}{C.GREEN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}",
+        f"  {C.BOLD}{C.GREEN} DEFENSIVE PROFILE (OPPONENT SCRIMMAGE FACED) {C.RESET}",
+        f"   Opponent Plays:      {tot_def:<14} Yards Allowed:           {def_yds:<10.1f} yds       ",
+        f"   Yards / Play Allowed:{def_ypp:<14.2f} Defensive EPA / Play:   {def_epa_play:<+10.2f} EPA/play   ",
+        f"   Sacks Generated:     {def_sacks:<14} Interceptions Caught:    {def_ints:<22} ",
+        f"   Turnovers Forced:    {def_to:<14} Defensive Stop Rate:    {def_stops}/{tot_def} ({def_stop_rate:.1f}%)           ",
+        f"   Penalties Committed: {pens_committed:<14} Penalty Yds Conceded:   {pen_yds_committed:<10.1f} yds       ",
+        f"   Penalties in Favor:  {pens_drawn:<14} Penalty Yds in Favor:  {pen_yds_drawn:<10.1f} yds       ",
+        f"   Timeouts Charged:    {timeouts_called:<14} Net Penalty Margin:     {pens_drawn - pens_committed:<+6} ({pen_yds_drawn - pen_yds_committed:+.1f} yds)  ",
         "",
-        f"  {C.BOLD}{C.CYAN}┌─ ROSTER & UNIT LEADERS ──────────────────────────────────────────────────────────────┐{C.RESET}",
+        f"  {C.BOLD}{C.CYAN} ROSTER & UNIT LEADERS {C.RESET}",
     ]
 
     if passers:
-        out.append(f"  │ {C.BOLD}PASSING LEADERS:{C.RESET}")
+        out.append(f"   {C.BOLD}PASSING LEADERS:{C.RESET}")
         for q_n, q_plays in sorted(passers.items(), key=lambda x: len(x[1]), reverse=True)[:3]:
             q_att = len(q_plays)
             q_comp = sum(int(p.get("complete_pass", 0)) for p in q_plays)
@@ -9776,22 +9764,22 @@ def render_team_drilldown_view(
             q_rtg = calculate_passer_rating(q_att, q_comp, q_yds, q_tds, q_ints)
             q_epa = (sum(float(p.get("epa", 0.0)) for p in q_plays) / q_att) if q_att else 0.0
             q_pct = (100.0 * q_comp / q_att) if q_att else 0.0
-            out.append(f"  │   • {C.BOLD}{q_n:<14}{C.RESET} {q_comp}/{q_att} ({q_pct:4.1f}%), {q_yds:5.1f} yds, {q_tds} TD, {q_ints} INT, {q_rtg:5.1f} Rating, {q_epa:+4.2f} EPA/att")
+            out.append(f"     • {C.BOLD}{q_n:<14}{C.RESET} {q_comp}/{q_att} ({q_pct:4.1f}%), {q_yds:5.1f} yds, {q_tds} TD, {q_ints} INT, {q_rtg:5.1f} Rating, {q_epa:+4.2f} EPA/att")
     else:
-        out.append("  │   • Passing: No pass attempts recorded.")
+        out.append("     • Passing: No pass attempts recorded.")
 
     if rushers:
-        out.append(f"  │ {C.BOLD}RUSHING LEADERS:{C.RESET}")
+        out.append(f"   {C.BOLD}RUSHING LEADERS:{C.RESET}")
         for r_n, r_plays in sorted(rushers.items(), key=lambda x: sum(float(p.get("yards_gained", 0.0)) for p in x[1]), reverse=True)[:3]:
             r_car = len(r_plays)
             r_yds = sum(float(p.get("yards_gained", 0.0)) for p in r_plays)
             r_ypc = (r_yds / r_car) if r_car else 0.0
             r_tds = sum(int(p.get("rush_touchdown", 0) or (p.get("touchdown", 0) and p.get("rush_attempt", 0) == 1)) for p in r_plays)
             r_long = max((float(p.get("yards_gained", 0.0)) for p in r_plays), default=0.0)
-            out.append(f"  │   • {C.BOLD}{r_n:<14}{C.RESET} {r_car:2d} car, {r_yds:5.1f} yds, {r_ypc:4.2f} ypc, {r_tds} TD, Long: {r_long:3.0f} yds")
+            out.append(f"     • {C.BOLD}{r_n:<14}{C.RESET} {r_car:2d} car, {r_yds:5.1f} yds, {r_ypc:4.2f} ypc, {r_tds} TD, Long: {r_long:3.0f} yds")
 
     if receivers:
-        out.append(f"  │ {C.BOLD}RECEIVING LEADERS:{C.RESET}")
+        out.append(f"   {C.BOLD}RECEIVING LEADERS:{C.RESET}")
         for rc_n, rc_plays in sorted(receivers.items(), key=lambda x: sum(float(p.get("yards_gained", 0.0)) for p in x[1]), reverse=True)[:3]:
             rc_tgt = len(rc_plays)
             rc_cat = sum(int(p.get("complete_pass", 0)) for p in rc_plays)
@@ -9799,14 +9787,13 @@ def render_team_drilldown_view(
             rc_tds = sum(int(p.get("touchdown", 0)) for p in rc_plays if int(p.get("complete_pass", 0)) == 1)
             rc_yac = sum(float(p.get("yards_after_catch", 0.0)) for p in rc_plays if int(p.get("complete_pass", 0)) == 1)
             rc_ypr = (rc_yds / rc_cat) if rc_cat else 0.0
-            out.append(f"  │   • {C.BOLD}{rc_n:<14}{C.RESET} {rc_cat}/{rc_tgt} rec, {rc_yds:5.1f} yds, {rc_tds} TD, {rc_ypr:4.1f} yds/rec, {rc_yac:4.1f} YAC")
+            out.append(f"     • {C.BOLD}{rc_n:<14}{C.RESET} {rc_cat}/{rc_tgt} rec, {rc_yds:5.1f} yds, {rc_tds} TD, {rc_ypr:4.1f} yds/rec, {rc_yac:4.1f} YAC")
 
-    out.append(f"  {C.BOLD}{C.CYAN}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
 
     top_plays = sorted(off_plays + def_plays, key=lambda p: (float(p.get("epa", 0.0)), float(p.get("yards_gained", 0.0))), reverse=True)[:3]
     if top_plays:
         out.append("")
-        out.append(f"  {C.BOLD}{C.GOLD}┌─ TOP SIGNATURE PLAYS ({team_abbr} • {season}) ───────────────────────────────────────────┐{C.RESET}")
+        out.append(f"  {C.BOLD}{C.GOLD} TOP SIGNATURE PLAYS ({team_abbr} • {season}) {C.RESET}")
         for s_idx, sp in enumerate(top_plays, 1):
             pid = sp.get("play_id", "N/A")
             opp = sp.get("defteam") if sp.get("posteam") == team_abbr else sp.get("posteam")
@@ -9816,13 +9803,12 @@ def render_team_drilldown_view(
             yds = float(sp.get("yards_gained", 0.0))
             epa = float(sp.get("epa", 0.0))
             td_str = " (TD)" if sp.get("touchdown") else ""
-            desc = sp.get("desc", "")[:76]
-            out.append(f"  │ [{s_idx}] Play #{pid} vs {opp} (Q{qtr} {dn}&{dist}): {yds:+.1f} yds, {epa:+.2f} EPA{td_str}")
-            out.append(f"  │     {C.DIM}\"{desc}\"{C.RESET}")
-        out.append(f"  {C.BOLD}{C.GOLD}└──────────────────────────────────────────────────────────────────────────────────────┘{C.RESET}")
+            desc = sp.get("desc", "")
+            out.append(f"   [{s_idx}] Play #{pid} vs {opp} (Q{qtr} {dn}&{dist}): {yds:+.1f} yds, {epa:+.2f} EPA{td_str}")
+            out.append(f"       {C.DIM}\"{desc}\"{C.RESET}")
 
     out.append(f"\n  {C.DIM}💡 Tip: Use `/play` to diagram any of these plays on the ASCII gridiron.{C.RESET}")
-    return "\n".join(out)
+    return panel(out)
 
 
 def format_yardline_str(p: Dict[str, Any]) -> str:
@@ -9917,26 +9903,32 @@ def render_game_plays_table(
         pid_num = p.get("play_id", 0)
         pid_str = f"#{pid_num}"
         q = "OT" if int(p.get("qtr", 1)) >= 5 else f"Q{p.get('qtr', 1)}"
-        tm = str(p.get("posteam") or "")[:4]
+        tm = str(p.get("posteam") or "")
         d = p.get("down", 1)
         dist = p.get("ydstogo", 10)
         suffix = "st" if d == 1 else ("nd" if d == 2 else ("rd" if d == 3 else "th"))
         dnd = f"{d}{suffix} & {dist}"
-        ydl = format_yardline_str(p)[:8]
-        conc = str(p.get("play_concept") or p.get("play_type") or "play")[:16]
+        ydl = format_yardline_str(p)
+        conc = str(p.get("play_concept") or p.get("play_type") or "play")
+        conc = conc if visible_len(conc) <= 16 else conc[:15] + "…"
         g = float(p.get("yards_gained", 0.0))
         td = " (TD)" if p.get("touchdown") else ""
-        gain = f"{g:+.1f}{td}"[:10]
+        gain = f"{g:+.1f}{td}"
         epa = f"{float(p.get('epa', 0.0)):+5.2f}"
-        sc = f"{p.get('away_score', 0)}-{p.get('home_score', 0)}"[:10]
+        sc = f"{p.get('away_score', 0)}-{p.get('home_score', 0)}"
         desc = p.get("desc", "")
         if "(" in desc and ")" in desc:
             desc = desc.split(")", 1)[1].strip()
-        desc = desc[:26]
+        desc = desc if visible_len(desc) <= 26 else desc[:25] + "…"
+
+        values = [f"{idx:3d}", pid_str, q, tm, dnd, ydl, conc, gain, epa, sc, desc]
+        if any(visible_len(str(value)) > w for value, w in zip(values, widths)):
+            return fit_output(title + "\n" + "\n\n".join(
+                "\n".join(f"{k}: {v}" for k, v in play.items()) for play in game_plays), columns())
 
         hl_on = f"{C.BOLD}{C.GOLD}" if highlight_play_id and pid_num == highlight_play_id else ""
         hl_off = C.RESET if hl_on else ""
-        lines.append(row([f"{idx:3d}", pid_str, q, tm, dnd, ydl, conc, gain, epa, sc, desc]))
+        lines.append(hl_on + row([f"{idx:3d}", pid_str, q, tm, dnd, ydl, conc, gain, epa, sc, desc]) + hl_off)
     lines.append(rule("└", "┴", "┘"))
     return "\n".join(lines)
 
